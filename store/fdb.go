@@ -2,33 +2,67 @@ package store
 
 import (
 	"context"
+	"errors"
 
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
+	"github.com/apple/foundationdb/bindings/go/src/fdb/directory"
+)
+
+var (
+	// ErrQueueAlreadyExists is returned when trying to create a queue that already exists.
+	ErrQueueAlreadyExists = errors.New("queue already exists")
 )
 
 // FDBStore is a FoundationDB implementation of the Store interface.
 type FDBStore struct {
-	db fdb.Database
+	db  fdb.Database
+	dir directory.DirectorySubspace
 }
 
 // NewFDBStore creates a new FDBStore.
 func NewFDBStore() (*FDBStore, error) {
-	// It's crucial to select a specific API version.
-	fdb.MustAPIVersion(710)
-	// Open the default database from the cluster file
+	fdb.MustAPIVersion(740)
 	db, err := fdb.OpenDefault()
 	if err != nil {
 		return nil, err
 	}
-	return &FDBStore{db: db}, nil
+
+	dir, err := directory.CreateOrOpen(db, []string{"concreteq"}, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return &FDBStore{db: db, dir: dir}, nil
 }
 
-// --- Stub Implementations ---
-
+// CreateQueue creates a new queue in FoundationDB.
+// It creates a dedicated subspace for the queue to store its metadata and messages.
 func (s *FDBStore) CreateQueue(ctx context.Context, name string) error {
-	// TODO: Implement in FoundationDB
-	return nil
+	_, err := s.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
+		exists, err := directory.Exists(tr, []string{"concreteq", name})
+		if err != nil {
+			return nil, err
+		}
+		if exists {
+			return nil, ErrQueueAlreadyExists
+		}
+
+		_, err = directory.Create(tr, []string{"concreteq", name}, nil)
+		if err != nil {
+			return nil, err
+		}
+
+		// We can store initial metadata here if needed.
+		// For example, creation timestamp.
+		// queueSubspace, _ := directory.Open(tr, []string{"concreteq", name}, nil)
+		// tr.Set(queueSubspace.Pack(tuple.Tuple{"metadata", "created_at"}), []byte(time.Now().Format(time.RFC3339)))
+
+		return nil, nil
+	})
+	return err
 }
+
+// --- Other Stub Implementations ---
 
 func (s *FDBStore) DeleteQueue(ctx context.Context, name string) error {
 	// TODO: Implement in FoundationDB
