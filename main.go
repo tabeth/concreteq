@@ -7,6 +7,8 @@ import (
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/tabeth/concreteq/store"
+
 	"github.com/go-chi/chi/v5/middleware"
 )
 
@@ -14,6 +16,16 @@ func main() {
 	// Define and parse the port flag
 	port := flag.String("port", "8080", "Port for the HTTP server to listen on")
 	flag.Parse()
+
+	// Initialize the FoundationDB store
+	fdbStore, err := store.NewFDBStore()
+	if err != nil {
+		log.Fatalf("Failed to initialize FoundationDB store: %v", err)
+	}
+
+	app := &App{
+		Store: fdbStore,
+	}
 
 	// Create a new Chi router
 	r := chi.NewRouter()
@@ -23,7 +35,7 @@ func main() {
 	r.Use(middleware.Recoverer)
 
 	// Register the SQS API handlers
-	// RegisterSQSHandlers(r)
+	app.RegisterSQSHandlers(r)
 
 	// Start the HTTP server
 	addr := fmt.Sprintf(":%s", *port)
