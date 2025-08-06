@@ -2,10 +2,13 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"strings"
 
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
 	"github.com/apple/foundationdb/bindings/go/src/fdb/directory"
+	"github.com/apple/foundationdb/bindings/go/src/fdb/tuple"
 )
 
 var (
@@ -21,13 +24,13 @@ type FDBStore struct {
 
 // NewFDBStore creates a new FDBStore.
 func NewFDBStore() (*FDBStore, error) {
-	fdb.MustAPIVersion(740)
+	fdb.MustAPIVersion(730)
 	db, err := fdb.OpenDefault()
 	if err != nil {
 		return nil, err
 	}
 
-	dir, err := directory.CreateOrOpen(db, []string{"concreteq"}, nil)
+	dir, err := directory.CreateOrOpen(db, []string{"sqs"}, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -37,25 +40,40 @@ func NewFDBStore() (*FDBStore, error) {
 
 // CreateQueue creates a new queue in FoundationDB.
 // It creates a dedicated subspace for the queue to store its metadata and messages.
-func (s *FDBStore) CreateQueue(ctx context.Context, name string) error {
+func (s *FDBStore) CreateQueue(ctx context.Context, name string, attributes map[string]string, tags map[string]string) error {
 	_, err := s.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
-		exists, err := directory.Exists(tr, []string{"concreteq", name})
+		// The directory layer provides a way to organize data. We'll create a directory for each queue.
+		queueDir, err := s.dir.Create(tr, []string{name}, nil)
 		if err != nil {
+			// TODO(tabeth): Maybe instead of checking for this string we save the directory value else where
+			// and check it or otherwise see if there's a way to get the presence of the directory rather than
+			// parse error strings.
+
+			// The Go binding's directory layer returns a generic error when the directory exists.
+			// We check for this specific string. This is brittle but a common pattern with this library.
+			if strings.Contains(err.Error(), "already exists") {
+				return nil, ErrQueueAlreadyExists
+			}
 			return nil, err
 		}
-		if exists {
-			return nil, ErrQueueAlreadyExists
+
+		// Store attributes as a JSON blob under an 'attributes' key in the queue's directory.
+		if len(attributes) > 0 {
+			attrsBytes, err := json.Marshal(attributes)
+			if err != nil {
+				return nil, err // Should not happen with map[string]string
+			}
+			tr.Set(queueDir.Pack(tuple.Tuple{"attributes"}), attrsBytes)
 		}
 
-		_, err = directory.Create(tr, []string{"concreteq", name}, nil)
-		if err != nil {
-			return nil, err
+		// Store tags as a JSON blob under a 'tags' key.
+		if len(tags) > 0 {
+			tagsBytes, err := json.Marshal(tags)
+			if err != nil {
+				return nil, err // Should not happen with map[string]string
+			}
+			tr.Set(queueDir.Pack(tuple.Tuple{"tags"}), tagsBytes)
 		}
-
-		// We can store initial metadata here if needed.
-		// For example, creation timestamp.
-		// queueSubspace, _ := directory.Open(tr, []string{"concreteq", name}, nil)
-		// tr.Set(queueSubspace.Pack(tuple.Tuple{"metadata", "created_at"}), []byte(time.Now().Format(time.RFC3339)))
 
 		return nil, nil
 	})

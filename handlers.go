@@ -2,9 +2,12 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"regexp"
+	"strconv"
+	"strings"
 
 	"github.com/tabeth/concreteq/models"
 	"github.com/tabeth/concreteq/store"
@@ -12,6 +15,7 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
+// App encapsulates the application's dependencies.
 type App struct {
 	Store store.Store
 }
@@ -57,7 +61,70 @@ func (app *App) RegisterSQSHandlers(r *chi.Mux) {
 // SQS queue name validation regex.
 // A queue name can have up to 80 characters.
 // Valid values: alphanumeric characters, hyphens (-), and underscores (_).
-var queueNameRegex = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,80}$`)
+// For FIFO queues, the name must end with the .fifo suffix.
+var queueNameRegex = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,80}(\.fifo)?$`)
+
+// validateIntAttribute checks if a string attribute can be parsed as an int and is within the given range.
+func validateIntAttribute(valStr string, min, max int) error {
+	val, err := strconv.Atoi(valStr)
+	if err != nil {
+		return fmt.Errorf("must be an integer")
+	}
+	if val < min || val > max {
+		return fmt.Errorf("must be between %d and %d", min, max)
+	}
+	return nil
+}
+
+// validateAttributes checks the special SQS attributes for valid values.
+func validateAttributes(attributes map[string]string) error {
+	for key, val := range attributes {
+		var err error
+		switch key {
+		case "DelaySeconds":
+			err = validateIntAttribute(val, 0, 900)
+		case "MaximumMessageSize":
+			err = validateIntAttribute(val, 1024, 262144)
+		case "MessageRetentionPeriod":
+			err = validateIntAttribute(val, 60, 1209600)
+		case "ReceiveMessageWaitTimeSeconds":
+			err = validateIntAttribute(val, 0, 20)
+		case "VisibilityTimeout":
+			err = validateIntAttribute(val, 0, 43200)
+		case "FifoQueue", "ContentBasedDeduplication":
+			if val != "true" && val != "false" {
+				err = fmt.Errorf("must be 'true' or 'false'")
+			}
+		case "RedrivePolicy":
+			var policy struct {
+				DeadLetterTargetArn string `json:"deadLetterTargetArn"`
+				MaxReceiveCount     string `json:"maxReceiveCount"`
+			}
+			if jsonErr := json.Unmarshal([]byte(val), &policy); jsonErr != nil {
+				err = errors.New("must be a valid JSON object")
+			} else {
+				if policy.DeadLetterTargetArn == "" {
+					err = errors.New("deadLetterTargetArn is required")
+				}
+				if count, convErr := strconv.Atoi(policy.MaxReceiveCount); convErr != nil || count < 1 || count > 1000 {
+					err = errors.New("maxReceiveCount must be an integer between 1 and 1000")
+				}
+			}
+		case "DeduplicationScope":
+			if val != "messageGroup" && val != "queue" {
+				err = fmt.Errorf("must be 'messageGroup' or 'queue'")
+			}
+		case "FifoThroughputLimit":
+			if val != "perQueue" && val != "perMessageGroupId" {
+				err = fmt.Errorf("must be 'perQueue' or 'perMessageGroupId'")
+			}
+		}
+		if err != nil {
+			return fmt.Errorf("invalid value for %s: %w", key, err)
+		}
+	}
+	return nil
+}
 
 // CreateQueueHandler handles requests to create a new queue.
 func (app *App) CreateQueueHandler(w http.ResponseWriter, r *http.Request) {
@@ -67,21 +134,64 @@ func (app *App) CreateQueueHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Validate queue name format
 	if !queueNameRegex.MatchString(req.QueueName) {
-		http.Error(w, "Invalid queue name", http.StatusBadRequest)
+		http.Error(w, "Invalid queue name: Can only include alphanumeric characters, hyphens, and underscores. 1 to 80 in length.", http.StatusBadRequest)
 		return
 	}
 
-	err := app.Store.CreateQueue(r.Context(), req.QueueName)
+	// Validate FIFO queue naming conventions
+	isFifo := strings.HasSuffix(req.QueueName, ".fifo")
+	fifoAttr, fifoAttrExists := req.Attributes["FifoQueue"]
+
+	if isFifo && (!fifoAttrExists || fifoAttr != "true") {
+		http.Error(w, "Queue name ends in .fifo but FifoQueue attribute is not 'true'", http.StatusBadRequest)
+		return
+	}
+	if !isFifo && fifoAttrExists && fifoAttr == "true" {
+		http.Error(w, "FifoQueue attribute is 'true' but queue name does not end in .fifo", http.StatusBadRequest)
+		return
+	}
+
+	// Validate special attributes
+	if err := validateAttributes(req.Attributes); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// FIFO-specific attribute validation
+	if !isFifo {
+		if _, exists := req.Attributes["DeduplicationScope"]; exists {
+			http.Error(w, "DeduplicationScope is only valid for FIFO queues", http.StatusBadRequest)
+			return
+		}
+		if _, exists := req.Attributes["FifoThroughputLimit"]; exists {
+			http.Error(w, "FifoThroughputLimit is only valid for FIFO queues", http.StatusBadRequest)
+			return
+		}
+	}
+
+	// High-throughput FIFO validation
+	if scope, exists := req.Attributes["DeduplicationScope"]; exists {
+		if limit, limitExists := req.Attributes["FifoThroughputLimit"]; limitExists {
+			if limit == "perMessageGroupId" && scope != "messageGroup" {
+				http.Error(w, "FifoThroughputLimit can be set to perMessageGroupId only when DeduplicationScope is messageGroup", http.StatusBadRequest)
+				return
+			}
+		}
+	}
+
+	err := app.Store.CreateQueue(r.Context(), req.QueueName, req.Attributes, req.Tags)
 	if err != nil {
-		// A more robust implementation would check for specific error types
-		// (e.g., queue already exists) and return different status codes.
+		if errors.Is(err, store.ErrQueueAlreadyExists) {
+			http.Error(w, "Queue already exists", http.StatusConflict)
+			return
+		}
 		http.Error(w, "Failed to create queue", http.StatusInternalServerError)
 		return
 	}
 
 	// Construct the queue URL
-	// In a real application, this would be based on the request's host and scheme.
 	queueURL := fmt.Sprintf("http://localhost:8080/queues/%s", req.QueueName)
 
 	resp := models.CreateQueueResponse{

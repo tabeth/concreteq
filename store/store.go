@@ -6,7 +6,7 @@ import "context"
 // It defines all the data operations required by the SQS-compatible API.
 type Store interface {
 	// Queue Management
-	CreateQueue(ctx context.Context, name string) error
+	CreateQueue(ctx context.Context, name string, attributes map[string]string, tags map[string]string) error
 	DeleteQueue(ctx context.Context, name string) error
 	ListQueues(ctx context.Context) ([]string, error)
 	GetQueueAttributes(ctx context.Context, name string) (map[string]string, error)
