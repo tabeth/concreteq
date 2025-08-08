@@ -3,17 +3,11 @@ package store
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"strings"
 
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
 	"github.com/apple/foundationdb/bindings/go/src/fdb/directory"
 	"github.com/apple/foundationdb/bindings/go/src/fdb/tuple"
-)
-
-var (
-	// ErrQueueAlreadyExists is returned when trying to create a queue that already exists.
-	ErrQueueAlreadyExists = errors.New("queue already exists")
 )
 
 // FDBStore is a FoundationDB implementation of the Store interface.
@@ -80,11 +74,24 @@ func (s *FDBStore) CreateQueue(ctx context.Context, name string, attributes map[
 	return err
 }
 
-// --- Other Stub Implementations ---
-
+// DeleteQueue deletes a queue from FoundationDB.
 func (s *FDBStore) DeleteQueue(ctx context.Context, name string) error {
-	// TODO: Implement in FoundationDB
-	return nil
+	_, err := s.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
+		exists, err := s.dir.Exists(tr, []string{name})
+		if err != nil {
+			return nil, err
+		}
+		if !exists {
+			return nil, ErrQueueDoesNotExist
+		}
+
+		_, err = s.dir.Remove(tr, []string{name})
+		if err != nil {
+			return nil, err
+		}
+		return nil, nil
+	})
+	return err
 }
 
 func (s *FDBStore) ListQueues(ctx context.Context, maxResults int, nextToken, queueNamePrefix string) ([]string, string, error) {
