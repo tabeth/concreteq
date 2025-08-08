@@ -11,3 +11,16 @@ type CreateQueueRequest struct {
 type CreateQueueResponse struct {
 	QueueURL string `json:"QueueUrl"`
 }
+
+// ListQueuesRequest defines the parameters for listing queues.
+type ListQueuesRequest struct {
+	MaxResults      int    `json:"MaxResults"`
+	NextToken       string `json:"NextToken"`
+	QueueNamePrefix string `json:"QueueNamePrefix"`
+}
+
+// ListQueuesResponse defines the structure for the list queues response.
+type ListQueuesResponse struct {
+	QueueUrls []string `json:"QueueUrls"`
+	NextToken string   `json:"NextToken,omitempty"`
+}
