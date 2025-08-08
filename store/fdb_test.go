@@ -15,8 +15,7 @@ import (
 // setupTestDB connects to FDB and cleans up the test directory.
 func setupTestDB(t *testing.T) (*FDBStore, func()) {
 	t.Helper()
-
-	fdb.MustAPIVersion(710)
+	fdb.MustAPIVersion(730)
 	db, err := fdb.OpenDefault()
 	if err != nil {
 		t.Logf("FoundationDB integration tests skipped: could not open default FDB database: %v", err)
