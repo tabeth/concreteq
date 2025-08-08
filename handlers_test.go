@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/tabeth/concreteq/models"
+	"github.com/tabeth/concreteq/store"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/assert"
@@ -26,7 +27,10 @@ func (m *MockStore) CreateQueue(ctx context.Context, name string, attributes, ta
 	return args.Error(0)
 }
 
-func (m *MockStore) DeleteQueue(ctx context.Context, name string) error { return nil }
+func (m *MockStore) DeleteQueue(ctx context.Context, name string) error {
+	args := m.Called(ctx, name)
+	return args.Error(0)
+}
 func (m *MockStore) ListQueues(ctx context.Context, maxResults int, nextToken, queueNamePrefix string) ([]string, string, error) {
 	args := m.Called(ctx, maxResults, nextToken, queueNamePrefix)
 	var queues []string
@@ -117,14 +121,14 @@ func TestCreateQueueHandler(t *testing.T) {
 			inputBody:          `{"QueueName": "` + strings.Repeat("a", 81) + `"}`,
 			mockSetup:          func(ms *MockStore) {},
 			expectedStatusCode: http.StatusBadRequest,
-			expectedBody:       "Invalid queue name",
+			expectedBody:       "Invalid queue name: Can only include alphanumeric characters, hyphens, and underscores. 1 to 80 in length.",
 		},
 		{
 			name:               "Invalid Queue Name - Invalid Characters",
 			inputBody:          `{"QueueName": "my-queue!"}`,
 			mockSetup:          func(ms *MockStore) {},
 			expectedStatusCode: http.StatusBadRequest,
-			expectedBody:       "Invalid queue name",
+			expectedBody:       "Invalid queue name: Can only include alphanumeric characters, hyphens, and underscores. 1 to 80 in length.",
 		},
 		{
 			name:      "Store Error on Creation",
@@ -164,6 +168,67 @@ func TestCreateQueueHandler(t *testing.T) {
 				} else {
 					assert.Equal(t, tc.expectedBody, strings.TrimSpace(rr.Body.String()))
 				}
+			}
+
+			mockStore.AssertExpectations(t)
+		})
+	}
+}
+
+func TestDeleteQueueHandler(t *testing.T) {
+	tests := []struct {
+		name               string
+		queueName          string
+		mockSetup          func(*MockStore)
+		expectedStatusCode int
+		expectedBody       string
+	}{
+		{
+			name:      "Successful Deletion",
+			queueName: "my-queue",
+			mockSetup: func(ms *MockStore) {
+				ms.On("DeleteQueue", mock.Anything, "my-queue").Return(nil)
+			},
+			expectedStatusCode: http.StatusOK,
+			expectedBody:       "",
+		},
+		{
+			name:      "Queue Not Found",
+			queueName: "non-existent-queue",
+			mockSetup: func(ms *MockStore) {
+				ms.On("DeleteQueue", mock.Anything, "non-existent-queue").Return(store.ErrQueueDoesNotExist)
+			},
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       "QueueDoesNotExist: The specified queue does not exist.",
+		},
+		{
+			name:      "Store Error",
+			queueName: "error-queue",
+			mockSetup: func(ms *MockStore) {
+				ms.On("DeleteQueue", mock.Anything, "error-queue").Return(assert.AnError)
+			},
+			expectedStatusCode: http.StatusInternalServerError,
+			expectedBody:       "Failed to delete queue",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mockStore := new(MockStore)
+			tc.mockSetup(mockStore)
+
+			app := &App{Store: mockStore}
+			r := chi.NewRouter()
+			app.RegisterSQSHandlers(r)
+
+			req, _ := http.NewRequest("DELETE", "/queues/"+tc.queueName, nil)
+			rr := httptest.NewRecorder()
+
+			r.ServeHTTP(rr, req)
+
+			assert.Equal(t, tc.expectedStatusCode, rr.Code)
+			if tc.expectedBody != "" {
+				assert.Equal(t, tc.expectedBody, strings.TrimSpace(rr.Body.String()))
 			}
 
 			mockStore.AssertExpectations(t)
