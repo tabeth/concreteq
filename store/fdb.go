@@ -2,10 +2,13 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"strings"
 
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
 	"github.com/apple/foundationdb/bindings/go/src/fdb/directory"
+	"github.com/apple/foundationdb/bindings/go/src/fdb/tuple"
 )
 
 var (
@@ -36,8 +39,7 @@ func NewFDBStore() (*FDBStore, error) {
 }
 
 // CreateQueue creates a new queue in FoundationDB.
-// It creates a dedicated subspace for the queue to store its metadata and messages.
-func (s *FDBStore) CreateQueue(ctx context.Context, name string) error {
+func (s *FDBStore) CreateQueue(ctx context.Context, name string, attributes, tags map[string]string) error {
 	_, err := s.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
 		exists, err := directory.Exists(tr, []string{"concreteq", name})
 		if err != nil {
@@ -47,15 +49,26 @@ func (s *FDBStore) CreateQueue(ctx context.Context, name string) error {
 			return nil, ErrQueueAlreadyExists
 		}
 
-		_, err = directory.Create(tr, []string{"concreteq", name}, nil)
+		queueDir, err := directory.Create(tr, []string{"concreteq", name}, nil)
 		if err != nil {
 			return nil, err
 		}
 
-		// We can store initial metadata here if needed.
-		// For example, creation timestamp.
-		// queueSubspace, _ := directory.Open(tr, []string{"concreteq", name}, nil)
-		// tr.Set(queueSubspace.Pack(tuple.Tuple{"metadata", "created_at"}), []byte(time.Now().Format(time.RFC3339)))
+		if attributes != nil {
+			attrsBytes, err := json.Marshal(attributes)
+			if err != nil {
+				return nil, err
+			}
+			tr.Set(queueDir.Pack(tuple.Tuple{"attributes"}), attrsBytes)
+		}
+
+		if tags != nil {
+			tagsBytes, err := json.Marshal(tags)
+			if err != nil {
+				return nil, err
+			}
+			tr.Set(queueDir.Pack(tuple.Tuple{"tags"}), tagsBytes)
+		}
 
 		return nil, nil
 	})
@@ -69,9 +82,63 @@ func (s *FDBStore) DeleteQueue(ctx context.Context, name string) error {
 	return nil
 }
 
-func (s *FDBStore) ListQueues(ctx context.Context) ([]string, error) {
-	// TODO: Implement in FoundationDB
-	return nil, nil
+func (s *FDBStore) ListQueues(ctx context.Context, maxResults int, nextToken, queueNamePrefix string) ([]string, string, error) {
+	queues, err := s.db.ReadTransact(func(tr fdb.ReadTransaction) (interface{}, error) {
+		return s.dir.List(tr, []string{})
+	})
+	if err != nil {
+		return nil, "", err
+	}
+
+	allQueues := queues.([]string)
+	var filteredQueues []string
+
+	// Filter by prefix
+	if queueNamePrefix != "" {
+		for _, q := range allQueues {
+			if strings.HasPrefix(q, queueNamePrefix) {
+				filteredQueues = append(filteredQueues, q)
+			}
+		}
+	} else {
+		filteredQueues = allQueues
+	}
+
+	// Find starting index from nextToken
+	startIndex := 0
+	if nextToken != "" {
+		for i, q := range filteredQueues {
+			if q == nextToken {
+				startIndex = i + 1
+				break
+			}
+		}
+	}
+
+	if startIndex >= len(filteredQueues) {
+		return []string{}, "", nil // No more results
+	}
+
+	// Determine the slice of queues to return
+	var resultQueues []string
+	var newNextToken string
+
+	endIndex := len(filteredQueues)
+	if maxResults > 0 {
+		endIndex = startIndex + maxResults
+	}
+
+	if endIndex > len(filteredQueues) {
+		endIndex = len(filteredQueues)
+	}
+
+	resultQueues = filteredQueues[startIndex:endIndex]
+
+	if maxResults > 0 && endIndex < len(filteredQueues) {
+		newNextToken = resultQueues[len(resultQueues)-1]
+	}
+
+	return resultQueues, newNextToken, nil
 }
 
 func (s *FDBStore) GetQueueAttributes(ctx context.Context, name string) (map[string]string, error) {

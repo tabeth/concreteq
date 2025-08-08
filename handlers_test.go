@@ -21,15 +21,20 @@ type MockStore struct {
 	mock.Mock
 }
 
-func (m *MockStore) CreateQueue(ctx context.Context, name string) error {
-	args := m.Called(ctx, name)
+func (m *MockStore) CreateQueue(ctx context.Context, name string, attributes, tags map[string]string) error {
+	args := m.Called(ctx, name, attributes, tags)
 	return args.Error(0)
 }
 
-// Implement the rest of the Store interface methods as needed for tests...
-// For now, we only need CreateQueue.
 func (m *MockStore) DeleteQueue(ctx context.Context, name string) error { return nil }
-func (m *MockStore) ListQueues(ctx context.Context) ([]string, error)   { return nil, nil }
+func (m *MockStore) ListQueues(ctx context.Context, maxResults int, nextToken, queueNamePrefix string) ([]string, string, error) {
+	args := m.Called(ctx, maxResults, nextToken, queueNamePrefix)
+	var queues []string
+	if args.Get(0) != nil {
+		queues = args.Get(0).([]string)
+	}
+	return queues, args.String(1), args.Error(2)
+}
 func (m *MockStore) GetQueueAttributes(ctx context.Context, name string) (map[string]string, error) {
 	return nil, nil
 }
@@ -95,7 +100,7 @@ func TestCreateQueueHandler(t *testing.T) {
 			name:      "Successful Queue Creation",
 			inputBody: `{"QueueName": "my-test-queue"}`,
 			mockSetup: func(ms *MockStore) {
-				ms.On("CreateQueue", mock.Anything, "my-test-queue").Return(nil)
+				ms.On("CreateQueue", mock.Anything, "my-test-queue", mock.Anything, mock.Anything).Return(nil)
 			},
 			expectedStatusCode: http.StatusCreated,
 			expectedBody:       `{"QueueUrl":"http://localhost:8080/queues/my-test-queue"}`,
@@ -125,7 +130,7 @@ func TestCreateQueueHandler(t *testing.T) {
 			name:      "Store Error on Creation",
 			inputBody: `{"QueueName": "existing-queue"}`,
 			mockSetup: func(ms *MockStore) {
-				ms.On("CreateQueue", mock.Anything, "existing-queue").Return(assert.AnError)
+				ms.On("CreateQueue", mock.Anything, "existing-queue", mock.Anything, mock.Anything).Return(assert.AnError)
 			},
 			expectedStatusCode: http.StatusInternalServerError,
 			expectedBody:       "Failed to create queue",
@@ -149,12 +154,115 @@ func TestCreateQueueHandler(t *testing.T) {
 			assert.Equal(t, tc.expectedStatusCode, rr.Code)
 
 			if tc.expectedBody != "" {
-				// For JSON responses, we want to compare the unmarshalled objects
-				// to avoid issues with whitespace differences.
 				if strings.HasPrefix(tc.expectedBody, "{") {
 					var expectedResp, actualResp models.CreateQueueResponse
 					err := json.Unmarshal([]byte(tc.expectedBody), &expectedResp)
 					assert.NoError(t, err)
+					err = json.Unmarshal(rr.Body.Bytes(), &actualResp)
+					assert.NoError(t, err)
+					assert.Equal(t, expectedResp, actualResp)
+				} else {
+					assert.Equal(t, tc.expectedBody, strings.TrimSpace(rr.Body.String()))
+				}
+			}
+
+			mockStore.AssertExpectations(t)
+		})
+	}
+}
+
+func TestListQueuesHandler(t *testing.T) {
+	tests := []struct {
+		name               string
+		requestURL         string
+		mockSetup          func(*MockStore)
+		expectedStatusCode int
+		expectedBody       string
+	}{
+		{
+			name:       "Successful Listing - No Params",
+			requestURL: "/queues",
+			mockSetup: func(ms *MockStore) {
+				ms.On("ListQueues", mock.Anything, 0, "", "").Return([]string{"q1", "q2"}, "", nil)
+			},
+			expectedStatusCode: http.StatusOK,
+			expectedBody:       `{"QueueUrls":["http://localhost:8080/queues/q1","http://localhost:8080/queues/q2"]}`,
+		},
+		{
+			name:       "Successful Listing - With MaxResults",
+			requestURL: "/queues?MaxResults=1",
+			mockSetup: func(ms *MockStore) {
+				ms.On("ListQueues", mock.Anything, 1, "", "").Return([]string{"q1"}, "q1", nil)
+			},
+			expectedStatusCode: http.StatusOK,
+			expectedBody:       `{"QueueUrls":["http://localhost:8080/queues/q1"],"NextToken":"q1"}`,
+		},
+		{
+			name:       "Successful Listing - With Prefix",
+			requestURL: "/queues?QueueNamePrefix=test",
+			mockSetup: func(ms *MockStore) {
+				ms.On("ListQueues", mock.Anything, 0, "", "test").Return([]string{"test-q1"}, "", nil)
+			},
+			expectedStatusCode: http.StatusOK,
+			expectedBody:       `{"QueueUrls":["http://localhost:8080/queues/test-q1"]}`,
+		},
+		{
+			name:       "Successful Listing - Pagination",
+			requestURL: "/queues?MaxResults=1&NextToken=q1",
+			mockSetup: func(ms *MockStore) {
+				ms.On("ListQueues", mock.Anything, 1, "q1", "").Return([]string{"q2"}, "", nil)
+			},
+			expectedStatusCode: http.StatusOK,
+			expectedBody:       `{"QueueUrls":["http://localhost:8080/queues/q2"]}`,
+		},
+		{
+			name:               "Invalid MaxResults - Non-integer",
+			requestURL:         "/queues?MaxResults=abc",
+			mockSetup:          func(ms *MockStore) {},
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       "Invalid MaxResults value. It must be an integer between 1 and 1000.",
+		},
+		{
+			name:               "Invalid MaxResults - Out of Range",
+			requestURL:         "/queues?MaxResults=1001",
+			mockSetup:          func(ms *MockStore) {},
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       "Invalid MaxResults value. It must be an integer between 1 and 1000.",
+		},
+		{
+			name:       "Store Error",
+			requestURL: "/queues",
+			mockSetup: func(ms *MockStore) {
+				ms.On("ListQueues", mock.Anything, 0, "", "").Return(nil, "", assert.AnError)
+			},
+			expectedStatusCode: http.StatusInternalServerError,
+			expectedBody:       "Failed to list queues",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mockStore := new(MockStore)
+			tc.mockSetup(mockStore)
+
+			app := &App{Store: mockStore}
+			r := chi.NewRouter()
+			app.RegisterSQSHandlers(r)
+
+			req, _ := http.NewRequest("GET", tc.requestURL, nil)
+			rr := httptest.NewRecorder()
+
+			r.ServeHTTP(rr, req)
+
+			assert.Equal(t, tc.expectedStatusCode, rr.Code)
+
+			if tc.expectedBody != "" {
+				if strings.HasPrefix(tc.expectedBody, "{") {
+					var expectedResp models.ListQueuesResponse
+					err := json.Unmarshal([]byte(tc.expectedBody), &expectedResp)
+					assert.NoError(t, err)
+
+					var actualResp models.ListQueuesResponse
 					err = json.Unmarshal(rr.Body.Bytes(), &actualResp)
 					assert.NoError(t, err)
 					assert.Equal(t, expectedResp, actualResp)
