@@ -192,6 +192,7 @@ func (app *App) CreateQueueHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Construct the queue URL
+	// In a real application, this would be based on the request's host and scheme.
 	queueURL := fmt.Sprintf("http://localhost:8080/queues/%s", req.QueueName)
 
 	resp := models.CreateQueueResponse{
@@ -209,7 +210,48 @@ func (app *App) DeleteQueueHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 func (app *App) ListQueuesHandler(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(http.StatusNotImplemented)
+	// Parse parameters from query string
+	maxResultsStr := r.URL.Query().Get("MaxResults")
+	var maxResults int
+	var err error
+	if maxResultsStr != "" {
+		maxResults, err = strconv.Atoi(maxResultsStr)
+		if err != nil || maxResults < 1 || maxResults > 1000 {
+			http.Error(w, "Invalid MaxResults value. It must be an integer between 1 and 1000.", http.StatusBadRequest)
+			return
+		}
+	}
+
+	nextToken := r.URL.Query().Get("NextToken")
+	queueNamePrefix := r.URL.Query().Get("QueueNamePrefix")
+
+	// Call store to get queue names
+	queueNames, newNextToken, err := app.Store.ListQueues(r.Context(), maxResults, nextToken, queueNamePrefix)
+	if err != nil {
+		http.Error(w, "Failed to list queues", http.StatusInternalServerError)
+		return
+	}
+
+	// If MaxResults was not specified, limit to 1000 results.
+	// The store doesn't return a next token in this case, which is correct.
+	if maxResults == 0 && len(queueNames) > 1000 {
+		queueNames = queueNames[:1000]
+	}
+
+	// Construct full queue URLs
+	queueURLs := make([]string, len(queueNames))
+	for i, name := range queueNames {
+		queueURLs[i] = fmt.Sprintf("http://localhost:8080/queues/%s", name)
+	}
+
+	// Create response
+	resp := models.ListQueuesResponse{
+		QueueUrls: queueURLs,
+		NextToken: newNextToken,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
 }
 func (app *App) GetQueueAttributesHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNotImplemented)

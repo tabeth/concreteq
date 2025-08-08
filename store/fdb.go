@@ -30,7 +30,7 @@ func NewFDBStore() (*FDBStore, error) {
 		return nil, err
 	}
 
-	dir, err := directory.CreateOrOpen(db, []string{"sqs"}, nil)
+	dir, err := directory.CreateOrOpen(db, []string{"concreteq"}, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -87,9 +87,63 @@ func (s *FDBStore) DeleteQueue(ctx context.Context, name string) error {
 	return nil
 }
 
-func (s *FDBStore) ListQueues(ctx context.Context) ([]string, error) {
-	// TODO: Implement in FoundationDB
-	return nil, nil
+func (s *FDBStore) ListQueues(ctx context.Context, maxResults int, nextToken, queueNamePrefix string) ([]string, string, error) {
+	queues, err := s.db.ReadTransact(func(tr fdb.ReadTransaction) (interface{}, error) {
+		return s.dir.List(tr, []string{})
+	})
+	if err != nil {
+		return nil, "", err
+	}
+
+	allQueues := queues.([]string)
+	var filteredQueues []string
+
+	// Filter by prefix
+	if queueNamePrefix != "" {
+		for _, q := range allQueues {
+			if strings.HasPrefix(q, queueNamePrefix) {
+				filteredQueues = append(filteredQueues, q)
+			}
+		}
+	} else {
+		filteredQueues = allQueues
+	}
+
+	// Find starting index from nextToken
+	startIndex := 0
+	if nextToken != "" {
+		for i, q := range filteredQueues {
+			if q == nextToken {
+				startIndex = i + 1
+				break
+			}
+		}
+	}
+
+	if startIndex >= len(filteredQueues) {
+		return []string{}, "", nil // No more results
+	}
+
+	// Determine the slice of queues to return
+	var resultQueues []string
+	var newNextToken string
+
+	endIndex := len(filteredQueues)
+	if maxResults > 0 {
+		endIndex = startIndex + maxResults
+	}
+
+	if endIndex > len(filteredQueues) {
+		endIndex = len(filteredQueues)
+	}
+
+	resultQueues = filteredQueues[startIndex:endIndex]
+
+	if maxResults > 0 && endIndex < len(filteredQueues) {
+		newNextToken = resultQueues[len(resultQueues)-1]
+	}
+
+	return resultQueues, newNextToken, nil
 }
 
 func (s *FDBStore) GetQueueAttributes(ctx context.Context, name string) (map[string]string, error) {

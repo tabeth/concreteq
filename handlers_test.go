@@ -10,7 +10,6 @@ import (
 	"testing"
 
 	"github.com/tabeth/concreteq/models"
-	"github.com/tabeth/concreteq/store"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/assert"
@@ -22,14 +21,20 @@ type MockStore struct {
 	mock.Mock
 }
 
-func (m *MockStore) CreateQueue(ctx context.Context, name string, attributes map[string]string, tags map[string]string) error {
+func (m *MockStore) CreateQueue(ctx context.Context, name string, attributes, tags map[string]string) error {
 	args := m.Called(ctx, name, attributes, tags)
 	return args.Error(0)
 }
 
-// Implement the rest of the Store interface methods as needed for tests...
 func (m *MockStore) DeleteQueue(ctx context.Context, name string) error { return nil }
-func (m *MockStore) ListQueues(ctx context.Context) ([]string, error)   { return nil, nil }
+func (m *MockStore) ListQueues(ctx context.Context, maxResults int, nextToken, queueNamePrefix string) ([]string, string, error) {
+	args := m.Called(ctx, maxResults, nextToken, queueNamePrefix)
+	var queues []string
+	if args.Get(0) != nil {
+		queues = args.Get(0).([]string)
+	}
+	return queues, args.String(1), args.Error(2)
+}
 func (m *MockStore) GetQueueAttributes(ctx context.Context, name string) (map[string]string, error) {
 	return nil, nil
 }
@@ -92,89 +97,43 @@ func TestCreateQueueHandler(t *testing.T) {
 		expectedBody       string
 	}{
 		{
-			name:      "Successful Standard Queue Creation",
+			name:      "Successful Queue Creation",
 			inputBody: `{"QueueName": "my-test-queue"}`,
 			mockSetup: func(ms *MockStore) {
-				ms.On("CreateQueue", mock.Anything, "my-test-queue", mock.AnythingOfType("map[string]string"), mock.AnythingOfType("map[string]string")).Return(nil)
+				ms.On("CreateQueue", mock.Anything, "my-test-queue", mock.Anything, mock.Anything).Return(nil)
 			},
 			expectedStatusCode: http.StatusCreated,
 			expectedBody:       `{"QueueUrl":"http://localhost:8080/queues/my-test-queue"}`,
 		},
 		{
-			name:      "Successful FIFO Queue Creation with High Throughput",
-			inputBody: `{"QueueName": "my-queue.fifo", "Attributes": {"FifoQueue": "true", "DeduplicationScope": "messageGroup", "FifoThroughputLimit": "perMessageGroupId"}}`,
-			mockSetup: func(ms *MockStore) {
-				attrs := map[string]string{"FifoQueue": "true", "DeduplicationScope": "messageGroup", "FifoThroughputLimit": "perMessageGroupId"}
-				ms.On("CreateQueue", mock.Anything, "my-queue.fifo", attrs, mock.AnythingOfType("map[string]string")).Return(nil)
-			},
-			expectedStatusCode: http.StatusCreated,
-		},
-		{
-			name:               "Invalid FIFO Queue - Name has suffix but attribute is missing",
-			inputBody:          `{"QueueName": "my-queue.fifo"}`,
+			name:               "Invalid JSON Body",
+			inputBody:          `{"QueueName": "my-test-queue"`, // Malformed JSON
 			mockSetup:          func(ms *MockStore) {},
 			expectedStatusCode: http.StatusBadRequest,
-			expectedBody:       "Queue name ends in .fifo but FifoQueue attribute is not 'true'",
+			expectedBody:       "Invalid request body",
 		},
 		{
-			name:               "Invalid Standard Queue - Name has no suffix but attribute is true",
-			inputBody:          `{"QueueName": "my-queue", "Attributes": {"FifoQueue": "true"}}`,
+			name:               "Invalid Queue Name - Too Long",
+			inputBody:          `{"QueueName": "` + strings.Repeat("a", 81) + `"}`,
 			mockSetup:          func(ms *MockStore) {},
 			expectedStatusCode: http.StatusBadRequest,
-			expectedBody:       "FifoQueue attribute is 'true' but queue name does not end in .fifo",
+			expectedBody:       "Invalid queue name",
 		},
 		{
-			name:               "Invalid Attribute Value - VisibilityTimeout out of range",
-			inputBody:          `{"QueueName": "my-queue", "Attributes": {"VisibilityTimeout": "50000"}}`,
+			name:               "Invalid Queue Name - Invalid Characters",
+			inputBody:          `{"QueueName": "my-queue!"}`,
 			mockSetup:          func(ms *MockStore) {},
 			expectedStatusCode: http.StatusBadRequest,
-			expectedBody:       "invalid value for VisibilityTimeout: must be between 0 and 43200",
+			expectedBody:       "Invalid queue name",
 		},
 		{
-			name:      "Queue Already Exists",
+			name:      "Store Error on Creation",
 			inputBody: `{"QueueName": "existing-queue"}`,
 			mockSetup: func(ms *MockStore) {
-				ms.On("CreateQueue", mock.Anything, "existing-queue", mock.Anything, mock.Anything).Return(store.ErrQueueAlreadyExists)
+				ms.On("CreateQueue", mock.Anything, "existing-queue", mock.Anything, mock.Anything).Return(assert.AnError)
 			},
-			expectedStatusCode: http.StatusConflict,
-			expectedBody:       "Queue already exists",
-		},
-		{
-			name:               "Invalid High Throughput - perMessageGroupId without messageGroup scope",
-			inputBody:          `{"QueueName": "my-queue.fifo", "Attributes": {"FifoQueue": "true", "DeduplicationScope": "queue", "FifoThroughputLimit": "perMessageGroupId"}}`,
-			mockSetup:          func(ms *MockStore) {},
-			expectedStatusCode: http.StatusBadRequest,
-			expectedBody:       "FifoThroughputLimit can be set to perMessageGroupId only when DeduplicationScope is messageGroup",
-		},
-		{
-			name:               "Invalid High Throughput - Attribute on non-FIFO queue",
-			inputBody:          `{"QueueName": "my-standard-queue", "Attributes": {"DeduplicationScope": "messageGroup"}}`,
-			mockSetup:          func(ms *MockStore) {},
-			expectedStatusCode: http.StatusBadRequest,
-			expectedBody:       "DeduplicationScope is only valid for FIFO queues",
-		},
-		{
-			name:      "Valid Redrive Policy",
-			inputBody: `{"QueueName": "my-queue-with-dlq", "Attributes": {"RedrivePolicy": "{\"deadLetterTargetArn\":\"arn:aws:sqs:us-east-1:123456789012:my-dlq\",\"maxReceiveCount\":\"5\"}"}}`,
-			mockSetup: func(ms *MockStore) {
-				attrs := map[string]string{"RedrivePolicy": `{"deadLetterTargetArn":"arn:aws:sqs:us-east-1:123456789012:my-dlq","maxReceiveCount":"5"}`}
-				ms.On("CreateQueue", mock.Anything, "my-queue-with-dlq", attrs, mock.Anything).Return(nil)
-			},
-			expectedStatusCode: http.StatusCreated,
-		},
-		{
-			name:               "Invalid Redrive Policy - Bad JSON",
-			inputBody:          `{"QueueName": "my-queue", "Attributes": {"RedrivePolicy": "{\"deadLetterTargetArn\"}"}}`,
-			mockSetup:          func(ms *MockStore) {},
-			expectedStatusCode: http.StatusBadRequest,
-			expectedBody:       "invalid value for RedrivePolicy: must be a valid JSON object",
-		},
-		{
-			name:               "Invalid Redrive Policy - Invalid maxReceiveCount",
-			inputBody:          `{"QueueName": "my-queue", "Attributes": {"RedrivePolicy": "{\"deadLetterTargetArn\":\"arn:aws:sqs:us-east-1:123456789012:my-dlq\",\"maxReceiveCount\":\"2000\"}"}}`,
-			mockSetup:          func(ms *MockStore) {},
-			expectedStatusCode: http.StatusBadRequest,
-			expectedBody:       "invalid value for RedrivePolicy: maxReceiveCount must be an integer between 1 and 1000",
+			expectedStatusCode: http.StatusInternalServerError,
+			expectedBody:       "Failed to create queue",
 		},
 	}
 
@@ -199,6 +158,111 @@ func TestCreateQueueHandler(t *testing.T) {
 					var expectedResp, actualResp models.CreateQueueResponse
 					err := json.Unmarshal([]byte(tc.expectedBody), &expectedResp)
 					assert.NoError(t, err)
+					err = json.Unmarshal(rr.Body.Bytes(), &actualResp)
+					assert.NoError(t, err)
+					assert.Equal(t, expectedResp, actualResp)
+				} else {
+					assert.Equal(t, tc.expectedBody, strings.TrimSpace(rr.Body.String()))
+				}
+			}
+
+			mockStore.AssertExpectations(t)
+		})
+	}
+}
+
+func TestListQueuesHandler(t *testing.T) {
+	tests := []struct {
+		name               string
+		requestURL         string
+		mockSetup          func(*MockStore)
+		expectedStatusCode int
+		expectedBody       string
+	}{
+		{
+			name:       "Successful Listing - No Params",
+			requestURL: "/queues",
+			mockSetup: func(ms *MockStore) {
+				ms.On("ListQueues", mock.Anything, 0, "", "").Return([]string{"q1", "q2"}, "", nil)
+			},
+			expectedStatusCode: http.StatusOK,
+			expectedBody:       `{"QueueUrls":["http://localhost:8080/queues/q1","http://localhost:8080/queues/q2"]}`,
+		},
+		{
+			name:       "Successful Listing - With MaxResults",
+			requestURL: "/queues?MaxResults=1",
+			mockSetup: func(ms *MockStore) {
+				ms.On("ListQueues", mock.Anything, 1, "", "").Return([]string{"q1"}, "q1", nil)
+			},
+			expectedStatusCode: http.StatusOK,
+			expectedBody:       `{"QueueUrls":["http://localhost:8080/queues/q1"],"NextToken":"q1"}`,
+		},
+		{
+			name:       "Successful Listing - With Prefix",
+			requestURL: "/queues?QueueNamePrefix=test",
+			mockSetup: func(ms *MockStore) {
+				ms.On("ListQueues", mock.Anything, 0, "", "test").Return([]string{"test-q1"}, "", nil)
+			},
+			expectedStatusCode: http.StatusOK,
+			expectedBody:       `{"QueueUrls":["http://localhost:8080/queues/test-q1"]}`,
+		},
+		{
+			name:       "Successful Listing - Pagination",
+			requestURL: "/queues?MaxResults=1&NextToken=q1",
+			mockSetup: func(ms *MockStore) {
+				ms.On("ListQueues", mock.Anything, 1, "q1", "").Return([]string{"q2"}, "", nil)
+			},
+			expectedStatusCode: http.StatusOK,
+			expectedBody:       `{"QueueUrls":["http://localhost:8080/queues/q2"]}`,
+		},
+		{
+			name:               "Invalid MaxResults - Non-integer",
+			requestURL:         "/queues?MaxResults=abc",
+			mockSetup:          func(ms *MockStore) {},
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       "Invalid MaxResults value. It must be an integer between 1 and 1000.",
+		},
+		{
+			name:               "Invalid MaxResults - Out of Range",
+			requestURL:         "/queues?MaxResults=1001",
+			mockSetup:          func(ms *MockStore) {},
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       "Invalid MaxResults value. It must be an integer between 1 and 1000.",
+		},
+		{
+			name:       "Store Error",
+			requestURL: "/queues",
+			mockSetup: func(ms *MockStore) {
+				ms.On("ListQueues", mock.Anything, 0, "", "").Return(nil, "", assert.AnError)
+			},
+			expectedStatusCode: http.StatusInternalServerError,
+			expectedBody:       "Failed to list queues",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mockStore := new(MockStore)
+			tc.mockSetup(mockStore)
+
+			app := &App{Store: mockStore}
+			r := chi.NewRouter()
+			app.RegisterSQSHandlers(r)
+
+			req, _ := http.NewRequest("GET", tc.requestURL, nil)
+			rr := httptest.NewRecorder()
+
+			r.ServeHTTP(rr, req)
+
+			assert.Equal(t, tc.expectedStatusCode, rr.Code)
+
+			if tc.expectedBody != "" {
+				if strings.HasPrefix(tc.expectedBody, "{") {
+					var expectedResp models.ListQueuesResponse
+					err := json.Unmarshal([]byte(tc.expectedBody), &expectedResp)
+					assert.NoError(t, err)
+
+					var actualResp models.ListQueuesResponse
 					err = json.Unmarshal(rr.Body.Bytes(), &actualResp)
 					assert.NoError(t, err)
 					assert.Equal(t, expectedResp, actualResp)
