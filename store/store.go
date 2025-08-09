@@ -1,6 +1,16 @@
 package store
 
-import "context"
+import (
+	"context"
+	"errors"
+)
+
+var (
+	// ErrQueueAlreadyExists is returned when trying to create a queue that already exists.
+	ErrQueueAlreadyExists = errors.New("queue already exists")
+	// ErrQueueDoesNotExist is returned when trying to operate on a queue that does not exist.
+	ErrQueueDoesNotExist = errors.New("queue does not exist")
+)
 
 // Store is the interface for the underlying storage system.
 // It defines all the data operations required by the SQS-compatible API.
@@ -8,7 +18,7 @@ type Store interface {
 	// Queue Management
 	CreateQueue(ctx context.Context, name string, attributes map[string]string, tags map[string]string) error
 	DeleteQueue(ctx context.Context, name string) error
-	ListQueues(ctx context.Context) ([]string, error)
+	ListQueues(ctx context.Context, maxResults int, nextToken, queueNamePrefix string) ([]string, string, error)
 	GetQueueAttributes(ctx context.Context, name string) (map[string]string, error)
 	SetQueueAttributes(ctx context.Context, name string, attributes map[string]string) error
 	GetQueueURL(ctx context.Context, name string) (string, error)

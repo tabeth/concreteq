@@ -204,10 +204,22 @@ func (app *App) CreateQueueHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(resp)
 }
 
-// --- Other Handler Stubs ---
-
+// DeleteQueueHandler handles requests to delete a queue.
 func (app *App) DeleteQueueHandler(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(http.StatusNotImplemented)
+	queueName := chi.URLParam(r, "queueName")
+
+	err := app.Store.DeleteQueue(r.Context(), queueName)
+	if err != nil {
+		if errors.Is(err, store.ErrQueueDoesNotExist) {
+			// SQS returns a 400 status code for this error.
+			http.Error(w, "QueueDoesNotExist: The specified queue does not exist.", http.StatusBadRequest)
+			return
+		}
+		http.Error(w, "Failed to delete queue", http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
 }
 func (app *App) ListQueuesHandler(w http.ResponseWriter, r *http.Request) {
 	// Parse parameters from query string

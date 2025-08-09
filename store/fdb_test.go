@@ -223,3 +223,31 @@ func TestFDBStore_ListQueues(t *testing.T) {
 		}
 	})
 }
+
+func TestFDBStore_DeleteQueue(t *testing.T) {
+	ctx := context.Background()
+	store, teardown := setupTestDB(t)
+	defer teardown()
+
+	t.Run("deletes an existing queue", func(t *testing.T) {
+		queueName := "queue-to-delete"
+		// Create the queue first
+		err := store.CreateQueue(ctx, queueName, nil, nil)
+		require.NoError(t, err)
+
+		// Now delete it
+		err = store.DeleteQueue(ctx, queueName)
+		assert.NoError(t, err)
+
+		// Verify it's gone
+		exists, err := directory.Exists(store.db, []string{"concreteq", queueName})
+		assert.NoError(t, err)
+		assert.False(t, exists, "expected queue directory to be deleted")
+	})
+
+	t.Run("returns error for non-existent queue", func(t *testing.T) {
+		queueName := "non-existent-queue"
+		err := store.DeleteQueue(ctx, queueName)
+		assert.ErrorIs(t, err, ErrQueueDoesNotExist)
+	})
+}
