@@ -275,7 +275,23 @@ func (app *App) GetQueueUrlHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 func (app *App) PurgeQueueHandler(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(http.StatusNotImplemented)
+	queueName := chi.URLParam(r, "queueName")
+
+	err := app.Store.PurgeQueue(r.Context(), queueName)
+	if err != nil {
+		if errors.Is(err, store.ErrQueueDoesNotExist) {
+			http.Error(w, "QueueDoesNotExist: The specified queue does not exist.", http.StatusBadRequest)
+			return
+		}
+		if errors.Is(err, store.ErrPurgeQueueInProgress) {
+			http.Error(w, "PurgeQueueInProgress: Indicates that the specified queue previously received a PurgeQueue request within the last 60 seconds.", http.StatusBadRequest)
+			return
+		}
+		http.Error(w, "Failed to purge queue", http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
 }
 func (app *App) SendMessageHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNotImplemented)
