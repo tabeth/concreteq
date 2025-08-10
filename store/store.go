@@ -10,6 +10,8 @@ var (
 	ErrQueueAlreadyExists = errors.New("queue already exists")
 	// ErrQueueDoesNotExist is returned when trying to operate on a queue that does not exist.
 	ErrQueueDoesNotExist = errors.New("queue does not exist")
+	// ErrPurgeQueueInProgress is returned when a purge request is made for a queue that has been purged in the last 60 seconds.
+	ErrPurgeQueueInProgress = errors.New("purge queue in progress")
 )
 
 // Store is the interface for the underlying storage system.

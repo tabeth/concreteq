@@ -3,7 +3,9 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
 	"github.com/apple/foundationdb/bindings/go/src/fdb/directory"
@@ -169,8 +171,55 @@ func (s *FDBStore) GetQueueURL(ctx context.Context, name string) (string, error)
 }
 
 func (s *FDBStore) PurgeQueue(ctx context.Context, name string) error {
-	// TODO: Implement in FoundationDB
-	return nil
+	_, err := s.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
+		// Check if queue exists
+		exists, err := s.dir.Exists(tr, []string{name})
+		if err != nil {
+			return nil, err
+		}
+		if !exists {
+			return nil, ErrQueueDoesNotExist
+		}
+
+		queueDir, err := s.dir.Open(tr, []string{name}, nil)
+		if err != nil {
+			// This should not happen if `exists` is true, but handle defensively.
+			return nil, err
+		}
+
+		// Check for recent purge to enforce 60-second cooldown
+		now := time.Now().Unix()
+		lastPurgedBytes, err := tr.Get(queueDir.Pack(tuple.Tuple{"last_purged_at"})).Get()
+		if err != nil {
+			return nil, err
+		}
+
+		if len(lastPurgedBytes) > 0 {
+			lastPurged, err := strconv.ParseInt(string(lastPurgedBytes), 10, 64)
+			if err == nil { // Only check if parsing was successful
+				if now-lastPurged < 60 {
+					return nil, ErrPurgeQueueInProgress
+				}
+			}
+			// If parsing fails, we can choose to ignore and proceed with the purge.
+		}
+
+		// Purge messages. We assume messages are in a "messages" subdirectory.
+		// We clear the range of keys within this subdirectory without deleting the directory itself.
+		messagesDir := queueDir.Sub("messages")
+		prefix := messagesDir.Pack(tuple.Tuple{})
+		pr, err := fdb.PrefixRange(prefix)
+		if err != nil {
+			return nil, err
+		}
+		tr.ClearRange(pr)
+
+		// Update last purged timestamp
+		tr.Set(queueDir.Pack(tuple.Tuple{"last_purged_at"}), []byte(strconv.FormatInt(now, 10)))
+
+		return nil, nil
+	})
+	return err
 }
 
 func (s *FDBStore) SendMessage(ctx context.Context, queueName string, messageBody string) (string, error) {

@@ -251,3 +251,82 @@ func TestFDBStore_DeleteQueue(t *testing.T) {
 		assert.ErrorIs(t, err, ErrQueueDoesNotExist)
 	})
 }
+
+func TestFDBStore_PurgeQueue(t *testing.T) {
+	ctx := context.Background()
+	store, teardown := setupTestDB(t)
+	defer teardown()
+
+	t.Run("purges a queue successfully", func(t *testing.T) {
+		queueName := "queue-to-purge"
+		attributes := map[string]string{"VisibilityTimeout": "30"}
+		tags := map[string]string{"Owner": "test"}
+
+		// 1. Create queue with attributes and tags
+		err := store.CreateQueue(ctx, queueName, attributes, tags)
+		require.NoError(t, err)
+
+		// 2. Add some dummy message keys directly to FDB
+		_, err = store.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
+			queueDir, err := directory.Open(tr, []string{"concreteq", queueName}, nil)
+			require.NoError(t, err)
+			messagesDir := queueDir.Sub("messages")
+			tr.Set(messagesDir.Pack(tuple.Tuple{"msg1"}), []byte("message 1"))
+			tr.Set(messagesDir.Pack(tuple.Tuple{"msg2"}), []byte("message 2"))
+			return nil, nil
+		})
+		require.NoError(t, err)
+
+		// 3. Purge the queue
+		err = store.PurgeQueue(ctx, queueName)
+		assert.NoError(t, err)
+
+		// 4. Verify messages are gone and metadata remains
+		_, err = store.db.ReadTransact(func(rtr fdb.ReadTransaction) (interface{}, error) {
+			queueDir, err := directory.Open(rtr, []string{"concreteq", queueName}, nil)
+			require.NoError(t, err)
+			messagesDir := queueDir.Sub("messages")
+
+			// Check messages are deleted
+			prefix := messagesDir.Pack(tuple.Tuple{})
+			pr, err := fdb.PrefixRange(prefix)
+			require.NoError(t, err)
+			r := rtr.GetRange(pr, fdb.RangeOptions{})
+			kvs, err := r.GetSliceWithError()
+			require.NoError(t, err)
+			assert.Empty(t, kvs, "expected messages to be deleted")
+
+			// Check attributes still exist
+			attrsBytes, err := rtr.Get(queueDir.Pack(tuple.Tuple{"attributes"})).Get()
+			require.NoError(t, err)
+			assert.NotEmpty(t, attrsBytes, "expected attributes to remain")
+
+			// Check last_purged_at was set
+			lastPurgedBytes, err := rtr.Get(queueDir.Pack(tuple.Tuple{"last_purged_at"})).Get()
+			require.NoError(t, err)
+			assert.NotEmpty(t, lastPurgedBytes, "expected last_purged_at to be set")
+
+			return nil, nil
+		})
+		require.NoError(t, err)
+	})
+
+	t.Run("returns error for non-existent queue", func(t *testing.T) {
+		err := store.PurgeQueue(ctx, "non-existent-queue-for-purge")
+		assert.ErrorIs(t, err, ErrQueueDoesNotExist)
+	})
+
+	t.Run("returns error if purged recently", func(t *testing.T) {
+		queueName := "queue-to-purge-twice"
+		err := store.CreateQueue(ctx, queueName, nil, nil)
+		require.NoError(t, err)
+
+		// First purge should succeed
+		err = store.PurgeQueue(ctx, queueName)
+		require.NoError(t, err)
+
+		// Immediate second purge should fail
+		err = store.PurgeQueue(ctx, queueName)
+		assert.ErrorIs(t, err, ErrPurgeQueueInProgress)
+	})
+}

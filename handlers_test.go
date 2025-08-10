@@ -46,7 +46,10 @@ func (m *MockStore) SetQueueAttributes(ctx context.Context, name string, attribu
 	return nil
 }
 func (m *MockStore) GetQueueURL(ctx context.Context, name string) (string, error) { return "", nil }
-func (m *MockStore) PurgeQueue(ctx context.Context, name string) error            { return nil }
+func (m *MockStore) PurgeQueue(ctx context.Context, name string) error {
+	args := m.Called(ctx, name)
+	return args.Error(0)
+}
 func (m *MockStore) SendMessage(ctx context.Context, queueName string, messageBody string) (string, error) {
 	return "", nil
 }
@@ -168,6 +171,76 @@ func TestCreateQueueHandler(t *testing.T) {
 				} else {
 					assert.Equal(t, tc.expectedBody, strings.TrimSpace(rr.Body.String()))
 				}
+			}
+
+			mockStore.AssertExpectations(t)
+		})
+	}
+}
+
+func TestPurgeQueueHandler(t *testing.T) {
+	tests := []struct {
+		name               string
+		queueName          string
+		mockSetup          func(*MockStore)
+		expectedStatusCode int
+		expectedBody       string
+	}{
+		{
+			name:      "Successful Purge",
+			queueName: "my-queue",
+			mockSetup: func(ms *MockStore) {
+				ms.On("PurgeQueue", mock.Anything, "my-queue").Return(nil)
+			},
+			expectedStatusCode: http.StatusOK,
+			expectedBody:       "",
+		},
+		{
+			name:      "Queue Not Found",
+			queueName: "non-existent-queue",
+			mockSetup: func(ms *MockStore) {
+				ms.On("PurgeQueue", mock.Anything, "non-existent-queue").Return(store.ErrQueueDoesNotExist)
+			},
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       "QueueDoesNotExist: The specified queue does not exist.",
+		},
+		{
+			name:      "Purge In Progress",
+			queueName: "purging-queue",
+			mockSetup: func(ms *MockStore) {
+				ms.On("PurgeQueue", mock.Anything, "purging-queue").Return(store.ErrPurgeQueueInProgress)
+			},
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       "PurgeQueueInProgress: Indicates that the specified queue previously received a PurgeQueue request within the last 60 seconds.",
+		},
+		{
+			name:      "Store Error",
+			queueName: "error-queue",
+			mockSetup: func(ms *MockStore) {
+				ms.On("PurgeQueue", mock.Anything, "error-queue").Return(assert.AnError)
+			},
+			expectedStatusCode: http.StatusInternalServerError,
+			expectedBody:       "Failed to purge queue",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mockStore := new(MockStore)
+			tc.mockSetup(mockStore)
+
+			app := &App{Store: mockStore}
+			r := chi.NewRouter()
+			app.RegisterSQSHandlers(r)
+
+			req, _ := http.NewRequest("POST", "/queues/"+tc.queueName+"/purge", nil)
+			rr := httptest.NewRecorder()
+
+			r.ServeHTTP(rr, req)
+
+			assert.Equal(t, tc.expectedStatusCode, rr.Code)
+			if tc.expectedBody != "" {
+				assert.Equal(t, tc.expectedBody, strings.TrimSpace(rr.Body.String()))
 			}
 
 			mockStore.AssertExpectations(t)
