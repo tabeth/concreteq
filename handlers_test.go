@@ -50,8 +50,12 @@ func (m *MockStore) PurgeQueue(ctx context.Context, name string) error {
 	args := m.Called(ctx, name)
 	return args.Error(0)
 }
-func (m *MockStore) SendMessage(ctx context.Context, queueName string, messageBody string) (string, error) {
-	return "", nil
+func (m *MockStore) SendMessage(ctx context.Context, queueName string, message *models.SendMessageRequest) (*models.SendMessageResponse, error) {
+	args := m.Called(ctx, queueName, message)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*models.SendMessageResponse), args.Error(1)
 }
 func (m *MockStore) SendMessageBatch(ctx context.Context, queueName string, messages []string) ([]string, error) {
 	return nil, nil
@@ -403,6 +407,95 @@ func TestListQueuesHandler(t *testing.T) {
 					var actualResp models.ListQueuesResponse
 					err = json.Unmarshal(rr.Body.Bytes(), &actualResp)
 					assert.NoError(t, err)
+					assert.Equal(t, expectedResp, actualResp)
+				} else {
+					assert.Equal(t, tc.expectedBody, strings.TrimSpace(rr.Body.String()))
+				}
+			}
+
+			mockStore.AssertExpectations(t)
+		})
+	}
+}
+
+func TestSendMessageHandler(t *testing.T) {
+	tests := []struct {
+		name               string
+		inputBody          string
+		mockSetup          func(*MockStore)
+		expectedStatusCode int
+		expectedBody       string
+	}{
+		{
+			name:      "Successful Send",
+			inputBody: `{"MessageBody": "hello world", "QueueUrl": "http://localhost:8080/queues/my-queue"}`,
+			mockSetup: func(ms *MockStore) {
+				ms.On("SendMessage", mock.Anything, "my-queue", mock.AnythingOfType("*models.SendMessageRequest")).Return(&models.SendMessageResponse{
+					MessageId:      "some-uuid",
+					MD5OfMessageBody: "5d41402abc4b2a76b9719d911017c592",
+				}, nil)
+			},
+			expectedStatusCode: http.StatusOK,
+			expectedBody:       `{"MD5OfMessageBody":"5d41402abc4b2a76b9719d911017c592","MessageId":"some-uuid"}`,
+		},
+		{
+			name:               "Missing QueueUrl",
+			inputBody:          `{"MessageBody": "hello"}`,
+			mockSetup:          func(ms *MockStore) {},
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       "MissingParameter: The request must contain a QueueUrl.",
+		},
+		{
+			name:               "Empty Message Body",
+			inputBody:          `{"MessageBody": "", "QueueUrl": "http://localhost:8080/queues/my-queue"}`,
+			mockSetup:          func(ms *MockStore) {},
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       "InvalidParameterValue: The message body must be between 1 and 262144 bytes long.",
+		},
+		{
+			name:               "Message Body Too Large",
+			inputBody:          `{"MessageBody": "` + strings.Repeat("a", 257*1024) + `", "QueueUrl": "http://localhost:8080/queues/my-queue"}`,
+			mockSetup:          func(ms *MockStore) {},
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       "InvalidParameterValue: The message body must be between 1 and 262144 bytes long.",
+		},
+		{
+			name:      "MessageGroupId with Standard Queue",
+			inputBody: `{"MessageBody": "hello standard", "MessageGroupId": "group1", "QueueUrl": "http://localhost:8080/queues/my-queue"}`,
+			mockSetup: func(ms *MockStore) {
+				ms.On("SendMessage", mock.Anything, "my-queue", mock.AnythingOfType("*models.SendMessageRequest")).Return(&models.SendMessageResponse{
+					MessageId:      "some-uuid",
+					MD5OfMessageBody: "md5-of-body",
+				}, nil)
+			},
+			expectedStatusCode: http.StatusOK,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mockStore := new(MockStore)
+			tc.mockSetup(mockStore)
+
+			app := &App{Store: mockStore}
+			r := chi.NewRouter()
+			app.RegisterSQSHandlers(r)
+
+			req, _ := http.NewRequest("POST", "/", bytes.NewBufferString(tc.inputBody))
+			req.Header.Set("X-Amz-Target", "AmazonSQS.SendMessage")
+			rr := httptest.NewRecorder()
+
+			r.ServeHTTP(rr, req)
+
+			assert.Equal(t, tc.expectedStatusCode, rr.Code)
+
+			if tc.expectedBody != "" {
+				if strings.HasPrefix(tc.expectedBody, "{") {
+					var expectedResp, actualResp models.SendMessageResponse
+					err := json.Unmarshal([]byte(tc.expectedBody), &expectedResp)
+					assert.NoError(t, err, "failed to unmarshal expected response")
+					err = json.Unmarshal(rr.Body.Bytes(), &actualResp)
+					assert.NoError(t, err, "failed to unmarshal actual response")
 					assert.Equal(t, expectedResp, actualResp)
 				} else {
 					assert.Equal(t, tc.expectedBody, strings.TrimSpace(rr.Body.String()))
