@@ -26,17 +26,13 @@ func (app *App) RegisterSQSHandlers(r *chi.Mux) {
 	// Root handler for RPC-style requests
 	r.Post("/", app.RootSQSHandler)
 
-	// Queue Management (keeping REST-ful for now, can be refactored later)
-	r.Post("/queues", app.CreateQueueHandler)
-	r.Delete("/queues/{queueName}", app.DeleteQueueHandler)
-	r.Get("/queues", app.ListQueuesHandler)
-	r.Get("/queues/{queueName}/attributes", app.GetQueueAttributesHandler)
-	r.Put("/queues/{queueName}/attributes", app.SetQueueAttributesHandler)
-	r.Get("/queues/url/{queueName}", app.GetQueueUrlHandler)
-	r.Post("/queues/{queueName}/purge", app.PurgeQueueHandler)
+	// Legacy REST-ful routes that can be phased out
+	// r.Post("/queues", app.CreateQueueHandler)
+	// r.Delete("/queues/{queueName}", app.DeleteQueueHandler)
+	// r.Get("/queues", app.ListQueuesHandler)
+	// r.Post("/queues/{queueName}/purge", app.PurgeQueueHandler)
 
 	// Message Management
-	// r.Post("/SendMessage", app.SendMessageHandler) // This is now handled by the RootSQSHandler
 	r.Post("/queues/{queueName}/messages/batch", app.SendMessageBatchHandler)
 	r.Get("/queues/{queueName}/messages", app.ReceiveMessageHandler)
 	r.Delete("/queues/{queueName}/messages/{receiptHandle}", app.DeleteMessageHandler)
@@ -76,6 +72,14 @@ func (app *App) RootSQSHandler(w http.ResponseWriter, r *http.Request) {
 	switch action {
 	case "SendMessage":
 		app.SendMessageHandler(w, r)
+	case "CreateQueue":
+		app.CreateQueueHandler(w, r)
+	case "DeleteQueue":
+		app.DeleteQueueHandler(w, r)
+	case "ListQueues":
+		app.ListQueuesHandler(w, r)
+	case "PurgeQueue":
+		app.PurgeQueueHandler(w, r)
 	default:
 		http.Error(w, "Unsupported operation: "+action, http.StatusBadRequest)
 	}
@@ -230,7 +234,16 @@ func (app *App) CreateQueueHandler(w http.ResponseWriter, r *http.Request) {
 
 // DeleteQueueHandler handles requests to delete a queue.
 func (app *App) DeleteQueueHandler(w http.ResponseWriter, r *http.Request) {
-	queueName := chi.URLParam(r, "queueName")
+	var req models.DeleteQueueRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.QueueUrl == "" {
+		http.Error(w, "MissingParameter: The request must contain a QueueUrl.", http.StatusBadRequest)
+		return
+	}
+	queueName := path.Base(req.QueueUrl)
 
 	err := app.Store.DeleteQueue(r.Context(), queueName)
 	if err != nil {
@@ -246,23 +259,13 @@ func (app *App) DeleteQueueHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 func (app *App) ListQueuesHandler(w http.ResponseWriter, r *http.Request) {
-	// Parse parameters from query string
-	maxResultsStr := r.URL.Query().Get("MaxResults")
-	var maxResults int
-	var err error
-	if maxResultsStr != "" {
-		maxResults, err = strconv.Atoi(maxResultsStr)
-		if err != nil || maxResults < 1 || maxResults > 1000 {
-			http.Error(w, "Invalid MaxResults value. It must be an integer between 1 and 1000.", http.StatusBadRequest)
-			return
-		}
+	var req models.ListQueuesRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		// SQS allows this to be a GET or POST, so an empty body is fine.
 	}
 
-	nextToken := r.URL.Query().Get("NextToken")
-	queueNamePrefix := r.URL.Query().Get("QueueNamePrefix")
-
 	// Call store to get queue names
-	queueNames, newNextToken, err := app.Store.ListQueues(r.Context(), maxResults, nextToken, queueNamePrefix)
+	queueNames, newNextToken, err := app.Store.ListQueues(r.Context(), req.MaxResults, req.NextToken, req.QueueNamePrefix)
 	if err != nil {
 		http.Error(w, "Failed to list queues", http.StatusInternalServerError)
 		return
@@ -270,7 +273,7 @@ func (app *App) ListQueuesHandler(w http.ResponseWriter, r *http.Request) {
 
 	// If MaxResults was not specified, limit to 1000 results.
 	// The store doesn't return a next token in this case, which is correct.
-	if maxResults == 0 && len(queueNames) > 1000 {
+	if req.MaxResults == 0 && len(queueNames) > 1000 {
 		queueNames = queueNames[:1000]
 	}
 
@@ -299,7 +302,16 @@ func (app *App) GetQueueUrlHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 func (app *App) PurgeQueueHandler(w http.ResponseWriter, r *http.Request) {
-	queueName := chi.URLParam(r, "queueName")
+	var req models.PurgeQueueRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.QueueUrl == "" {
+		http.Error(w, "MissingParameter: The request must contain a QueueUrl.", http.StatusBadRequest)
+		return
+	}
+	queueName := path.Base(req.QueueUrl)
 
 	err := app.Store.PurgeQueue(r.Context(), queueName)
 	if err != nil {

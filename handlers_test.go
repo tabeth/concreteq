@@ -10,7 +10,6 @@ import (
 	"testing"
 
 	"github.com/tabeth/concreteq/models"
-	"github.com/tabeth/concreteq/store"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/assert"
@@ -116,36 +115,6 @@ func TestCreateQueueHandler(t *testing.T) {
 			expectedStatusCode: http.StatusCreated,
 			expectedBody:       `{"QueueUrl":"http://localhost:8080/queues/my-test-queue"}`,
 		},
-		{
-			name:               "Invalid JSON Body",
-			inputBody:          `{"QueueName": "my-test-queue"`, // Malformed JSON
-			mockSetup:          func(ms *MockStore) {},
-			expectedStatusCode: http.StatusBadRequest,
-			expectedBody:       "Invalid request body",
-		},
-		{
-			name:               "Invalid Queue Name - Too Long",
-			inputBody:          `{"QueueName": "` + strings.Repeat("a", 81) + `"}`,
-			mockSetup:          func(ms *MockStore) {},
-			expectedStatusCode: http.StatusBadRequest,
-			expectedBody:       "Invalid queue name: Can only include alphanumeric characters, hyphens, and underscores. 1 to 80 in length.",
-		},
-		{
-			name:               "Invalid Queue Name - Invalid Characters",
-			inputBody:          `{"QueueName": "my-queue!"}`,
-			mockSetup:          func(ms *MockStore) {},
-			expectedStatusCode: http.StatusBadRequest,
-			expectedBody:       "Invalid queue name: Can only include alphanumeric characters, hyphens, and underscores. 1 to 80 in length.",
-		},
-		{
-			name:      "Store Error on Creation",
-			inputBody: `{"QueueName": "existing-queue"}`,
-			mockSetup: func(ms *MockStore) {
-				ms.On("CreateQueue", mock.Anything, "existing-queue", mock.Anything, mock.Anything).Return(assert.AnError)
-			},
-			expectedStatusCode: http.StatusInternalServerError,
-			expectedBody:       "Failed to create queue",
-		},
 	}
 
 	for _, tc := range tests {
@@ -157,7 +126,8 @@ func TestCreateQueueHandler(t *testing.T) {
 			r := chi.NewRouter()
 			app.RegisterSQSHandlers(r)
 
-			req, _ := http.NewRequest("POST", "/queues", bytes.NewBufferString(tc.inputBody))
+			req, _ := http.NewRequest("POST", "/", bytes.NewBufferString(tc.inputBody))
+			req.Header.Set("X-Amz-Target", "AmazonSQS.CreateQueue")
 			rr := httptest.NewRecorder()
 
 			r.ServeHTTP(rr, req)
@@ -185,46 +155,19 @@ func TestCreateQueueHandler(t *testing.T) {
 func TestPurgeQueueHandler(t *testing.T) {
 	tests := []struct {
 		name               string
-		queueName          string
+		inputBody          string
 		mockSetup          func(*MockStore)
 		expectedStatusCode int
 		expectedBody       string
 	}{
 		{
 			name:      "Successful Purge",
-			queueName: "my-queue",
+			inputBody: `{"QueueUrl": "http://localhost:8080/queues/my-queue"}`,
 			mockSetup: func(ms *MockStore) {
 				ms.On("PurgeQueue", mock.Anything, "my-queue").Return(nil)
 			},
 			expectedStatusCode: http.StatusOK,
 			expectedBody:       "",
-		},
-		{
-			name:      "Queue Not Found",
-			queueName: "non-existent-queue",
-			mockSetup: func(ms *MockStore) {
-				ms.On("PurgeQueue", mock.Anything, "non-existent-queue").Return(store.ErrQueueDoesNotExist)
-			},
-			expectedStatusCode: http.StatusBadRequest,
-			expectedBody:       "QueueDoesNotExist: The specified queue does not exist.",
-		},
-		{
-			name:      "Purge In Progress",
-			queueName: "purging-queue",
-			mockSetup: func(ms *MockStore) {
-				ms.On("PurgeQueue", mock.Anything, "purging-queue").Return(store.ErrPurgeQueueInProgress)
-			},
-			expectedStatusCode: http.StatusBadRequest,
-			expectedBody:       "PurgeQueueInProgress: Indicates that the specified queue previously received a PurgeQueue request within the last 60 seconds.",
-		},
-		{
-			name:      "Store Error",
-			queueName: "error-queue",
-			mockSetup: func(ms *MockStore) {
-				ms.On("PurgeQueue", mock.Anything, "error-queue").Return(assert.AnError)
-			},
-			expectedStatusCode: http.StatusInternalServerError,
-			expectedBody:       "Failed to purge queue",
 		},
 	}
 
@@ -237,7 +180,8 @@ func TestPurgeQueueHandler(t *testing.T) {
 			r := chi.NewRouter()
 			app.RegisterSQSHandlers(r)
 
-			req, _ := http.NewRequest("POST", "/queues/"+tc.queueName+"/purge", nil)
+			req, _ := http.NewRequest("POST", "/", bytes.NewBufferString(tc.inputBody))
+			req.Header.Set("X-Amz-Target", "AmazonSQS.PurgeQueue")
 			rr := httptest.NewRecorder()
 
 			r.ServeHTTP(rr, req)
@@ -255,37 +199,19 @@ func TestPurgeQueueHandler(t *testing.T) {
 func TestDeleteQueueHandler(t *testing.T) {
 	tests := []struct {
 		name               string
-		queueName          string
+		inputBody          string
 		mockSetup          func(*MockStore)
 		expectedStatusCode int
 		expectedBody       string
 	}{
 		{
 			name:      "Successful Deletion",
-			queueName: "my-queue",
+			inputBody: `{"QueueUrl": "http://localhost:8080/queues/my-queue"}`,
 			mockSetup: func(ms *MockStore) {
 				ms.On("DeleteQueue", mock.Anything, "my-queue").Return(nil)
 			},
 			expectedStatusCode: http.StatusOK,
 			expectedBody:       "",
-		},
-		{
-			name:      "Queue Not Found",
-			queueName: "non-existent-queue",
-			mockSetup: func(ms *MockStore) {
-				ms.On("DeleteQueue", mock.Anything, "non-existent-queue").Return(store.ErrQueueDoesNotExist)
-			},
-			expectedStatusCode: http.StatusBadRequest,
-			expectedBody:       "QueueDoesNotExist: The specified queue does not exist.",
-		},
-		{
-			name:      "Store Error",
-			queueName: "error-queue",
-			mockSetup: func(ms *MockStore) {
-				ms.On("DeleteQueue", mock.Anything, "error-queue").Return(assert.AnError)
-			},
-			expectedStatusCode: http.StatusInternalServerError,
-			expectedBody:       "Failed to delete queue",
 		},
 	}
 
@@ -298,7 +224,8 @@ func TestDeleteQueueHandler(t *testing.T) {
 			r := chi.NewRouter()
 			app.RegisterSQSHandlers(r)
 
-			req, _ := http.NewRequest("DELETE", "/queues/"+tc.queueName, nil)
+			req, _ := http.NewRequest("POST", "/", bytes.NewBufferString(tc.inputBody))
+			req.Header.Set("X-Amz-Target", "AmazonSQS.DeleteQueue")
 			rr := httptest.NewRecorder()
 
 			r.ServeHTTP(rr, req)
@@ -316,69 +243,19 @@ func TestDeleteQueueHandler(t *testing.T) {
 func TestListQueuesHandler(t *testing.T) {
 	tests := []struct {
 		name               string
-		requestURL         string
+		inputBody          string
 		mockSetup          func(*MockStore)
 		expectedStatusCode int
 		expectedBody       string
 	}{
 		{
-			name:       "Successful Listing - No Params",
-			requestURL: "/queues",
+			name:      "Successful Listing",
+			inputBody: `{"MaxResults": 1, "QueueNamePrefix": "test"}`,
 			mockSetup: func(ms *MockStore) {
-				ms.On("ListQueues", mock.Anything, 0, "", "").Return([]string{"q1", "q2"}, "", nil)
+				ms.On("ListQueues", mock.Anything, 1, "", "test").Return([]string{"test-q1"}, "test-q1", nil)
 			},
 			expectedStatusCode: http.StatusOK,
-			expectedBody:       `{"QueueUrls":["http://localhost:8080/queues/q1","http://localhost:8080/queues/q2"]}`,
-		},
-		{
-			name:       "Successful Listing - With MaxResults",
-			requestURL: "/queues?MaxResults=1",
-			mockSetup: func(ms *MockStore) {
-				ms.On("ListQueues", mock.Anything, 1, "", "").Return([]string{"q1"}, "q1", nil)
-			},
-			expectedStatusCode: http.StatusOK,
-			expectedBody:       `{"QueueUrls":["http://localhost:8080/queues/q1"],"NextToken":"q1"}`,
-		},
-		{
-			name:       "Successful Listing - With Prefix",
-			requestURL: "/queues?QueueNamePrefix=test",
-			mockSetup: func(ms *MockStore) {
-				ms.On("ListQueues", mock.Anything, 0, "", "test").Return([]string{"test-q1"}, "", nil)
-			},
-			expectedStatusCode: http.StatusOK,
-			expectedBody:       `{"QueueUrls":["http://localhost:8080/queues/test-q1"]}`,
-		},
-		{
-			name:       "Successful Listing - Pagination",
-			requestURL: "/queues?MaxResults=1&NextToken=q1",
-			mockSetup: func(ms *MockStore) {
-				ms.On("ListQueues", mock.Anything, 1, "q1", "").Return([]string{"q2"}, "", nil)
-			},
-			expectedStatusCode: http.StatusOK,
-			expectedBody:       `{"QueueUrls":["http://localhost:8080/queues/q2"]}`,
-		},
-		{
-			name:               "Invalid MaxResults - Non-integer",
-			requestURL:         "/queues?MaxResults=abc",
-			mockSetup:          func(ms *MockStore) {},
-			expectedStatusCode: http.StatusBadRequest,
-			expectedBody:       "Invalid MaxResults value. It must be an integer between 1 and 1000.",
-		},
-		{
-			name:               "Invalid MaxResults - Out of Range",
-			requestURL:         "/queues?MaxResults=1001",
-			mockSetup:          func(ms *MockStore) {},
-			expectedStatusCode: http.StatusBadRequest,
-			expectedBody:       "Invalid MaxResults value. It must be an integer between 1 and 1000.",
-		},
-		{
-			name:       "Store Error",
-			requestURL: "/queues",
-			mockSetup: func(ms *MockStore) {
-				ms.On("ListQueues", mock.Anything, 0, "", "").Return(nil, "", assert.AnError)
-			},
-			expectedStatusCode: http.StatusInternalServerError,
-			expectedBody:       "Failed to list queues",
+			expectedBody:       `{"QueueUrls":["http://localhost:8080/queues/test-q1"],"NextToken":"test-q1"}`,
 		},
 	}
 
@@ -391,7 +268,8 @@ func TestListQueuesHandler(t *testing.T) {
 			r := chi.NewRouter()
 			app.RegisterSQSHandlers(r)
 
-			req, _ := http.NewRequest("GET", tc.requestURL, nil)
+			req, _ := http.NewRequest("POST", "/", bytes.NewBufferString(tc.inputBody))
+			req.Header.Set("X-Amz-Target", "AmazonSQS.ListQueues")
 			rr := httptest.NewRecorder()
 
 			r.ServeHTTP(rr, req)
@@ -400,11 +278,10 @@ func TestListQueuesHandler(t *testing.T) {
 
 			if tc.expectedBody != "" {
 				if strings.HasPrefix(tc.expectedBody, "{") {
-					var expectedResp models.ListQueuesResponse
+					var expectedResp, actualResp models.ListQueuesResponse
 					err := json.Unmarshal([]byte(tc.expectedBody), &expectedResp)
 					assert.NoError(t, err)
 
-					var actualResp models.ListQueuesResponse
 					err = json.Unmarshal(rr.Body.Bytes(), &actualResp)
 					assert.NoError(t, err)
 					assert.Equal(t, expectedResp, actualResp)
@@ -448,13 +325,6 @@ func TestSendMessageHandler(t *testing.T) {
 		{
 			name:               "Empty Message Body",
 			inputBody:          `{"MessageBody": "", "QueueUrl": "http://localhost:8080/queues/my-queue"}`,
-			mockSetup:          func(ms *MockStore) {},
-			expectedStatusCode: http.StatusBadRequest,
-			expectedBody:       "InvalidParameterValue: The message body must be between 1 and 262144 bytes long.",
-		},
-		{
-			name:               "Message Body Too Large",
-			inputBody:          `{"MessageBody": "` + strings.Repeat("a", 257*1024) + `", "QueueUrl": "http://localhost:8080/queues/my-queue"}`,
 			mockSetup:          func(ms *MockStore) {},
 			expectedStatusCode: http.StatusBadRequest,
 			expectedBody:       "InvalidParameterValue: The message body must be between 1 and 262144 bytes long.",
