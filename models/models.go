@@ -76,3 +76,13 @@ type Message struct {
 	ReceivedCount      int
 	FirstReceived      int64
 }
+
+// DeleteQueueRequest defines the parameters for deleting a queue.
+type DeleteQueueRequest struct {
+	QueueUrl string `json:"QueueUrl"`
+}
+
+// PurgeQueueRequest defines the parameters for purging a queue.
+type PurgeQueueRequest struct {
+	QueueUrl string `json:"QueueUrl"`
+}
