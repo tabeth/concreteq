@@ -6,12 +6,14 @@ import (
 	"fmt"
 	"sort"
 	"testing"
+	"time"
 
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
 	"github.com/apple/foundationdb/bindings/go/src/fdb/directory"
 	"github.com/apple/foundationdb/bindings/go/src/fdb/tuple"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tabeth/concreteq/models"
 )
 
 // NOTE: These tests require a running FoundationDB instance.
@@ -328,5 +330,133 @@ func TestFDBStore_PurgeQueue(t *testing.T) {
 		// Immediate second purge should fail
 		err = store.PurgeQueue(ctx, queueName)
 		assert.ErrorIs(t, err, ErrPurgeQueueInProgress)
+	})
+}
+
+func TestFDBStore_SendMessage(t *testing.T) {
+	ctx := context.Background()
+	store, teardown := setupTestDB(t)
+	defer teardown()
+
+	queueName := "test-send-message-queue"
+	err := store.CreateQueue(ctx, queueName, nil, nil)
+	require.NoError(t, err)
+
+	t.Run("sends a simple message successfully", func(t *testing.T) {
+		msgRequest := &models.SendMessageRequest{
+			MessageBody: "hello from fdb test",
+			QueueUrl:    "http://localhost:8080/queues/" + queueName,
+		}
+
+		resp, err := store.SendMessage(ctx, queueName, msgRequest)
+		assert.NoError(t, err)
+		require.NotNil(t, resp)
+
+		assert.NotEmpty(t, resp.MessageId)
+		assert.Equal(t, "880265a6e6fa189b855dc792ed428f2c", resp.MD5OfMessageBody) // md5 of "hello from fdb test"
+		assert.Nil(t, resp.MD5OfMessageAttributes)
+		assert.Nil(t, resp.SequenceNumber)
+
+		// Verify message is in the database
+		_, err = store.db.ReadTransact(func(rtr fdb.ReadTransaction) (interface{}, error) {
+			queueDir, _ := directory.Open(rtr, []string{"concreteq", queueName}, nil)
+			messagesDir := queueDir.Sub("messages")
+			msgBytes, err := rtr.Get(messagesDir.Pack(tuple.Tuple{resp.MessageId})).Get()
+			require.NoError(t, err)
+			require.NotEmpty(t, msgBytes)
+
+			var storedMsg models.Message
+			err = json.Unmarshal(msgBytes, &storedMsg)
+			require.NoError(t, err)
+			assert.Equal(t, msgRequest.MessageBody, storedMsg.Body)
+			return nil, nil
+		})
+		require.NoError(t, err)
+	})
+
+	t.Run("sends a message with attributes and verifies hash", func(t *testing.T) {
+		stringValue := "my_attribute_value_1"
+		msgRequest := &models.SendMessageRequest{
+			MessageBody: "message with attributes",
+			QueueUrl:    "http://localhost:8080/queues/" + queueName,
+			MessageAttributes: map[string]models.MessageAttributeValue{
+				"my_attribute_name_1": {
+					DataType:    "String",
+					StringValue: &stringValue,
+				},
+			},
+		}
+
+		resp, err := store.SendMessage(ctx, queueName, msgRequest)
+		assert.NoError(t, err)
+		require.NotNil(t, resp)
+		assert.NotEmpty(t, resp.MessageId)
+		// This hash is pre-calculated based on the SQS specification for a single attribute.
+		assert.Equal(t, "8ef4d60dbc8efda9f260e1dfd09d29f3", *resp.MD5OfMessageAttributes)
+	})
+
+	t.Run("sends a message with delay", func(t *testing.T) {
+		delaySeconds := int32(10)
+		msgRequest := &models.SendMessageRequest{
+			MessageBody:  "delayed message",
+			DelaySeconds: &delaySeconds,
+			QueueUrl:     "http://localhost:8080/queues/" + queueName,
+		}
+
+		startTime := time.Now().Unix()
+		resp, err := store.SendMessage(ctx, queueName, msgRequest)
+		assert.NoError(t, err)
+		require.NotNil(t, resp)
+
+		// Verify message is in the database and VisibleAfter is set correctly
+		_, err = store.db.ReadTransact(func(rtr fdb.ReadTransaction) (interface{}, error) {
+			queueDir, _ := directory.Open(rtr, []string{"concreteq", queueName}, nil)
+			messagesDir := queueDir.Sub("messages")
+			msgBytes, err := rtr.Get(messagesDir.Pack(tuple.Tuple{resp.MessageId})).Get()
+			require.NoError(t, err)
+			var storedMsg models.Message
+			err = json.Unmarshal(msgBytes, &storedMsg)
+			require.NoError(t, err)
+			assert.InDelta(t, startTime+10, storedMsg.VisibleAfter, 1)
+			return nil, nil
+		})
+		require.NoError(t, err)
+	})
+
+	t.Run("sends a message to a fifo queue and checks deduplication", func(t *testing.T) {
+		fifoQueueName := "test-send-fifo-queue.fifo"
+		err := store.CreateQueue(ctx, fifoQueueName, map[string]string{"FifoQueue": "true"}, nil)
+		require.NoError(t, err)
+
+		dedupID := "dedup-id-123"
+		gID := "group1"
+		msgRequest := &models.SendMessageRequest{
+			MessageBody:            "hello fifo",
+			MessageGroupId:         &gID,
+			MessageDeduplicationId: &dedupID,
+			QueueUrl:               "http://localhost:8080/queues/" + fifoQueueName,
+		}
+
+		// First send
+		resp1, err := store.SendMessage(ctx, fifoQueueName, msgRequest)
+		assert.NoError(t, err)
+		require.NotNil(t, resp1)
+		assert.NotEmpty(t, resp1.MessageId)
+		assert.NotEmpty(t, resp1.SequenceNumber)
+
+		// Second send with same dedup ID should succeed but be deduplicated
+		resp2, err := store.SendMessage(ctx, fifoQueueName, msgRequest)
+		assert.NoError(t, err)
+		require.NotNil(t, resp2)
+		assert.Equal(t, resp1.MessageId, resp2.MessageId)
+		assert.Equal(t, "deduplicated", resp2.MD5OfMessageBody)
+	})
+
+	t.Run("returns error if queue does not exist", func(t *testing.T) {
+		msgRequest := &models.SendMessageRequest{
+			MessageBody: "hello",
+		}
+		_, err := store.SendMessage(ctx, "non-existent-queue", msgRequest)
+		assert.ErrorIs(t, err, ErrQueueDoesNotExist)
 	})
 }

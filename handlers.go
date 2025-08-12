@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"path"
 	"regexp"
 	"strconv"
 	"strings"
@@ -22,17 +23,16 @@ type App struct {
 
 // RegisterSQSHandlers registers all SQS API handlers with the given Chi router.
 func (app *App) RegisterSQSHandlers(r *chi.Mux) {
-	// Queue Management
-	r.Post("/queues", app.CreateQueueHandler)
-	r.Delete("/queues/{queueName}", app.DeleteQueueHandler)
-	r.Get("/queues", app.ListQueuesHandler)
-	r.Get("/queues/{queueName}/attributes", app.GetQueueAttributesHandler)
-	r.Put("/queues/{queueName}/attributes", app.SetQueueAttributesHandler)
-	r.Get("/queues/url/{queueName}", app.GetQueueUrlHandler)
-	r.Post("/queues/{queueName}/purge", app.PurgeQueueHandler)
+	// Root handler for RPC-style requests
+	r.Post("/", app.RootSQSHandler)
+
+	// Legacy REST-ful routes that can be phased out
+	// r.Post("/queues", app.CreateQueueHandler)
+	// r.Delete("/queues/{queueName}", app.DeleteQueueHandler)
+	// r.Get("/queues", app.ListQueuesHandler)
+	// r.Post("/queues/{queueName}/purge", app.PurgeQueueHandler)
 
 	// Message Management
-	r.Post("/queues/{queueName}/messages", app.SendMessageHandler)
 	r.Post("/queues/{queueName}/messages/batch", app.SendMessageBatchHandler)
 	r.Get("/queues/{queueName}/messages", app.ReceiveMessageHandler)
 	r.Delete("/queues/{queueName}/messages/{receiptHandle}", app.DeleteMessageHandler)
@@ -57,6 +57,34 @@ func (app *App) RegisterSQSHandlers(r *chi.Mux) {
 	r.Post("/message-move-tasks/{taskHandle}/cancel", app.CancelMessageMoveTaskHandler)
 	r.Get("/message-move-tasks", app.ListMessageMoveTasksHandler)
 }
+
+// RootSQSHandler acts as a dispatcher for RPC-style SQS requests.
+func (app *App) RootSQSHandler(w http.ResponseWriter, r *http.Request) {
+	target := r.Header.Get("X-Amz-Target")
+
+	parts := strings.Split(target, ".")
+	if len(parts) != 2 || parts[0] != "AmazonSQS" {
+		http.Error(w, "Invalid X-Amz-Target header", http.StatusBadRequest)
+		return
+	}
+	action := parts[1]
+
+	switch action {
+	case "SendMessage":
+		app.SendMessageHandler(w, r)
+	case "CreateQueue":
+		app.CreateQueueHandler(w, r)
+	case "DeleteQueue":
+		app.DeleteQueueHandler(w, r)
+	case "ListQueues":
+		app.ListQueuesHandler(w, r)
+	case "PurgeQueue":
+		app.PurgeQueueHandler(w, r)
+	default:
+		http.Error(w, "Unsupported operation: "+action, http.StatusBadRequest)
+	}
+}
+
 
 // SQS queue name validation regex.
 // A queue name can have up to 80 characters.
@@ -206,7 +234,16 @@ func (app *App) CreateQueueHandler(w http.ResponseWriter, r *http.Request) {
 
 // DeleteQueueHandler handles requests to delete a queue.
 func (app *App) DeleteQueueHandler(w http.ResponseWriter, r *http.Request) {
-	queueName := chi.URLParam(r, "queueName")
+	var req models.DeleteQueueRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.QueueUrl == "" {
+		http.Error(w, "MissingParameter: The request must contain a QueueUrl.", http.StatusBadRequest)
+		return
+	}
+	queueName := path.Base(req.QueueUrl)
 
 	err := app.Store.DeleteQueue(r.Context(), queueName)
 	if err != nil {
@@ -222,23 +259,13 @@ func (app *App) DeleteQueueHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 func (app *App) ListQueuesHandler(w http.ResponseWriter, r *http.Request) {
-	// Parse parameters from query string
-	maxResultsStr := r.URL.Query().Get("MaxResults")
-	var maxResults int
-	var err error
-	if maxResultsStr != "" {
-		maxResults, err = strconv.Atoi(maxResultsStr)
-		if err != nil || maxResults < 1 || maxResults > 1000 {
-			http.Error(w, "Invalid MaxResults value. It must be an integer between 1 and 1000.", http.StatusBadRequest)
-			return
-		}
+	var req models.ListQueuesRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		// SQS allows this to be a GET or POST, so an empty body is fine.
 	}
 
-	nextToken := r.URL.Query().Get("NextToken")
-	queueNamePrefix := r.URL.Query().Get("QueueNamePrefix")
-
 	// Call store to get queue names
-	queueNames, newNextToken, err := app.Store.ListQueues(r.Context(), maxResults, nextToken, queueNamePrefix)
+	queueNames, newNextToken, err := app.Store.ListQueues(r.Context(), req.MaxResults, req.NextToken, req.QueueNamePrefix)
 	if err != nil {
 		http.Error(w, "Failed to list queues", http.StatusInternalServerError)
 		return
@@ -246,7 +273,7 @@ func (app *App) ListQueuesHandler(w http.ResponseWriter, r *http.Request) {
 
 	// If MaxResults was not specified, limit to 1000 results.
 	// The store doesn't return a next token in this case, which is correct.
-	if maxResults == 0 && len(queueNames) > 1000 {
+	if req.MaxResults == 0 && len(queueNames) > 1000 {
 		queueNames = queueNames[:1000]
 	}
 
@@ -275,7 +302,16 @@ func (app *App) GetQueueUrlHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 func (app *App) PurgeQueueHandler(w http.ResponseWriter, r *http.Request) {
-	queueName := chi.URLParam(r, "queueName")
+	var req models.PurgeQueueRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.QueueUrl == "" {
+		http.Error(w, "MissingParameter: The request must contain a QueueUrl.", http.StatusBadRequest)
+		return
+	}
+	queueName := path.Base(req.QueueUrl)
 
 	err := app.Store.PurgeQueue(r.Context(), queueName)
 	if err != nil {
@@ -293,8 +329,130 @@ func (app *App) PurgeQueueHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(http.StatusOK)
 }
+
+// isValidSqsChars checks if a string contains only valid SQS characters.
+// Alphanumeric characters, and !"#$%&'()*+,-./:;<=>?@[\]^_`{|}~
+func isValidSqsChars(s string) bool {
+	for _, r := range s {
+		isAlphanumeric := (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9')
+		isPunctuation := strings.ContainsRune("!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~", r)
+		if !isAlphanumeric && !isPunctuation {
+			return false
+		}
+	}
+	return true
+}
+
 func (app *App) SendMessageHandler(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(http.StatusNotImplemented)
+	var req models.SendMessageRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	// --- Comprehensive Validation ---
+
+	// QueueUrl
+	if req.QueueUrl == "" {
+		http.Error(w, "MissingParameter: The request must contain a QueueUrl.", http.StatusBadRequest)
+		return
+	}
+	queueName := path.Base(req.QueueUrl)
+
+	// MessageBody
+	if len(req.MessageBody) < 1 || len(req.MessageBody) > 256*1024 { // 1 char to 256 KiB
+		http.Error(w, "InvalidParameterValue: The message body must be between 1 and 262144 bytes long.", http.StatusBadRequest)
+		return
+	}
+
+	// DelaySeconds
+	if req.DelaySeconds != nil {
+		if *req.DelaySeconds < 0 || *req.DelaySeconds > 900 {
+			http.Error(w, "InvalidParameterValue: Value for parameter DelaySeconds is invalid. Reason: Must be an integer from 0 to 900.", http.StatusBadRequest)
+			return
+		}
+		if strings.HasSuffix(queueName, ".fifo") {
+			http.Error(w, "InvalidParameterValue: The request include parameter that is not valid for this queue type. Reason: DelaySeconds is not supported for FIFO queues.", http.StatusBadRequest)
+			return
+		}
+	}
+
+	isFifo := strings.HasSuffix(queueName, ".fifo")
+
+	// MessageDeduplicationId
+	if req.MessageDeduplicationId != nil {
+		if !isFifo {
+			http.Error(w, "InvalidParameterValue: MessageDeduplicationId is supported only for FIFO queues.", http.StatusBadRequest)
+			return
+		}
+		if len(*req.MessageDeduplicationId) > 128 {
+			http.Error(w, "InvalidParameterValue: MessageDeduplicationId can be up to 128 characters long.", http.StatusBadRequest)
+			return
+		}
+		if !isValidSqsChars(*req.MessageDeduplicationId) {
+			http.Error(w, "InvalidParameterValue: MessageDeduplicationId can only contain alphanumeric characters and punctuation.", http.StatusBadRequest)
+			return
+		}
+	}
+
+	// MessageGroupId
+	if req.MessageGroupId != nil {
+		if len(*req.MessageGroupId) > 128 {
+			http.Error(w, "InvalidParameterValue: MessageGroupId can be up to 128 characters long.", http.StatusBadRequest)
+			return
+		}
+		if !isValidSqsChars(*req.MessageGroupId) {
+			http.Error(w, "InvalidParameterValue: MessageGroupId can only contain alphanumeric characters and punctuation.", http.StatusBadRequest)
+			return
+		}
+	}
+	if isFifo && req.MessageGroupId == nil {
+		http.Error(w, "MissingParameter: The request must contain a MessageGroupId.", http.StatusBadRequest)
+		return
+	}
+
+	// MessageAttributes
+	if len(req.MessageAttributes) > 10 {
+		http.Error(w, "InvalidParameterValue: Number of message attributes cannot exceed 10.", http.StatusBadRequest)
+		return
+	}
+	for name, attr := range req.MessageAttributes {
+		if len(name) == 0 {
+			http.Error(w, "InvalidParameterValue: Message attribute name cannot be empty.", http.StatusBadRequest)
+			return
+		}
+		if attr.DataType == "" {
+			http.Error(w, "InvalidParameterValue: DataType of message attribute '"+name+"' is required.", http.StatusBadRequest)
+			return
+		}
+	}
+
+	// MessageSystemAttributes
+	for name, attr := range req.MessageSystemAttributes {
+		if name != "AWSTraceHeader" {
+			http.Error(w, "InvalidParameterValue: '"+name+"' is not a valid message system attribute.", http.StatusBadRequest)
+			return
+		}
+		if attr.DataType != "String" {
+			http.Error(w, "InvalidParameterValue: DataType of AWSTraceHeader must be String.", http.StatusBadRequest)
+			return
+		}
+	}
+
+
+	// Call the store to send the message
+	resp, err := app.Store.SendMessage(r.Context(), queueName, &req)
+	if err != nil {
+		if errors.Is(err, store.ErrQueueDoesNotExist) {
+			http.Error(w, "QueueDoesNotExist: The specified queue does not exist.", http.StatusBadRequest)
+			return
+		}
+		http.Error(w, "Failed to send message", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
 }
 func (app *App) SendMessageBatchHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNotImplemented)
