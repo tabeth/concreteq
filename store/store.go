@@ -3,6 +3,8 @@ package store
 import (
 	"context"
 	"errors"
+
+	"github.com/tabeth/concreteq/models"
 )
 
 var (
@@ -27,7 +29,7 @@ type Store interface {
 	PurgeQueue(ctx context.Context, name string) error
 
 	// Message Management
-	SendMessage(ctx context.Context, queueName string, messageBody string) (string, error)
+	SendMessage(ctx context.Context, queueName string, message *models.SendMessageRequest) (*models.SendMessageResponse, error)
 	SendMessageBatch(ctx context.Context, queueName string, messages []string) ([]string, error)
 	ReceiveMessage(ctx context.Context, queueName string) (string, string, error) // returns message, receiptHandle, error
 	DeleteMessage(ctx context.Context, queueName string, receiptHandle string) error

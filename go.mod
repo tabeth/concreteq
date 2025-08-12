@@ -6,6 +6,8 @@ require github.com/go-chi/chi/v5 v5.2.2
 
 require github.com/stretchr/testify v1.10.0
 
+require github.com/google/uuid v1.6.0 // indirect
+
 require (
 	github.com/apple/foundationdb/bindings/go v0.0.0-20250501205732-f0ed69ea389a
 	github.com/davecgh/go-spew v1.1.1 // indirect
