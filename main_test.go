@@ -419,6 +419,7 @@ func TestIntegration_ListDeletePurgeQueues(t *testing.T) {
 	})
 }
 
+
 func TestIntegration_Messaging(t *testing.T) {
 	app, teardown := setupIntegrationTest(t)
 	defer teardown()
@@ -434,7 +435,7 @@ func TestIntegration_Messaging(t *testing.T) {
 	require.NoError(t, err)
 
 	t.Run("SendAndReceiveStandard", func(t *testing.T) {
-		sentMessageBody := "hello world"
+		sentMessageBody := "world hello"
 		sendReq := models.SendMessageRequest{
 			QueueUrl:    fmt.Sprintf("%s/queues/%s", app.baseURL, stdQueueName),
 			MessageBody: sentMessageBody,
@@ -455,7 +456,7 @@ func TestIntegration_Messaging(t *testing.T) {
 		err = json.NewDecoder(resp.Body).Decode(&sendResp)
 		require.NoError(t, err)
 		assert.NotEmpty(t, sendResp.MessageId)
-		assert.Equal(t, "5d41402abc4b2a76b9719d911017c592", sendResp.MD5OfMessageBody) // md5 of "hello world"
+		assert.Equal(t, "68977900b9032a2b4cd7ed2b79ec51a8", sendResp.MD5OfMessageBody) // md5 of "world hello"
 
 		// Now, receive the message
 		recBody := fmt.Sprintf(`{"QueueUrl": "%s/queues/%s", "MaxNumberOfMessages": 1}`, app.baseURL, stdQueueName)
@@ -500,31 +501,52 @@ func TestIntegration_Messaging(t *testing.T) {
 
 	t.Run("ReceiveMessageLogic", func(t *testing.T) {
 		t.Run("Visibility Timeout", func(t *testing.T) {
+			// visibility test message
 			sendResp, err := app.store.SendMessage(ctx, stdQueueName, &models.SendMessageRequest{MessageBody: "visibility test"})
 			require.NoError(t, err)
 
-			recBody := fmt.Sprintf(`{"QueueUrl": "%s/queues/%s", "VisibilityTimeout": 1}`, app.baseURL, stdQueueName)
-			req, _ := http.NewRequest("POST", app.baseURL+"/", bytes.NewBufferString(recBody))
-			req.Header.Set("X-Amz-Target", "AmazonSQS.ReceiveMessage")
-			resp, err := http.DefaultClient.Do(req)
+			// First receive
+			recBody1 := fmt.Sprintf(`{"QueueUrl": "%s/queues/%s", "VisibilityTimeout": 1}`, app.baseURL, stdQueueName)
+			req1, _ := http.NewRequest("POST", app.baseURL+"/", bytes.NewBufferString(recBody1))
+			req1.Header.Set("X-Amz-Target", "AmazonSQS.ReceiveMessage")
+			resp1, err := http.DefaultClient.Do(req1)
 			require.NoError(t, err)
-			defer resp.Body.Close()
-			assert.Equal(t, http.StatusOK, resp.StatusCode)
+			defer resp1.Body.Close()
+			assert.Equal(t, http.StatusOK, resp1.StatusCode)
+			var recResp1 models.ReceiveMessageResponse
+			err = json.NewDecoder(resp1.Body).Decode(&recResp1)
+			require.NoError(t, err)
+			require.Len(t, recResp1.Messages, 1)
+			assert.Equal(t, sendResp.MessageId, recResp1.Messages[0].MessageId)
 
-			time.Sleep(1100 * time.Millisecond)
-
-			req2, _ := http.NewRequest("POST", app.baseURL+"/", bytes.NewBufferString(recBody))
+			// Try to receive again immediately, should get nothing
+			recBody2 := fmt.Sprintf(`{"QueueUrl": "%s/queues/%s", "MaxNumberOfMessages": 1}`, app.baseURL, stdQueueName)
+			req2, _ := http.NewRequest("POST", app.baseURL+"/", bytes.NewBufferString(recBody2))
 			req2.Header.Set("X-Amz-Target", "AmazonSQS.ReceiveMessage")
 			resp2, err := http.DefaultClient.Do(req2)
 			require.NoError(t, err)
 			defer resp2.Body.Close()
 			assert.Equal(t, http.StatusOK, resp2.StatusCode)
-
 			var recResp2 models.ReceiveMessageResponse
 			err = json.NewDecoder(resp2.Body).Decode(&recResp2)
 			require.NoError(t, err)
-			require.Len(t, recResp2.Messages, 1)
-			assert.Equal(t, sendResp.MessageId, recResp2.Messages[0].MessageId)
+			assert.Len(t, recResp2.Messages, 0, "should not receive message during visibility timeout")
+
+			// Wait for visibility timeout to expire
+			time.Sleep(1100 * time.Millisecond)
+
+			// Try to receive again, should get the message
+			req3, _ := http.NewRequest("POST", app.baseURL+"/", bytes.NewBufferString(recBody2)) // Can reuse recBody2
+			req3.Header.Set("X-Amz-Target", "AmazonSQS.ReceiveMessage")
+			resp3, err := http.DefaultClient.Do(req3)
+			require.NoError(t, err)
+			defer resp3.Body.Close()
+			assert.Equal(t, http.StatusOK, resp3.StatusCode)
+			var recResp3 models.ReceiveMessageResponse
+			err = json.NewDecoder(resp3.Body).Decode(&recResp3)
+			require.NoError(t, err)
+			require.Len(t, recResp3.Messages, 1, "should receive message after visibility timeout")
+			assert.Equal(t, sendResp.MessageId, recResp3.Messages[0].MessageId)
 		})
 	})
 }
