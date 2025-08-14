@@ -75,6 +75,11 @@ type Message struct {
 	VisibleAfter       int64
 	ReceivedCount      int
 	FirstReceived      int64
+	// New fields for FIFO and system attributes
+	SenderId       string `json:"SenderId,omitempty"`
+	SentTimestamp  int64  `json:"SentTimestamp,omitempty"`
+	MessageGroupId string `json:"MessageGroupId,omitempty"`
+	SequenceNumber int64  `json:"SequenceNumber,omitempty"`
 }
 
 // DeleteQueueRequest defines the parameters for deleting a queue.
@@ -85,4 +90,38 @@ type DeleteQueueRequest struct {
 // PurgeQueueRequest defines the parameters for purging a queue.
 type PurgeQueueRequest struct {
 	QueueUrl string `json:"QueueUrl"`
+}
+
+// ReceiveMessageRequest defines the parameters for receiving messages from a queue.
+type ReceiveMessageRequest struct {
+	AttributeNames            []string `json:"AttributeNames"`
+	MaxNumberOfMessages       int      `json:"MaxNumberOfMessages"`
+	MessageAttributeNames     []string `json:"MessageAttributeNames"`
+	MessageSystemAttributeNames []string `json:"MessageSystemAttributeNames"`
+	QueueUrl                  string   `json:"QueueUrl"`
+	ReceiveRequestAttemptId   string   `json:"ReceiveRequestAttemptId"`
+	VisibilityTimeout         int      `json:"VisibilityTimeout"`
+	WaitTimeSeconds           int      `json:"WaitTimeSeconds"`
+}
+
+// ReceiveMessageResponse defines the structure for the receive message response.
+type ReceiveMessageResponse struct {
+	Messages []ResponseMessage `json:"Messages"`
+}
+
+// ResponseMessage represents a single message returned by ReceiveMessage.
+type ResponseMessage struct {
+	Attributes             map[string]string         `json:"Attributes"`
+	Body                   string                    `json:"Body"`
+	MD5OfBody              string                    `json:"MD5OfBody"`
+	MD5OfMessageAttributes *string                   `json:"MD5OfMessageAttributes,omitempty"`
+	MessageAttributes      map[string]MessageAttributeValue `json:"MessageAttributes,omitempty"`
+	MessageId              string                    `json:"MessageId"`
+	ReceiptHandle          string                    `json:"ReceiptHandle"`
+}
+
+// ErrorResponse defines the standard AWS JSON error response format.
+type ErrorResponse struct {
+	Type    string `json:"__type"`
+	Message string `json:"message"`
 }
