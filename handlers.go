@@ -232,9 +232,12 @@ func (app *App) CreateQueueHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Construct the queue URL
-	// In a real application, this would be based on the request's host and scheme.
-	queueURL := fmt.Sprintf("http://localhost:8080/queues/%s", req.QueueName)
+	// Construct the queue URL dynamically from the request host.
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	queueURL := fmt.Sprintf("%s://%s/queues/%s", scheme, r.Host, req.QueueName)
 
 	resp := models.CreateQueueResponse{
 		QueueURL: queueURL,
@@ -290,9 +293,13 @@ func (app *App) ListQueuesHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Construct full queue URLs
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
 	queueURLs := make([]string, len(queueNames))
 	for i, name := range queueNames {
-		queueURLs[i] = fmt.Sprintf("http://localhost:8080/queues/%s", name)
+		queueURLs[i] = fmt.Sprintf("%s://%s/queues/%s", scheme, r.Host, name)
 	}
 
 	// Create response

@@ -132,6 +132,7 @@ func TestCreateQueueHandler(t *testing.T) {
 			app.RegisterSQSHandlers(r)
 
 			req, _ := http.NewRequest("POST", "/", bytes.NewBufferString(tc.inputBody))
+			req.Host = "localhost:8080"
 			req.Header.Set("X-Amz-Target", "AmazonSQS.CreateQueue")
 			rr := httptest.NewRecorder()
 
@@ -426,6 +427,7 @@ func TestListQueuesHandler(t *testing.T) {
 			app.RegisterSQSHandlers(r)
 
 			req, _ := http.NewRequest("POST", "/", bytes.NewBufferString(tc.inputBody))
+			req.Host = "localhost:8080"
 			req.Header.Set("X-Amz-Target", "AmazonSQS.ListQueues")
 			rr := httptest.NewRecorder()
 
