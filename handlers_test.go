@@ -14,6 +14,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 )
 
 // MockStore is a mock implementation of the Store interface for testing.
@@ -59,8 +60,12 @@ func (m *MockStore) SendMessage(ctx context.Context, queueName string, message *
 func (m *MockStore) SendMessageBatch(ctx context.Context, queueName string, messages []string) ([]string, error) {
 	return nil, nil
 }
-func (m *MockStore) ReceiveMessage(ctx context.Context, queueName string) (string, string, error) {
-	return "", "", nil
+func (m *MockStore) ReceiveMessage(ctx context.Context, queueName string, req *models.ReceiveMessageRequest) (*models.ReceiveMessageResponse, error) {
+	args := m.Called(ctx, queueName, req)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*models.ReceiveMessageResponse), args.Error(1)
 }
 func (m *MockStore) DeleteMessage(ctx context.Context, queueName string, receiptHandle string) error {
 	return nil
@@ -135,15 +140,131 @@ func TestCreateQueueHandler(t *testing.T) {
 			assert.Equal(t, tc.expectedStatusCode, rr.Code)
 
 			if tc.expectedBody != "" {
-				if strings.HasPrefix(tc.expectedBody, "{") {
-					var expectedResp, actualResp models.CreateQueueResponse
-					err := json.Unmarshal([]byte(tc.expectedBody), &expectedResp)
-					assert.NoError(t, err)
-					err = json.Unmarshal(rr.Body.Bytes(), &actualResp)
-					assert.NoError(t, err)
-					assert.Equal(t, expectedResp, actualResp)
-				} else {
-					assert.Equal(t, tc.expectedBody, strings.TrimSpace(rr.Body.String()))
+				if strings.HasPrefix(tc.expectedBody, "{") { // It's a JSON response
+					// For successful responses, we check the whole body
+					if rr.Code < 300 {
+						assert.JSONEq(t, tc.expectedBody, rr.Body.String())
+					} else {
+						// For error responses, we check the type and message
+						var errResp models.ErrorResponse
+						err := json.Unmarshal(rr.Body.Bytes(), &errResp)
+						require.NoError(t, err, "failed to unmarshal error response")
+
+						var expectedErrResp models.ErrorResponse
+						err = json.Unmarshal([]byte(tc.expectedBody), &expectedErrResp)
+						require.NoError(t, err, "failed to unmarshal expected error response")
+
+						assert.Equal(t, expectedErrResp, errResp)
+					}
+				} else { // It's a plain text error message from our old http.Error calls, which we should not have
+					assert.Fail(t, "Received unexpected plain text error response", "Response body: %s", rr.Body.String())
+				}
+			}
+
+			mockStore.AssertExpectations(t)
+		})
+	}
+}
+
+func TestReceiveMessageHandler(t *testing.T) {
+	tests := []struct {
+		name               string
+		inputBody          string
+		mockSetup          func(*MockStore)
+		expectedStatusCode int
+		expectedBody       string
+	}{
+		{
+			name:      "Successful Receive",
+			inputBody: `{"QueueUrl": "http://localhost:8080/queues/my-queue", "MaxNumberOfMessages": 2}`,
+			mockSetup: func(ms *MockStore) {
+				ms.On("ReceiveMessage", mock.Anything, "my-queue", mock.AnythingOfType("*models.ReceiveMessageRequest")).Return(&models.ReceiveMessageResponse{
+					Messages: []models.ResponseMessage{
+						{
+							MessageId:     "uuid1",
+							ReceiptHandle: "receipt1",
+							Body:          "hello",
+							MD5OfBody:     "md5-hello",
+						},
+					},
+				}, nil)
+			},
+			expectedStatusCode: http.StatusOK,
+			expectedBody:       `{"Messages":[{"Attributes":null,"Body":"hello","MD5OfBody":"md5-hello","MessageId":"uuid1","ReceiptHandle":"receipt1"}]}`,
+		},
+		{
+			name:               "Invalid MaxNumberOfMessages",
+			inputBody:          `{"QueueUrl": "http://localhost:8080/queues/my-queue", "MaxNumberOfMessages": 11}`,
+			mockSetup:          func(ms *MockStore) {},
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       `{"__type":"InvalidParameterValue", "message":"Value for parameter MaxNumberOfMessages is invalid. Reason: Must be an integer from 1 to 10."}`,
+		},
+		{
+			name:               "Invalid VisibilityTimeout",
+			inputBody:          `{"QueueUrl": "http://localhost:8080/queues/my-queue", "VisibilityTimeout": 99999}`,
+			mockSetup:          func(ms *MockStore) {},
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       `{"__type":"InvalidParameterValue", "message":"Value for parameter VisibilityTimeout is invalid. Reason: Must be an integer from 0 to 43200."}`,
+		},
+		{
+			name:               "Invalid ReceiveRequestAttemptId",
+			inputBody:          `{"QueueUrl": "http://localhost:8080/queues/my-queue", "ReceiveRequestAttemptId": "toolong` + strings.Repeat("a", 128) + `"}`,
+			mockSetup:          func(ms *MockStore) {},
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       `{"__type":"InvalidParameterValue", "message":"ReceiveRequestAttemptId can be up to 128 characters long."}`,
+		},
+		{
+			name:               "Invalid System Attribute Name",
+			inputBody:          `{"QueueUrl": "http://localhost:8080/queues/my-queue", "MessageSystemAttributeNames": ["InvalidName"]}`,
+			mockSetup:          func(ms *MockStore) {},
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       `{"__type":"InvalidAttributeName", "message":"The attribute 'InvalidName' is not supported."}`,
+		},
+		{
+			name:               "Invalid Custom Attribute Name",
+			inputBody:          `{"QueueUrl": "http://localhost:8080/queues/my-queue", "MessageAttributeNames": ["AWS.Invalid"]}`,
+			mockSetup:          func(ms *MockStore) {},
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       `{"__type":"InvalidAttributeName", "message":"The attribute name 'AWS.Invalid' is invalid."}`,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mockStore := new(MockStore)
+			tc.mockSetup(mockStore)
+
+			app := &App{Store: mockStore}
+			r := chi.NewRouter()
+			app.RegisterSQSHandlers(r)
+
+			req, _ := http.NewRequest("POST", "/", bytes.NewBufferString(tc.inputBody))
+			req.Header.Set("X-Amz-Target", "AmazonSQS.ReceiveMessage")
+			rr := httptest.NewRecorder()
+
+			r.ServeHTTP(rr, req)
+
+			assert.Equal(t, tc.expectedStatusCode, rr.Code)
+
+			if tc.expectedBody != "" {
+				if strings.HasPrefix(tc.expectedBody, "{") { // It's a JSON response
+					// For successful responses, we check the whole body
+					if rr.Code < 300 {
+						assert.JSONEq(t, tc.expectedBody, rr.Body.String())
+					} else {
+						// For error responses, we check the type and message
+						var errResp models.ErrorResponse
+						err := json.Unmarshal(rr.Body.Bytes(), &errResp)
+						require.NoError(t, err, "failed to unmarshal error response")
+
+						var expectedErrResp models.ErrorResponse
+						err = json.Unmarshal([]byte(tc.expectedBody), &expectedErrResp)
+						require.NoError(t, err, "failed to unmarshal expected error response")
+
+						assert.Equal(t, expectedErrResp, errResp)
+					}
+				} else { // It's a plain text error message from our old http.Error calls, which we should not have
+					assert.Fail(t, "Received unexpected plain text error response", "Response body: %s", rr.Body.String())
 				}
 			}
 
@@ -188,7 +309,25 @@ func TestPurgeQueueHandler(t *testing.T) {
 
 			assert.Equal(t, tc.expectedStatusCode, rr.Code)
 			if tc.expectedBody != "" {
-				assert.Equal(t, tc.expectedBody, strings.TrimSpace(rr.Body.String()))
+				if strings.HasPrefix(tc.expectedBody, "{") { // It's a JSON response
+					// For successful responses, we check the whole body
+					if rr.Code < 300 {
+						assert.JSONEq(t, tc.expectedBody, rr.Body.String())
+					} else {
+						// For error responses, we check the type and message
+						var errResp models.ErrorResponse
+						err := json.Unmarshal(rr.Body.Bytes(), &errResp)
+						require.NoError(t, err, "failed to unmarshal error response")
+
+						var expectedErrResp models.ErrorResponse
+						err = json.Unmarshal([]byte(tc.expectedBody), &expectedErrResp)
+						require.NoError(t, err, "failed to unmarshal expected error response")
+
+						assert.Equal(t, expectedErrResp, errResp)
+					}
+				} else { // It's a plain text error message from our old http.Error calls, which we should not have
+					assert.Fail(t, "Received unexpected plain text error response", "Response body: %s", rr.Body.String())
+				}
 			}
 
 			mockStore.AssertExpectations(t)
@@ -232,7 +371,25 @@ func TestDeleteQueueHandler(t *testing.T) {
 
 			assert.Equal(t, tc.expectedStatusCode, rr.Code)
 			if tc.expectedBody != "" {
-				assert.Equal(t, tc.expectedBody, strings.TrimSpace(rr.Body.String()))
+				if strings.HasPrefix(tc.expectedBody, "{") { // It's a JSON response
+					// For successful responses, we check the whole body
+					if rr.Code < 300 {
+						assert.JSONEq(t, tc.expectedBody, rr.Body.String())
+					} else {
+						// For error responses, we check the type and message
+						var errResp models.ErrorResponse
+						err := json.Unmarshal(rr.Body.Bytes(), &errResp)
+						require.NoError(t, err, "failed to unmarshal error response")
+
+						var expectedErrResp models.ErrorResponse
+						err = json.Unmarshal([]byte(tc.expectedBody), &expectedErrResp)
+						require.NoError(t, err, "failed to unmarshal expected error response")
+
+						assert.Equal(t, expectedErrResp, errResp)
+					}
+				} else { // It's a plain text error message from our old http.Error calls, which we should not have
+					assert.Fail(t, "Received unexpected plain text error response", "Response body: %s", rr.Body.String())
+				}
 			}
 
 			mockStore.AssertExpectations(t)
@@ -277,16 +434,24 @@ func TestListQueuesHandler(t *testing.T) {
 			assert.Equal(t, tc.expectedStatusCode, rr.Code)
 
 			if tc.expectedBody != "" {
-				if strings.HasPrefix(tc.expectedBody, "{") {
-					var expectedResp, actualResp models.ListQueuesResponse
-					err := json.Unmarshal([]byte(tc.expectedBody), &expectedResp)
-					assert.NoError(t, err)
+				if strings.HasPrefix(tc.expectedBody, "{") { // It's a JSON response
+					// For successful responses, we check the whole body
+					if rr.Code < 300 {
+						assert.JSONEq(t, tc.expectedBody, rr.Body.String())
+					} else {
+						// For error responses, we check the type and message
+						var errResp models.ErrorResponse
+						err := json.Unmarshal(rr.Body.Bytes(), &errResp)
+						require.NoError(t, err, "failed to unmarshal error response")
 
-					err = json.Unmarshal(rr.Body.Bytes(), &actualResp)
-					assert.NoError(t, err)
-					assert.Equal(t, expectedResp, actualResp)
-				} else {
-					assert.Equal(t, tc.expectedBody, strings.TrimSpace(rr.Body.String()))
+						var expectedErrResp models.ErrorResponse
+						err = json.Unmarshal([]byte(tc.expectedBody), &expectedErrResp)
+						require.NoError(t, err, "failed to unmarshal expected error response")
+
+						assert.Equal(t, expectedErrResp, errResp)
+					}
+				} else { // It's a plain text error message from our old http.Error calls, which we should not have
+					assert.Fail(t, "Received unexpected plain text error response", "Response body: %s", rr.Body.String())
 				}
 			}
 
@@ -320,14 +485,14 @@ func TestSendMessageHandler(t *testing.T) {
 			inputBody:          `{"MessageBody": "hello"}`,
 			mockSetup:          func(ms *MockStore) {},
 			expectedStatusCode: http.StatusBadRequest,
-			expectedBody:       "MissingParameter: The request must contain a QueueUrl.",
+			expectedBody:       `{"__type":"MissingParameter", "message":"The request must contain a QueueUrl."}`,
 		},
 		{
 			name:               "Empty Message Body",
 			inputBody:          `{"MessageBody": "", "QueueUrl": "http://localhost:8080/queues/my-queue"}`,
 			mockSetup:          func(ms *MockStore) {},
 			expectedStatusCode: http.StatusBadRequest,
-			expectedBody:       "InvalidParameterValue: The message body must be between 1 and 262144 bytes long.",
+			expectedBody:       `{"__type":"InvalidParameterValue", "message":"The message body must be between 1 and 262144 bytes long."}`,
 		},
 		{
 			name:      "MessageGroupId with Standard Queue",
@@ -360,15 +525,24 @@ func TestSendMessageHandler(t *testing.T) {
 			assert.Equal(t, tc.expectedStatusCode, rr.Code)
 
 			if tc.expectedBody != "" {
-				if strings.HasPrefix(tc.expectedBody, "{") {
-					var expectedResp, actualResp models.SendMessageResponse
-					err := json.Unmarshal([]byte(tc.expectedBody), &expectedResp)
-					assert.NoError(t, err, "failed to unmarshal expected response")
-					err = json.Unmarshal(rr.Body.Bytes(), &actualResp)
-					assert.NoError(t, err, "failed to unmarshal actual response")
-					assert.Equal(t, expectedResp, actualResp)
-				} else {
-					assert.Equal(t, tc.expectedBody, strings.TrimSpace(rr.Body.String()))
+				if strings.HasPrefix(tc.expectedBody, "{") { // It's a JSON response
+					// For successful responses, we check the whole body
+					if rr.Code < 300 {
+						assert.JSONEq(t, tc.expectedBody, rr.Body.String())
+					} else {
+						// For error responses, we check the type and message
+						var errResp models.ErrorResponse
+						err := json.Unmarshal(rr.Body.Bytes(), &errResp)
+						require.NoError(t, err, "failed to unmarshal error response")
+
+						var expectedErrResp models.ErrorResponse
+						err = json.Unmarshal([]byte(tc.expectedBody), &expectedErrResp)
+						require.NoError(t, err, "failed to unmarshal expected error response")
+
+						assert.Equal(t, expectedErrResp, errResp)
+					}
+				} else { // It's a plain text error message from our old http.Error calls, which we should not have
+					assert.Fail(t, "Received unexpected plain text error response", "Response body: %s", rr.Body.String())
 				}
 			}
 

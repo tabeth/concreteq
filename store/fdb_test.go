@@ -254,6 +254,111 @@ func TestFDBStore_DeleteQueue(t *testing.T) {
 	})
 }
 
+func TestFDBStore_StandardQueue_ReceiveDelete(t *testing.T) {
+	ctx := context.Background()
+	store, teardown := setupTestDB(t)
+	defer teardown()
+
+	queueName := "test-std-queue"
+	err := store.CreateQueue(ctx, queueName, nil, nil)
+	require.NoError(t, err)
+
+	// Send one message
+	_, err = store.SendMessage(ctx, queueName, &models.SendMessageRequest{MessageBody: "msg1", QueueUrl: queueName})
+	require.NoError(t, err)
+
+	// 1. Receive the message
+	receiveReq := &models.ReceiveMessageRequest{MaxNumberOfMessages: 1, QueueUrl: queueName}
+	resp1, err := store.ReceiveMessage(ctx, queueName, receiveReq)
+	require.NoError(t, err)
+	require.Len(t, resp1.Messages, 1)
+	msg1 := resp1.Messages[0]
+
+	// 2. Try to receive again, should get nothing as it's in-flight
+	resp2, err := store.ReceiveMessage(ctx, queueName, receiveReq)
+	require.NoError(t, err)
+	assert.Len(t, resp2.Messages, 0)
+
+	// 3. Delete the message
+	err = store.DeleteMessage(ctx, queueName, msg1.ReceiptHandle)
+	require.NoError(t, err)
+
+	// 4. Try to receive again, should still get nothing as it's deleted
+	resp3, err := store.ReceiveMessage(ctx, queueName, receiveReq)
+	require.NoError(t, err)
+	assert.Len(t, resp3.Messages, 0)
+}
+
+func TestFDBStore_FifoQueue_ReceiveDelete(t *testing.T) {
+	ctx := context.Background()
+	store, teardown := setupTestDB(t)
+	defer teardown()
+
+	queueName := "test-fifo-queue.fifo"
+	err := store.CreateQueue(ctx, queueName, map[string]string{"FifoQueue": "true"}, nil)
+	require.NoError(t, err)
+
+	// Send messages to two different groups
+	g1 := "group1"
+	g2 := "group2"
+	_, err = store.SendMessage(ctx, queueName, &models.SendMessageRequest{MessageBody: "g1-msg1", QueueUrl: queueName, MessageGroupId: &g1})
+	require.NoError(t, err)
+	_, err = store.SendMessage(ctx, queueName, &models.SendMessageRequest{MessageBody: "g1-msg2", QueueUrl: queueName, MessageGroupId: &g1})
+	require.NoError(t, err)
+	_, err = store.SendMessage(ctx, queueName, &models.SendMessageRequest{MessageBody: "g2-msg1", QueueUrl: queueName, MessageGroupId: &g2})
+	require.NoError(t, err)
+
+	// 1. Receive from the queue, should get the first message from the first group
+	receiveReq := &models.ReceiveMessageRequest{MaxNumberOfMessages: 10, QueueUrl: queueName}
+	resp1, err := store.ReceiveMessage(ctx, queueName, receiveReq)
+	require.NoError(t, err)
+	require.Len(t, resp1.Messages, 2)
+	assert.Equal(t, "g1-msg1", resp1.Messages[0].Body)
+	assert.Equal(t, "g1-msg2", resp1.Messages[1].Body)
+
+	// 2. group1 is now locked. Receive again, should get message from group2.
+	resp2, err := store.ReceiveMessage(ctx, queueName, receiveReq)
+	require.NoError(t, err)
+	require.Len(t, resp2.Messages, 1)
+	assert.Equal(t, "g2-msg1", resp2.Messages[0].Body)
+
+	// 3. Both groups are now locked. Receive again, should get nothing.
+	resp3, err := store.ReceiveMessage(ctx, queueName, receiveReq)
+	require.NoError(t, err)
+	assert.Len(t, resp3.Messages, 0)
+}
+
+func TestFDBStore_FifoQueue_ReceiveDeduplication(t *testing.T) {
+	ctx := context.Background()
+	store, teardown := setupTestDB(t)
+	defer teardown()
+
+	queueName := "test-fifo-dedup.fifo"
+	err := store.CreateQueue(ctx, queueName, map[string]string{"FifoQueue": "true"}, nil)
+	require.NoError(t, err)
+
+	g1 := "group1"
+	_, err = store.SendMessage(ctx, queueName, &models.SendMessageRequest{MessageBody: "msg1", QueueUrl: queueName, MessageGroupId: &g1})
+	require.NoError(t, err)
+
+	// 1. Receive with an attempt ID
+	attemptID := "dedup-attempt-1"
+	receiveReq := &models.ReceiveMessageRequest{
+		QueueUrl:                queueName,
+		ReceiveRequestAttemptId: attemptID,
+	}
+	resp1, err := store.ReceiveMessage(ctx, queueName, receiveReq)
+	require.NoError(t, err)
+	require.Len(t, resp1.Messages, 1)
+
+	// 2. Receive again with the same attempt ID, should get the same message
+	resp2, err := store.ReceiveMessage(ctx, queueName, receiveReq)
+	require.NoError(t, err)
+	require.Len(t, resp2.Messages, 1)
+	assert.Equal(t, resp1.Messages[0].MessageId, resp2.Messages[0].MessageId)
+	assert.Equal(t, resp1.Messages[0].ReceiptHandle, resp2.Messages[0].ReceiptHandle)
+}
+
 func TestFDBStore_PurgeQueue(t *testing.T) {
 	ctx := context.Background()
 	store, teardown := setupTestDB(t)
@@ -444,12 +549,11 @@ func TestFDBStore_SendMessage(t *testing.T) {
 		assert.NotEmpty(t, resp1.MessageId)
 		assert.NotEmpty(t, resp1.SequenceNumber)
 
-		// Second send with same dedup ID should succeed but be deduplicated
+		// Second send with same dedup ID should be deduplicated and return the original response
 		resp2, err := store.SendMessage(ctx, fifoQueueName, msgRequest)
 		assert.NoError(t, err)
 		require.NotNil(t, resp2)
-		assert.Equal(t, resp1.MessageId, resp2.MessageId)
-		assert.Equal(t, "deduplicated", resp2.MD5OfMessageBody)
+		assert.Equal(t, resp1, resp2)
 	})
 
 	t.Run("returns error if queue does not exist", func(t *testing.T) {
