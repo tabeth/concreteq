@@ -27,6 +27,11 @@ type FDBStore struct {
 	dir directory.DirectorySubspace
 }
 
+// GetDB returns the underlying FoundationDB database object.
+func (s *FDBStore) GetDB() fdb.Database {
+	return s.db
+}
+
 // NewFDBStore creates a new FDBStore.
 func NewFDBStore() (*FDBStore, error) {
 	fdb.MustAPIVersion(730)

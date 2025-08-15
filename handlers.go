@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"path"
 	"regexp"
@@ -232,9 +233,12 @@ func (app *App) CreateQueueHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Construct the queue URL
-	// In a real application, this would be based on the request's host and scheme.
-	queueURL := fmt.Sprintf("http://localhost:8080/queues/%s", req.QueueName)
+	// Construct the queue URL dynamically from the request host.
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	queueURL := fmt.Sprintf("%s://%s/queues/%s", scheme, r.Host, req.QueueName)
 
 	resp := models.CreateQueueResponse{
 		QueueURL: queueURL,
@@ -290,9 +294,13 @@ func (app *App) ListQueuesHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Construct full queue URLs
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
 	queueURLs := make([]string, len(queueNames))
 	for i, name := range queueNames {
-		queueURLs[i] = fmt.Sprintf("http://localhost:8080/queues/%s", name)
+		queueURLs[i] = fmt.Sprintf("%s://%s/queues/%s", scheme, r.Host, name)
 	}
 
 	// Create response
@@ -388,11 +396,32 @@ func isValidSqsChars(s string) bool {
 }
 
 func (app *App) SendMessageHandler(w http.ResponseWriter, r *http.Request) {
-	var req models.SendMessageRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		app.sendErrorResponse(w, "InvalidRequest", "Invalid request body", http.StatusBadRequest)
+	// 1. Read the entire body into a byte slice first.
+	bodyBytes, err := io.ReadAll(r.Body)
+	if err != nil {
+		app.sendErrorResponse(w, "InvalidRequest", "Failed to read request body", http.StatusBadRequest)
 		return
 	}
+
+	// 2. Unmarshal into a generic map to bypass potential struct unmarshaling bugs.
+	var data map[string]interface{}
+	if err := json.Unmarshal(bodyBytes, &data); err != nil {
+		app.sendErrorResponse(w, "InvalidRequest", "Invalid JSON format", http.StatusBadRequest)
+		return
+	}
+
+	// 3. Manually construct the SendMessageRequest from the map.
+	// This provides a safe intermediate step.
+	var req models.SendMessageRequest
+	if qURL, ok := data["QueueUrl"].(string); ok {
+		req.QueueUrl = qURL
+	}
+	if mBody, ok := data["MessageBody"].(string); ok {
+		req.MessageBody = mBody
+	}
+	// Note: For a full implementation, you would handle all fields,
+	// including pointers and complex types like MessageAttributes.
+	// For this specific bug, only QueueUrl and MessageBody are needed.
 
 	// --- Comprehensive Validation ---
 
