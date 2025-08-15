@@ -435,7 +435,7 @@ func TestIntegration_Messaging(t *testing.T) {
 	require.NoError(t, err)
 
 	t.Run("SendAndReceiveStandard", func(t *testing.T) {
-		sentMessageBody := "world hello"
+		sentMessageBody := "hello" + " " + "world"
 		sendReq := models.SendMessageRequest{
 			QueueUrl:    fmt.Sprintf("%s/queues/%s", app.baseURL, stdQueueName),
 			MessageBody: sentMessageBody,
@@ -456,7 +456,7 @@ func TestIntegration_Messaging(t *testing.T) {
 		err = json.NewDecoder(resp.Body).Decode(&sendResp)
 		require.NoError(t, err)
 		assert.NotEmpty(t, sendResp.MessageId)
-		assert.Equal(t, "68977900b9032a2b4cd7ed2b79ec51a8", sendResp.MD5OfMessageBody) // md5 of "world hello"
+		assert.Equal(t, "5eb63bbbe01eeed093cb22bb8f5acdc3", sendResp.MD5OfMessageBody) // md5 of "hello world"
 
 		// Now, receive the message
 		recBody := fmt.Sprintf(`{"QueueUrl": "%s/queues/%s", "MaxNumberOfMessages": 1}`, app.baseURL, stdQueueName)
