@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/tabeth/concreteq/models"
+	"github.com/tabeth/concreteq/store"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/assert"
@@ -112,13 +113,87 @@ func TestCreateQueueHandler(t *testing.T) {
 		expectedBody       string
 	}{
 		{
-			name:      "Successful Queue Creation",
+			name:      "Successful Standard Queue Creation",
 			inputBody: `{"QueueName": "my-test-queue"}`,
 			mockSetup: func(ms *MockStore) {
 				ms.On("CreateQueue", mock.Anything, "my-test-queue", mock.Anything, mock.Anything).Return(nil)
 			},
 			expectedStatusCode: http.StatusCreated,
 			expectedBody:       `{"QueueUrl":"http://localhost:8080/queues/my-test-queue"}`,
+		},
+		{
+			name:      "Successful FIFO Queue Creation",
+			inputBody: `{"QueueName": "my-fifo-queue.fifo", "Attributes": {"FifoQueue": "true"}}`,
+			mockSetup: func(ms *MockStore) {
+				ms.On("CreateQueue", mock.Anything, "my-fifo-queue.fifo", mock.Anything, mock.Anything).Return(nil)
+			},
+			expectedStatusCode: http.StatusCreated,
+			expectedBody:       `{"QueueUrl":"http://localhost:8080/queues/my-fifo-queue.fifo"}`,
+		},
+		{
+			name:               "Queue Name Too Long",
+			inputBody:          `{"QueueName": "` + strings.Repeat("a", 81) + `"}`,
+			mockSetup:          func(ms *MockStore) {},
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       `{"__type":"InvalidParameterValue", "message":"Invalid queue name: Can only include alphanumeric characters, hyphens, and underscores. 1 to 80 in length."}`,
+		},
+		{
+			name:               "Invalid Characters in Queue Name",
+			inputBody:          `{"QueueName": "invalid!"}`,
+			mockSetup:          func(ms *MockStore) {},
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       `{"__type":"InvalidParameterValue", "message":"Invalid queue name: Can only include alphanumeric characters, hyphens, and underscores. 1 to 80 in length."}`,
+		},
+		{
+			name:               "FIFO Name without FIFO Attribute",
+			inputBody:          `{"QueueName": "my-queue.fifo"}`,
+			mockSetup:          func(ms *MockStore) {},
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       `{"__type":"InvalidParameterValue", "message":"Queue name ends in .fifo but FifoQueue attribute is not 'true'"}`,
+		},
+		{
+			name:               "FIFO Attribute without FIFO Name",
+			inputBody:          `{"QueueName": "my-queue", "Attributes": {"FifoQueue": "true"}}`,
+			mockSetup:          func(ms *MockStore) {},
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       `{"__type":"InvalidParameterValue", "message":"FifoQueue attribute is 'true' but queue name does not end in .fifo"}`,
+		},
+		{
+			name:               "Invalid Attribute Value",
+			inputBody:          `{"QueueName": "q", "Attributes": {"DelaySeconds": "901"}}`,
+			mockSetup:          func(ms *MockStore) {},
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       `{"__type":"InvalidAttributeName", "message":"invalid value for DelaySeconds: must be between 0 and 900"}`,
+		},
+		{
+			name:               "Invalid Redrive Policy JSON",
+			inputBody:          `{"QueueName": "q", "Attributes": {"RedrivePolicy": "not-json"}}`,
+			mockSetup:          func(ms *MockStore) {},
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       `{"__type":"InvalidAttributeName", "message":"invalid value for RedrivePolicy: must be a valid JSON object"}`,
+		},
+		{
+			name:               "Invalid Redrive Policy MaxReceiveCount",
+			inputBody:          `{"QueueName": "q", "Attributes": {"RedrivePolicy": "{\"deadLetterTargetArn\":\"arn:aws:sqs:us-east-1:123456789012:my-dlq\",\"maxReceiveCount\":\"2000\"}"}}`,
+			mockSetup:          func(ms *MockStore) {},
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       `{"__type":"InvalidAttributeName", "message":"invalid value for RedrivePolicy: maxReceiveCount must be an integer between 1 and 1000"}`,
+		},
+		{
+			name:               "FIFO Attribute on Standard Queue",
+			inputBody:          `{"QueueName": "standard-q", "Attributes": {"DeduplicationScope": "messageGroup"}}`,
+			mockSetup:          func(ms *MockStore) {},
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       `{"__type":"InvalidParameterValue", "message":"DeduplicationScope is only valid for FIFO queues"}`,
+		},
+		{
+			name:      "Queue Already Exists",
+			inputBody: `{"QueueName": "existing-queue"}`,
+			mockSetup: func(ms *MockStore) {
+				ms.On("CreateQueue", mock.Anything, "existing-queue", mock.Anything, mock.Anything).Return(store.ErrQueueAlreadyExists)
+			},
+			expectedStatusCode: http.StatusConflict,
+			expectedBody:       `{"__type":"QueueAlreadyExists", "message":"Queue already exists"}`,
 		},
 	}
 
@@ -228,6 +303,22 @@ func TestReceiveMessageHandler(t *testing.T) {
 			expectedStatusCode: http.StatusBadRequest,
 			expectedBody:       `{"__type":"InvalidAttributeName", "message":"The attribute name 'AWS.Invalid' is invalid."}`,
 		},
+		{
+			name:               "Invalid WaitTimeSeconds",
+			inputBody:          `{"QueueUrl": "http://localhost:8080/queues/my-queue", "WaitTimeSeconds": 21}`,
+			mockSetup:          func(ms *MockStore) {},
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       `{"__type":"InvalidParameterValue", "message":"Value for parameter WaitTimeSeconds is invalid. Reason: Must be an integer from 0 to 20."}`,
+		},
+		{
+			name:      "Queue Does Not Exist",
+			inputBody: `{"QueueUrl": "http://localhost:8080/queues/non-existent-queue"}`,
+			mockSetup: func(ms *MockStore) {
+				ms.On("ReceiveMessage", mock.Anything, "non-existent-queue", mock.AnythingOfType("*models.ReceiveMessageRequest")).Return(nil, store.ErrQueueDoesNotExist)
+			},
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       `{"__type":"QueueDoesNotExist", "message":"The specified queue does not exist."}`,
+		},
 	}
 
 	for _, tc := range tests {
@@ -291,6 +382,31 @@ func TestPurgeQueueHandler(t *testing.T) {
 			expectedStatusCode: http.StatusOK,
 			expectedBody:       "",
 		},
+		{
+			name:               "Missing QueueUrl",
+			inputBody:          `{}`,
+			mockSetup:          func(ms *MockStore) {},
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       `{"__type":"MissingParameter", "message":"The request must contain a QueueUrl."}`,
+		},
+		{
+			name:      "Queue Does Not Exist",
+			inputBody: `{"QueueUrl": "http://localhost:8080/queues/non-existent"}`,
+			mockSetup: func(ms *MockStore) {
+				ms.On("PurgeQueue", mock.Anything, "non-existent").Return(store.ErrQueueDoesNotExist)
+			},
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       `{"__type":"QueueDoesNotExist", "message":"The specified queue does not exist."}`,
+		},
+		{
+			name:      "Purge In Progress",
+			inputBody: `{"QueueUrl": "http://localhost:8080/queues/purging-queue"}`,
+			mockSetup: func(ms *MockStore) {
+				ms.On("PurgeQueue", mock.Anything, "purging-queue").Return(store.ErrPurgeQueueInProgress)
+			},
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       `{"__type":"PurgeQueueInProgress", "message":"Indicates that the specified queue previously received a PurgeQueue request within the last 60 seconds."}`,
+		},
 	}
 
 	for _, tc := range tests {
@@ -352,6 +468,22 @@ func TestDeleteQueueHandler(t *testing.T) {
 			},
 			expectedStatusCode: http.StatusOK,
 			expectedBody:       "",
+		},
+		{
+			name:               "Missing QueueUrl",
+			inputBody:          `{}`,
+			mockSetup:          func(ms *MockStore) {},
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       `{"__type":"MissingParameter", "message":"The request must contain a QueueUrl."}`,
+		},
+		{
+			name:      "Queue Does Not Exist",
+			inputBody: `{"QueueUrl": "http://localhost:8080/queues/non-existent"}`,
+			mockSetup: func(ms *MockStore) {
+				ms.On("DeleteQueue", mock.Anything, "non-existent").Return(store.ErrQueueDoesNotExist)
+			},
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       `{"__type":"QueueDoesNotExist", "message":"The specified queue does not exist."}`,
 		},
 	}
 
@@ -471,7 +603,7 @@ func TestSendMessageHandler(t *testing.T) {
 		expectedBody       string
 	}{
 		{
-			name:      "Successful Send",
+			name:      "Successful Send to Standard Queue",
 			inputBody: `{"MessageBody": "hello world", "QueueUrl": "http://localhost:8080/queues/my-queue"}`,
 			mockSetup: func(ms *MockStore) {
 				ms.On("SendMessage", mock.Anything, "my-queue", mock.AnythingOfType("*models.SendMessageRequest")).Return(&models.SendMessageResponse{
@@ -481,6 +613,17 @@ func TestSendMessageHandler(t *testing.T) {
 			},
 			expectedStatusCode: http.StatusOK,
 			expectedBody:       `{"MD5OfMessageBody":"5d41402abc4b2a76b9719d911017c592","MessageId":"some-uuid"}`,
+		},
+		{
+			name:      "Successful Send to FIFO Queue",
+			inputBody: `{"MessageBody": "hello fifo", "QueueUrl": "http://localhost:8080/queues/my-queue.fifo", "MessageGroupId": "group1"}`,
+			mockSetup: func(ms *MockStore) {
+				ms.On("SendMessage", mock.Anything, "my-queue.fifo", mock.AnythingOfType("*models.SendMessageRequest")).Return(&models.SendMessageResponse{
+					MessageId:      "some-uuid",
+					MD5OfMessageBody: "some-md5",
+				}, nil)
+			},
+			expectedStatusCode: http.StatusOK,
 		},
 		{
 			name:               "Missing QueueUrl",
@@ -497,15 +640,41 @@ func TestSendMessageHandler(t *testing.T) {
 			expectedBody:       `{"__type":"InvalidParameterValue", "message":"The message body must be between 1 and 262144 bytes long."}`,
 		},
 		{
-			name:      "MessageGroupId with Standard Queue",
-			inputBody: `{"MessageBody": "hello standard", "MessageGroupId": "group1", "QueueUrl": "http://localhost:8080/queues/my-queue"}`,
+			name:               "Message Body Too Long",
+			inputBody:          `{"MessageBody": "` + strings.Repeat("a", 256*1024+1) + `", "QueueUrl": "http://localhost:8080/queues/my-queue"}`,
+			mockSetup:          func(ms *MockStore) {},
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       `{"__type":"InvalidParameterValue", "message":"The message body must be between 1 and 262144 bytes long."}`,
+		},
+		{
+			name:               "DelaySeconds with FIFO Queue",
+			inputBody:          `{"MessageBody": "hello", "QueueUrl": "http://localhost:8080/queues/my-queue.fifo", "DelaySeconds": 10, "MessageGroupId": "group1"}`,
+			mockSetup:          func(ms *MockStore) {},
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       `{"__type":"InvalidParameterValue", "message":"The request include parameter that is not valid for this queue type. Reason: DelaySeconds is not supported for FIFO queues."}`,
+		},
+		{
+			name:               "Missing MessageGroupId for FIFO",
+			inputBody:          `{"MessageBody": "hello", "QueueUrl": "http://localhost:8080/queues/my-queue.fifo"}`,
+			mockSetup:          func(ms *MockStore) {},
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       `{"__type":"MissingParameter", "message":"The request must contain a MessageGroupId."}`,
+		},
+		{
+			name:               "MessageDeduplicationId with Standard Queue",
+			inputBody:          `{"MessageBody": "hello", "QueueUrl": "http://localhost:8080/queues/my-queue", "MessageDeduplicationId": "dedup1"}`,
+			mockSetup:          func(ms *MockStore) {},
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       `{"__type":"InvalidParameterValue", "message":"MessageDeduplicationId is supported only for FIFO queues."}`,
+		},
+		{
+			name:      "Queue Does Not Exist",
+			inputBody: `{"MessageBody": "hello", "QueueUrl": "http://localhost:8080/queues/non-existent-queue"}`,
 			mockSetup: func(ms *MockStore) {
-				ms.On("SendMessage", mock.Anything, "my-queue", mock.AnythingOfType("*models.SendMessageRequest")).Return(&models.SendMessageResponse{
-					MessageId:      "some-uuid",
-					MD5OfMessageBody: "md5-of-body",
-				}, nil)
+				ms.On("SendMessage", mock.Anything, "non-existent-queue", mock.AnythingOfType("*models.SendMessageRequest")).Return(nil, store.ErrQueueDoesNotExist)
 			},
-			expectedStatusCode: http.StatusOK,
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       `{"__type":"QueueDoesNotExist", "message":"The specified queue does not exist."}`,
 		},
 	}
 
