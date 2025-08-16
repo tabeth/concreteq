@@ -94,6 +94,8 @@ func (app *App) RootSQSHandler(w http.ResponseWriter, r *http.Request) {
 		app.PurgeQueueHandler(w, r)
 	case "ReceiveMessage":
 		app.ReceiveMessageHandler(w, r)
+	case "DeleteMessage":
+		app.DeleteMessageHandler(w, r)
 	default:
 		app.sendErrorResponse(w, "UnsupportedOperation", "Unsupported operation: "+action, http.StatusBadRequest)
 	}
@@ -620,7 +622,39 @@ func (app *App) ReceiveMessageHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(resp)
 }
 func (app *App) DeleteMessageHandler(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(http.StatusNotImplemented)
+	var req models.DeleteMessageRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		app.sendErrorResponse(w, "InvalidRequest", "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if req.QueueUrl == "" {
+		app.sendErrorResponse(w, "MissingParameter", "The request must contain a QueueUrl.", http.StatusBadRequest)
+		return
+	}
+	if req.ReceiptHandle == "" {
+		app.sendErrorResponse(w, "MissingParameter", "The request must contain a ReceiptHandle.", http.StatusBadRequest)
+		return
+	}
+
+	queueName := path.Base(req.QueueUrl)
+
+	err := app.Store.DeleteMessage(r.Context(), queueName, req.ReceiptHandle)
+	if err != nil {
+		if errors.Is(err, store.ErrInvalidReceiptHandle) {
+			app.sendErrorResponse(w, "ReceiptHandleIsInvalid", "The specified receipt handle isn't valid.", http.StatusBadRequest)
+			return
+		}
+		if errors.Is(err, store.ErrQueueDoesNotExist) {
+			// This case is important if the queue is deleted after a message is received.
+			app.sendErrorResponse(w, "QueueDoesNotExist", "The specified queue does not exist.", http.StatusBadRequest)
+			return
+		}
+		app.sendErrorResponse(w, "InternalFailure", "Failed to delete message", http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
 }
 func (app *App) DeleteMessageBatchHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNotImplemented)

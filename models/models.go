@@ -120,6 +120,12 @@ type ResponseMessage struct {
 	ReceiptHandle          string                    `json:"ReceiptHandle"`
 }
 
+// DeleteMessageRequest defines the parameters for deleting a message.
+type DeleteMessageRequest struct {
+	QueueUrl      string `json:"QueueUrl"`
+	ReceiptHandle string `json:"ReceiptHandle"`
+}
+
 // ErrorResponse defines the standard AWS JSON error response format.
 type ErrorResponse struct {
 	Type    string `json:"__type"`

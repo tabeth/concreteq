@@ -69,7 +69,8 @@ func (m *MockStore) ReceiveMessage(ctx context.Context, queueName string, req *m
 	return args.Get(0).(*models.ReceiveMessageResponse), args.Error(1)
 }
 func (m *MockStore) DeleteMessage(ctx context.Context, queueName string, receiptHandle string) error {
-	return nil
+	args := m.Called(ctx, queueName, receiptHandle)
+	return args.Error(0)
 }
 func (m *MockStore) DeleteMessageBatch(ctx context.Context, queueName string, receiptHandles []string) error {
 	return nil
@@ -235,6 +236,82 @@ func TestCreateQueueHandler(t *testing.T) {
 				} else { // It's a plain text error message from our old http.Error calls, which we should not have
 					assert.Fail(t, "Received unexpected plain text error response", "Response body: %s", rr.Body.String())
 				}
+			}
+
+			mockStore.AssertExpectations(t)
+		})
+	}
+}
+
+func TestDeleteMessageHandler(t *testing.T) {
+	tests := []struct {
+		name               string
+		inputBody          string
+		mockSetup          func(*MockStore)
+		expectedStatusCode int
+		expectedBody       string
+	}{
+		{
+			name:      "Successful Deletion",
+			inputBody: `{"QueueUrl": "http://localhost/queues/my-queue", "ReceiptHandle": "valid-handle"}`,
+			mockSetup: func(ms *MockStore) {
+				ms.On("DeleteMessage", mock.Anything, "my-queue", "valid-handle").Return(nil).Once()
+			},
+			expectedStatusCode: http.StatusOK,
+			expectedBody:       "",
+		},
+		{
+			name:               "Missing QueueUrl",
+			inputBody:          `{"ReceiptHandle": "a-handle"}`,
+			mockSetup:          func(ms *MockStore) {},
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       `{"__type":"MissingParameter", "message":"The request must contain a QueueUrl."}`,
+		},
+		{
+			name:               "Missing ReceiptHandle",
+			inputBody:          `{"QueueUrl": "http://localhost/queues/my-queue"}`,
+			mockSetup:          func(ms *MockStore) {},
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       `{"__type":"MissingParameter", "message":"The request must contain a ReceiptHandle."}`,
+		},
+		{
+			name:      "Queue Does Not Exist",
+			inputBody: `{"QueueUrl": "http://localhost/queues/non-existent-queue", "ReceiptHandle": "a-handle"}`,
+			mockSetup: func(ms *MockStore) {
+				ms.On("DeleteMessage", mock.Anything, "non-existent-queue", "a-handle").Return(store.ErrQueueDoesNotExist).Once()
+			},
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       `{"__type":"QueueDoesNotExist", "message":"The specified queue does not exist."}`,
+		},
+		{
+			name:      "Invalid Receipt Handle",
+			inputBody: `{"QueueUrl": "http://localhost/queues/my-queue", "ReceiptHandle": "invalid-handle"}`,
+			mockSetup: func(ms *MockStore) {
+				ms.On("DeleteMessage", mock.Anything, "my-queue", "invalid-handle").Return(store.ErrInvalidReceiptHandle).Once()
+			},
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       `{"__type":"ReceiptHandleIsInvalid", "message":"The specified receipt handle isn't valid."}`,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mockStore := new(MockStore)
+			tc.mockSetup(mockStore)
+
+			app := &App{Store: mockStore}
+			r := chi.NewRouter()
+			app.RegisterSQSHandlers(r)
+
+			req, _ := http.NewRequest("POST", "/", bytes.NewBufferString(tc.inputBody))
+			req.Header.Set("X-Amz-Target", "AmazonSQS.DeleteMessage")
+			rr := httptest.NewRecorder()
+
+			r.ServeHTTP(rr, req)
+
+			assert.Equal(t, tc.expectedStatusCode, rr.Code)
+			if tc.expectedBody != "" {
+				require.JSONEq(t, tc.expectedBody, rr.Body.String())
 			}
 
 			mockStore.AssertExpectations(t)
