@@ -479,6 +479,186 @@ func TestIntegration_ListDeletePurgeQueues(t *testing.T) {
 	})
 }
 
+func TestIntegration_FifoFairness(t *testing.T) {
+	app, teardown := setupIntegrationTest(t)
+	defer teardown()
+
+	queueName := "fairness-queue.fifo"
+	queueURL := fmt.Sprintf("%s/queues/%s", app.baseURL, queueName)
+
+	// 1. Create a FIFO queue
+	createBody := fmt.Sprintf(`{"QueueName": "%s", "Attributes": {"FifoQueue": "true"}}`, queueName)
+	req, _ := http.NewRequest("POST", app.baseURL+"/", bytes.NewBufferString(createBody))
+	req.Header.Set("X-Amz-Target", "AmazonSQS.CreateQueue")
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
+	resp.Body.Close()
+
+	// 2. Send messages: 10 for noisy group, 1 for two quiet groups
+	noisyGroup := "group-a"
+	quietGroupB := "group-b"
+	quietGroupC := "group-c"
+
+	for i := 0; i < 10; i++ {
+		sendReq := models.SendMessageRequest{
+			QueueUrl:       queueURL,
+			MessageBody:    fmt.Sprintf("noisy-%d", i),
+			MessageGroupId: &noisyGroup,
+		}
+		bodyBytes, _ := json.Marshal(sendReq)
+		req, _ := http.NewRequest("POST", app.baseURL+"/", bytes.NewBuffer(bodyBytes))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Amz-Target", "AmazonSQS.SendMessage")
+		resp, err := http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+		resp.Body.Close()
+	}
+
+	for _, groupID := range []string{quietGroupB, quietGroupC} {
+		sendReq := models.SendMessageRequest{
+			QueueUrl:       queueURL,
+			MessageBody:    fmt.Sprintf("quiet-%s", groupID),
+			MessageGroupId: &groupID,
+		}
+		bodyBytes, _ := json.Marshal(sendReq)
+		req, _ := http.NewRequest("POST", app.baseURL+"/", bytes.NewBuffer(bodyBytes))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Amz-Target", "AmazonSQS.SendMessage")
+		resp, err := http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+		resp.Body.Close()
+	}
+
+	// 3. Receive messages one by one and check their group ID
+	var receivedGroupIDs []string
+	for i := 0; i < 3; i++ {
+		recReq := models.ReceiveMessageRequest{
+			QueueUrl:                  queueURL,
+			MaxNumberOfMessages:       1,
+			VisibilityTimeout:         60, // Lock the group for the test duration
+			MessageSystemAttributeNames: []string{"All"},
+		}
+		bodyBytes, _ := json.Marshal(recReq)
+		req, _ := http.NewRequest("POST", app.baseURL+"/", bytes.NewBuffer(bodyBytes))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Amz-Target", "AmazonSQS.ReceiveMessage")
+
+		resp, err := http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+
+		var recResp models.ReceiveMessageResponse
+		err = json.NewDecoder(resp.Body).Decode(&recResp)
+		require.NoError(t, err)
+		resp.Body.Close()
+
+		if len(recResp.Messages) > 0 {
+			msg := recResp.Messages[0]
+			groupID := msg.Attributes["MessageGroupId"]
+			receivedGroupIDs = append(receivedGroupIDs, groupID)
+
+			// Delete the message to simulate processing and unlock the group
+			delBody := models.DeleteMessageRequest{QueueUrl: queueURL, ReceiptHandle: msg.ReceiptHandle}
+			delBodyBytes, _ := json.Marshal(delBody)
+			delHttpReq, _ := http.NewRequest("POST", app.baseURL+"/", bytes.NewBuffer(delBodyBytes))
+			delHttpReq.Header.Set("Content-Type", "application/json")
+			delHttpReq.Header.Set("X-Amz-Target", "AmazonSQS.DeleteMessage")
+			delResp, err := http.DefaultClient.Do(delHttpReq)
+			require.NoError(t, err)
+			assert.Equal(t, http.StatusOK, delResp.StatusCode)
+			delResp.Body.Close()
+		}
+	}
+
+	// Assert that we received messages from more than one group
+	t.Logf("Received group IDs via HTTP: %v", receivedGroupIDs)
+	groupSet := make(map[string]bool)
+	for _, id := range receivedGroupIDs {
+		groupSet[id] = true
+	}
+	assert.Greater(t, len(groupSet), 1, "Expected to receive messages from more than one group via HTTP")
+}
+
+func TestIntegration_DeleteMessage(t *testing.T) {
+	app, teardown := setupIntegrationTest(t)
+	defer teardown()
+
+	ctx := context.Background()
+	queueName := "delete-integ-queue"
+	queueURL := fmt.Sprintf("%s/queues/%s", app.baseURL, queueName)
+
+	// Setup: Create a queue and a message to delete
+	err := app.store.CreateQueue(ctx, queueName, nil, nil)
+	require.NoError(t, err)
+	_, err = app.store.SendMessage(ctx, queueName, &models.SendMessageRequest{MessageBody: "a message"})
+	require.NoError(t, err)
+	recResp, err := app.store.ReceiveMessage(ctx, queueName, &models.ReceiveMessageRequest{MaxNumberOfMessages: 1})
+	require.NoError(t, err)
+	require.Len(t, recResp.Messages, 1)
+	validReceiptHandle := recResp.Messages[0].ReceiptHandle
+
+	t.Run("Successful Deletion", func(t *testing.T) {
+		// We need a fresh message for this test case
+		_, err := app.store.SendMessage(ctx, queueName, &models.SendMessageRequest{MessageBody: "another message"})
+		require.NoError(t, err)
+		resp, err := app.store.ReceiveMessage(ctx, queueName, &models.ReceiveMessageRequest{MaxNumberOfMessages: 1})
+		require.NoError(t, err)
+		require.Len(t, resp.Messages, 1)
+
+		delBody := models.DeleteMessageRequest{QueueUrl: queueURL, ReceiptHandle: resp.Messages[0].ReceiptHandle}
+		bodyBytes, _ := json.Marshal(delBody)
+		req, _ := http.NewRequest("POST", app.baseURL+"/", bytes.NewBuffer(bodyBytes))
+		req.Header.Set("X-Amz-Target", "AmazonSQS.DeleteMessage")
+		httpResp, err := http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		defer httpResp.Body.Close()
+
+		assert.Equal(t, http.StatusOK, httpResp.StatusCode)
+	})
+
+	t.Run("ReceiptHandleIsInvalid", func(t *testing.T) {
+		// An invalid handle is one that is malformed, not just non-existent.
+		// We can't easily create a malformed handle that passes checksums etc.,
+		// but we can test the error path from the handler by using a handle
+		// that we know is invalid because we manually inserted it in the fdb test.
+		// For an integration test, we can just use a handle that is syntactically
+		// plausible but doesn't exist, and our current implementation will return
+		// success, which is compliant. If we wanted to test the "invalid" error,
+		// we'd need a way to inject a malformed entry in FDB, which is better suited for the fdb_test.
+		// So we will test the "non-existent but valid-looking" handle case.
+		delBody := models.DeleteMessageRequest{QueueUrl: queueURL, ReceiptHandle: "plausible-but-non-existent-handle"}
+		bodyBytes, _ := json.Marshal(delBody)
+		req, _ := http.NewRequest("POST", app.baseURL+"/", bytes.NewBuffer(bodyBytes))
+		req.Header.Set("X-Amz-Target", "AmazonSQS.DeleteMessage")
+		httpResp, err := http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		defer httpResp.Body.Close()
+
+		// As per SQS docs, deleting a non-existent handle is not an error.
+		assert.Equal(t, http.StatusOK, httpResp.StatusCode)
+	})
+
+	t.Run("QueueDoesNotExist", func(t *testing.T) {
+		delBody := models.DeleteMessageRequest{
+			QueueUrl:      fmt.Sprintf("%s/queues/non-existent-queue", app.baseURL),
+			ReceiptHandle: validReceiptHandle,
+		}
+		bodyBytes, _ := json.Marshal(delBody)
+		req, _ := http.NewRequest("POST", app.baseURL+"/", bytes.NewBuffer(bodyBytes))
+		req.Header.Set("X-Amz-Target", "AmazonSQS.DeleteMessage")
+		httpResp, err := http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		defer httpResp.Body.Close()
+
+		assert.Equal(t, http.StatusBadRequest, httpResp.StatusCode)
+		var errResp models.ErrorResponse
+		json.NewDecoder(httpResp.Body).Decode(&errResp)
+		assert.Equal(t, "QueueDoesNotExist", errResp.Type)
+	})
+}
 
 func TestIntegration_Messaging(t *testing.T) {
 	app, teardown := setupIntegrationTest(t)

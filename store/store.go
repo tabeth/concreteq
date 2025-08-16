@@ -14,6 +14,8 @@ var (
 	ErrQueueDoesNotExist = errors.New("queue does not exist")
 	// ErrPurgeQueueInProgress is returned when a purge request is made for a queue that has been purged in the last 60 seconds.
 	ErrPurgeQueueInProgress = errors.New("purge queue in progress")
+	// ErrInvalidReceiptHandle is returned when a receipt handle is malformed or invalid.
+	ErrInvalidReceiptHandle = errors.New("receipt handle is invalid")
 )
 
 // Store is the interface for the underlying storage system.
