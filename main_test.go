@@ -559,6 +559,118 @@ func TestIntegration_Messaging(t *testing.T) {
 		})
 	})
 
+	t.Run("FIFO Ordering", func(t *testing.T) {
+		// Reset the DB for each subtest to ensure isolation
+		_, err := app.store.GetDB().Transact(func(tr fdb.Transaction) (interface{}, error) {
+			dir, err := directory.CreateOrOpen(tr, []string{"concreteq"}, nil)
+			if err != nil { return nil, err }
+			subdirs, err := dir.List(tr, []string{})
+			if err != nil { return nil, err }
+			for _, subdir := range subdirs {
+				if _, err := dir.Remove(tr, []string{subdir}); err != nil { return nil, err }
+			}
+			return nil, nil
+		})
+		require.NoError(t, err)
+		err = app.store.CreateQueue(ctx, fifoQueueName, map[string]string{"FifoQueue": "true"}, nil)
+		require.NoError(t, err)
+
+		// Send messages to the same group
+		messageBodies := []string{"message1", "message2", "message3"}
+		messageGroupID := "group-a"
+		for _, body := range messageBodies {
+			msgRequest := models.SendMessageRequest{
+				QueueUrl:       fmt.Sprintf("%s/queues/%s", app.baseURL, fifoQueueName),
+				MessageBody:    body,
+				MessageGroupId: &messageGroupID,
+			}
+			msgBodyBytes, _ := json.Marshal(msgRequest)
+			req, _ := http.NewRequest("POST", app.baseURL+"/", bytes.NewBuffer(msgBodyBytes))
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("X-Amz-Target", "AmazonSQS.SendMessage")
+			resp, err := http.DefaultClient.Do(req)
+			require.NoError(t, err)
+			assert.Equal(t, http.StatusOK, resp.StatusCode)
+			resp.Body.Close()
+		}
+
+		// Receive all messages in one batch and check order
+		recBody := fmt.Sprintf(`{"QueueUrl": "%s/queues/%s", "MaxNumberOfMessages": 10}`, app.baseURL, fifoQueueName)
+		req, _ := http.NewRequest("POST", app.baseURL+"/", bytes.NewBufferString(recBody))
+		req.Header.Set("X-Amz-Target", "AmazonSQS.ReceiveMessage")
+		resp, err := http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		defer resp.Body.Close()
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+		var recResp models.ReceiveMessageResponse
+		err = json.NewDecoder(resp.Body).Decode(&recResp)
+		require.NoError(t, err)
+		require.Len(t, recResp.Messages, len(messageBodies))
+
+		var receivedBodies []string
+		for _, msg := range recResp.Messages {
+			receivedBodies = append(receivedBodies, msg.Body)
+		}
+		assert.Equal(t, messageBodies, receivedBodies, "Messages should be received in the order they were sent")
+	})
+
+	t.Run("FIFO Deduplication", func(t *testing.T) {
+		// Reset the DB for each subtest to ensure isolation
+		_, err := app.store.GetDB().Transact(func(tr fdb.Transaction) (interface{}, error) {
+			dir, err := directory.CreateOrOpen(tr, []string{"concreteq"}, nil)
+			if err != nil { return nil, err }
+			subdirs, err := dir.List(tr, []string{})
+			if err != nil { return nil, err }
+			for _, subdir := range subdirs {
+				if _, err := dir.Remove(tr, []string{subdir}); err != nil { return nil, err }
+			}
+			return nil, nil
+		})
+		require.NoError(t, err)
+		err = app.store.CreateQueue(ctx, fifoQueueName, map[string]string{"FifoQueue": "true"}, nil)
+		require.NoError(t, err)
+
+		// Send a message with a deduplication ID
+		messageGroupID := "group-b"
+		deduplicationID := "dedup-id-1"
+		msgRequest := models.SendMessageRequest{
+			QueueUrl:               fmt.Sprintf("%s/queues/%s", app.baseURL, fifoQueueName),
+			MessageBody:            "deduplication test message",
+			MessageGroupId:         &messageGroupID,
+			MessageDeduplicationId: &deduplicationID,
+		}
+		msgBodyBytes, _ := json.Marshal(msgRequest)
+
+		// Send first time
+		req1, _ := http.NewRequest("POST", app.baseURL+"/", bytes.NewBuffer(msgBodyBytes))
+		req1.Header.Set("Content-Type", "application/json")
+		req1.Header.Set("X-Amz-Target", "AmazonSQS.SendMessage")
+		resp1, err := http.DefaultClient.Do(req1)
+		require.NoError(t, err)
+		assert.Equal(t, http.StatusOK, resp1.StatusCode)
+		var sendResp1 models.SendMessageResponse
+		err = json.NewDecoder(resp1.Body).Decode(&sendResp1)
+		require.NoError(t, err)
+		assert.NotEmpty(t, sendResp1.MessageId)
+		resp1.Body.Close()
+
+		// Send second time with same dedup ID
+		req2, _ := http.NewRequest("POST", app.baseURL+"/", bytes.NewBuffer(msgBodyBytes))
+		req2.Header.Set("Content-Type", "application/json")
+		req2.Header.Set("X-Amz-Target", "AmazonSQS.SendMessage")
+		resp2, err := http.DefaultClient.Do(req2)
+		require.NoError(t, err)
+		assert.Equal(t, http.StatusOK, resp2.StatusCode)
+		var sendResp2 models.SendMessageResponse
+		err = json.NewDecoder(resp2.Body).Decode(&sendResp2)
+		require.NoError(t, err)
+
+		// Verify the message ID is the same, indicating deduplication
+		assert.Equal(t, sendResp1.MessageId, sendResp2.MessageId)
+		resp2.Body.Close()
+	})
+
 	t.Run("ReceiveMessageLogic", func(t *testing.T) {
 		// Reset the DB for each subtest to ensure isolation
 		_, err := app.store.GetDB().Transact(func(tr fdb.Transaction) (interface{}, error) {
@@ -583,8 +695,10 @@ func TestIntegration_Messaging(t *testing.T) {
 		err = app.store.CreateQueue(ctx, fifoQueueName, map[string]string{"FifoQueue": "true"}, nil)
 		require.NoError(t, err)
 
-		t.Run("Visibility Timeout", func(t *testing.T) {
-			// visibility test message
+		t.Run("AtLeastOnceDelivery (Visibility Timeout)", func(t *testing.T) {
+			// This test demonstrates the at-least-once delivery guarantee of standard queues.
+			// A message is received, but not deleted. After the visibility timeout expires,
+			// it becomes visible again and is received a second time.
 			sendResp, err := app.store.SendMessage(ctx, stdQueueName, &models.SendMessageRequest{MessageBody: "visibility test"})
 			require.NoError(t, err)
 
