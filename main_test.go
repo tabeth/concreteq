@@ -14,6 +14,7 @@ import (
 
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
 	"github.com/apple/foundationdb/bindings/go/src/fdb/directory"
+	"github.com/apple/foundationdb/bindings/go/src/fdb/tuple"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/stretchr/testify/assert"
@@ -207,6 +208,48 @@ func TestIntegration_CreateQueue(t *testing.T) {
 				assert.True(t, exists, "expected fifo queue directory to exist in FDB")
 			},
 		},
+		{
+			name:               "Successful FIFO Queue with ContentBasedDeduplication",
+			inputBody:          `{"QueueName": "my-fifo-cbd.fifo", "Attributes": {"FifoQueue": "true", "ContentBasedDeduplication": "true"}}`,
+			expectedStatusCode: http.StatusCreated,
+			expectedBody:       fmt.Sprintf(`{"QueueUrl":"%s/queues/my-fifo-cbd.fifo"}`, app.baseURL),
+			verifyInDB: func(t *testing.T, queueName string) {
+				// Verify the attribute is stored correctly in FDB
+				_, err := app.store.GetDB().ReadTransact(func(rtr fdb.ReadTransaction) (interface{}, error) {
+					queueDir, err := directory.Open(rtr, []string{"concreteq", queueName}, nil)
+					require.NoError(t, err)
+					attrsBytes, err := rtr.Get(queueDir.Pack(tuple.Tuple{"attributes"})).Get()
+					require.NoError(t, err)
+					var storedAttrs map[string]string
+					err = json.Unmarshal(attrsBytes, &storedAttrs)
+					require.NoError(t, err)
+					assert.Equal(t, "true", storedAttrs["ContentBasedDeduplication"])
+					return nil, nil
+				})
+				require.NoError(t, err)
+			},
+		},
+		{
+			name:               "Successful Queue with RedrivePolicy",
+			inputBody:          `{"QueueName": "my-queue-with-redrive", "Attributes": {"RedrivePolicy": "{\"deadLetterTargetArn\":\"arn:aws:sqs:us-east-1:123456789012:my-dlq\",\"maxReceiveCount\":\"10\"}"}}`,
+			expectedStatusCode: http.StatusCreated,
+			expectedBody:       fmt.Sprintf(`{"QueueUrl":"%s/queues/my-queue-with-redrive"}`, app.baseURL),
+			verifyInDB: func(t *testing.T, queueName string) {
+				// Verify the attribute is stored correctly in FDB
+				_, err := app.store.GetDB().ReadTransact(func(rtr fdb.ReadTransaction) (interface{}, error) {
+					queueDir, err := directory.Open(rtr, []string{"concreteq", queueName}, nil)
+					require.NoError(t, err)
+					attrsBytes, err := rtr.Get(queueDir.Pack(tuple.Tuple{"attributes"})).Get()
+					require.NoError(t, err)
+					var storedAttrs map[string]string
+					err = json.Unmarshal(attrsBytes, &storedAttrs)
+					require.NoError(t, err)
+					assert.Contains(t, storedAttrs["RedrivePolicy"], "my-dlq")
+					return nil, nil
+				})
+				require.NoError(t, err)
+			},
+		},
 	}
 
 	for _, tc := range tests {
@@ -342,6 +385,23 @@ func TestIntegration_ListDeletePurgeQueues(t *testing.T) {
 			require.NoError(t, err)
 			assert.Len(t, listResp2.QueueUrls, 2) // 5 total queues, 3 on first page, 2 on second
 			assert.Empty(t, listResp2.NextToken)
+		})
+
+		// Sub-test: Invalid NextToken
+		t.Run("Invalid NextToken", func(t *testing.T) {
+			body := bytes.NewBufferString(`{"NextToken": "invalid-token"}`)
+			req, _ := http.NewRequest("POST", app.baseURL+"/", body)
+			req.Header.Set("X-Amz-Target", "AmazonSQS.ListQueues")
+			resp, err := http.DefaultClient.Do(req)
+			require.NoError(t, err)
+			defer resp.Body.Close()
+
+			assert.Equal(t, http.StatusOK, resp.StatusCode)
+			var listResp models.ListQueuesResponse
+			err = json.NewDecoder(resp.Body).Decode(&listResp)
+			require.NoError(t, err)
+			assert.Len(t, listResp.QueueUrls, 0)
+			assert.Empty(t, listResp.NextToken)
 		})
 	})
 
@@ -500,6 +560,29 @@ func TestIntegration_Messaging(t *testing.T) {
 	})
 
 	t.Run("ReceiveMessageLogic", func(t *testing.T) {
+		// Reset the DB for each subtest to ensure isolation
+		_, err := app.store.GetDB().Transact(func(tr fdb.Transaction) (interface{}, error) {
+			dir, err := directory.CreateOrOpen(tr, []string{"concreteq"}, nil)
+			if err != nil {
+				return nil, err
+			}
+			subdirs, err := dir.List(tr, []string{})
+			if err != nil {
+				return nil, err
+			}
+			for _, subdir := range subdirs {
+				if _, err := dir.Remove(tr, []string{subdir}); err != nil {
+					return nil, err
+				}
+			}
+			return nil, nil
+		})
+		require.NoError(t, err)
+		err = app.store.CreateQueue(ctx, stdQueueName, nil, nil)
+		require.NoError(t, err)
+		err = app.store.CreateQueue(ctx, fifoQueueName, map[string]string{"FifoQueue": "true"}, nil)
+		require.NoError(t, err)
+
 		t.Run("Visibility Timeout", func(t *testing.T) {
 			// visibility test message
 			sendResp, err := app.store.SendMessage(ctx, stdQueueName, &models.SendMessageRequest{MessageBody: "visibility test"})
@@ -547,6 +630,58 @@ func TestIntegration_Messaging(t *testing.T) {
 			require.NoError(t, err)
 			require.Len(t, recResp3.Messages, 1, "should receive message after visibility timeout")
 			assert.Equal(t, sendResp.MessageId, recResp3.Messages[0].MessageId)
+		})
+
+		t.Run("Message Delay", func(t *testing.T) {
+			delayQueueName := "delay-queue"
+			err := app.store.CreateQueue(ctx, delayQueueName, nil, nil)
+			require.NoError(t, err)
+
+			// Send a message with a 2-second delay
+			delaySeconds := int32(2)
+			sendReq := models.SendMessageRequest{
+				QueueUrl:     fmt.Sprintf("%s/queues/%s", app.baseURL, delayQueueName),
+				MessageBody:  "delayed message",
+				DelaySeconds: &delaySeconds,
+			}
+			msgBodyBytes, err := json.Marshal(sendReq)
+			require.NoError(t, err)
+
+			req, _ := http.NewRequest("POST", app.baseURL+"/", bytes.NewBuffer(msgBodyBytes))
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("X-Amz-Target", "AmazonSQS.SendMessage")
+			resp, err := http.DefaultClient.Do(req)
+			require.NoError(t, err)
+			defer resp.Body.Close()
+			assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+			// Try to receive immediately, should get nothing
+			recBody := fmt.Sprintf(`{"QueueUrl": "%s/queues/%s"}`, app.baseURL, delayQueueName)
+			req2, _ := http.NewRequest("POST", app.baseURL+"/", bytes.NewBufferString(recBody))
+			req2.Header.Set("X-Amz-Target", "AmazonSQS.ReceiveMessage")
+			resp2, err := http.DefaultClient.Do(req2)
+			require.NoError(t, err)
+			defer resp2.Body.Close()
+			assert.Equal(t, http.StatusOK, resp2.StatusCode)
+			var recResp2 models.ReceiveMessageResponse
+			err = json.NewDecoder(resp2.Body).Decode(&recResp2)
+			require.NoError(t, err)
+			assert.Len(t, recResp2.Messages, 0, "should not receive delayed message immediately")
+
+			// Wait for the delay to pass
+			time.Sleep(2100 * time.Millisecond)
+
+			// Try to receive again, should get the message now
+			req3, _ := http.NewRequest("POST", app.baseURL+"/", bytes.NewBufferString(recBody))
+			req3.Header.Set("X-Amz-Target", "AmazonSQS.ReceiveMessage")
+			resp3, err := http.DefaultClient.Do(req3)
+			require.NoError(t, err)
+			defer resp3.Body.Close()
+			assert.Equal(t, http.StatusOK, resp3.StatusCode)
+			var recResp3 models.ReceiveMessageResponse
+			err = json.NewDecoder(resp3.Body).Decode(&recResp3)
+			require.NoError(t, err)
+			assert.Len(t, recResp3.Messages, 1, "should receive message after delay")
 		})
 	})
 }
