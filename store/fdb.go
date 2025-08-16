@@ -135,11 +135,17 @@ func (s *FDBStore) ListQueues(ctx context.Context, maxResults int, nextToken, qu
 	// Find starting index from nextToken
 	startIndex := 0
 	if nextToken != "" {
+		found := false
 		for i, q := range filteredQueues {
 			if q == nextToken {
 				startIndex = i + 1
+				found = true
 				break
 			}
+		}
+		if !found {
+			// Invalid nextToken, return empty list as per SQS behavior
+			return []string{}, "", nil
 		}
 	}
 

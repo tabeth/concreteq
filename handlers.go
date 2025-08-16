@@ -419,9 +419,18 @@ func (app *App) SendMessageHandler(w http.ResponseWriter, r *http.Request) {
 	if mBody, ok := data["MessageBody"].(string); ok {
 		req.MessageBody = mBody
 	}
-	// Note: For a full implementation, you would handle all fields,
-	// including pointers and complex types like MessageAttributes.
-	// For this specific bug, only QueueUrl and MessageBody are needed.
+	if delay, ok := data["DelaySeconds"].(float64); ok {
+		delay32 := int32(delay)
+		req.DelaySeconds = &delay32
+	}
+	if dedupID, ok := data["MessageDeduplicationId"].(string); ok {
+		req.MessageDeduplicationId = &dedupID
+	}
+	if groupID, ok := data["MessageGroupId"].(string); ok {
+		req.MessageGroupId = &groupID
+	}
+	// Note: A full implementation would also handle MessageAttributes and MessageSystemAttributes.
+	// For now, we are only handling the fields required for validation logic to pass.
 
 	// --- Comprehensive Validation ---
 
