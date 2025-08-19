@@ -9,6 +9,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -71,6 +72,7 @@ func setupIntegrationTest(t *testing.T) (*testApp, func()) {
 	r := chi.NewRouter()
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
+	r.Use(middleware.RequestSize(1024 * 1024)) // 1 MB
 	app.RegisterSQSHandlers(r)
 
 	// Find a free port
@@ -477,6 +479,140 @@ func TestIntegration_ListDeletePurgeQueues(t *testing.T) {
 			assert.Equal(t, "PurgeQueueInProgress", errResp.Type)
 		})
 	})
+}
+
+func TestIntegration_SendMessageBatch(t *testing.T) {
+	app, teardown := setupIntegrationTest(t)
+	defer teardown()
+
+	// Setup a standard and a FIFO queue for the tests
+	ctx := context.Background()
+	stdQueueName := "batch-integ-std"
+	fifoQueueName := "batch-integ-fifo.fifo"
+	stdQueueURL := fmt.Sprintf("%s/queues/%s", app.baseURL, stdQueueName)
+	fifoQueueURL := fmt.Sprintf("%s/queues/%s", app.baseURL, fifoQueueName)
+
+	err := app.store.CreateQueue(ctx, stdQueueName, nil, nil)
+	require.NoError(t, err)
+	err = app.store.CreateQueue(ctx, fifoQueueName, map[string]string{"FifoQueue": "true"}, nil)
+	require.NoError(t, err)
+
+	tests := []struct {
+		name               string
+		queueURL           string
+		inputBody          string
+		expectedStatusCode int
+		expectedBody       string
+	}{
+		// 1. Batch size exceeds message size limit
+		{
+			name:     "BatchRequestTooLong",
+			queueURL: stdQueueURL,
+			inputBody:          `{"QueueUrl": "` + stdQueueURL + `", "Entries": [{"Id": "1", "MessageBody": "` + string(make([]byte, 256*1024)) + `"}]}`,
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       `{"__type":"BatchRequestTooLong", "message":"The length of all the messages put together is more than the limit."}`,
+		},
+		// 2. Partial success
+		{
+			name:     "PartialSuccess",
+			queueURL: fifoQueueURL,
+			inputBody: `{"QueueUrl": "` + fifoQueueURL + `", "Entries": [
+				{"Id": "ok", "MessageBody": "this is fine", "MessageGroupId": "g1"},
+				{"Id": "bad", "MessageBody": "this has a delay", "DelaySeconds": 10, "MessageGroupId": "g1"}
+			]}`,
+			expectedStatusCode: http.StatusOK,
+			expectedBody:       `{"Successful": [{"Id": "ok", "MD5OfMessageBody": "a252992f888890972483741634570093", "MessageId": "...", "SequenceNumber": "..."}], "Failed": [{"Id": "bad", "Code": "InvalidParameterValue", "Message": "DelaySeconds is not supported for FIFO queues.", "SenderFault": true}]}`,
+		},
+		// 3. Entire request fails (e.g., queue does not exist)
+		{
+			name:     "QueueDoesNotExist",
+			queueURL: app.baseURL + "/queues/non-existent-queue",
+			inputBody: `{"QueueUrl": "` + app.baseURL + `/queues/non-existent-queue", "Entries": [
+				{"Id": "1", "MessageBody": "wont work"}
+			]}`,
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       `{"__type":"QueueDoesNotExist", "message":"The specified queue does not exist."}`,
+		},
+		// 4. Duplicate batch entry IDs
+		{
+			name:     "BatchEntryIdsNotDistinct",
+			queueURL: stdQueueURL,
+			inputBody: `{"QueueUrl": "` + stdQueueURL + `", "Entries": [
+				{"Id": "dup", "MessageBody": "a"},
+				{"Id": "dup", "MessageBody": "b"}
+			]}`,
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       `{"__type":"BatchEntryIdsNotDistinct", "message":"Two or more batch entries in the request have the same Id."}`,
+		},
+		// 5. Empty batch
+		{
+			name:               "EmptyBatchRequest",
+			queueURL:           stdQueueURL,
+			inputBody:          `{"QueueUrl": "` + stdQueueURL + `", "Entries": []}`,
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       `{"__type":"EmptyBatchRequest", "message":"The batch request doesn't contain any entries."}`,
+		},
+		// 6. Invalid entry ID
+		{
+			name:     "InvalidBatchEntryId",
+			queueURL: stdQueueURL,
+			inputBody: `{"QueueUrl": "` + stdQueueURL + `", "Entries": [
+				{"Id": "invalid id!", "MessageBody": "a"}
+			]}`,
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       `{"__type":"InvalidBatchEntryId", "message":"The Id of a batch entry in a batch request doesn't abide by the specification."}`,
+		},
+		// 7. Queue doesn't exist (same as #3)
+		// 8. Too many items in batch
+		{
+			name:     "TooManyEntriesInBatchRequest",
+			queueURL: stdQueueURL,
+			inputBody: `{"QueueUrl": "` + stdQueueURL + `", "Entries": [
+				{"Id":"1","MessageBody":"a"},{"Id":"2","MessageBody":"a"},{"Id":"3","MessageBody":"a"},{"Id":"4","MessageBody":"a"},{"Id":"5","MessageBody":"a"},
+				{"Id":"6","MessageBody":"a"},{"Id":"7","MessageBody":"a"},{"Id":"8","MessageBody":"a"},{"Id":"9","MessageBody":"a"},{"Id":"10","MessageBody":"a"},
+				{"Id":"11","MessageBody":"a"}
+			]}`,
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       `{"__type":"TooManyEntriesInBatchRequest", "message":"The batch request contains more entries than permissible."}`,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			body := bytes.NewBufferString(tc.inputBody)
+			// The request URL for batch is different from the root
+			urlParts := strings.Split(tc.queueURL, "/queues/")
+			require.Len(t, urlParts, 2)
+			requestURL := fmt.Sprintf("%s/queues/%s/messages/batch", app.baseURL, urlParts[1])
+
+			req, err := http.NewRequest("POST", requestURL, body)
+			require.NoError(t, err)
+			req.Header.Set("Content-Type", "application/json")
+
+			resp, err := http.DefaultClient.Do(req)
+			require.NoError(t, err)
+			defer resp.Body.Close()
+
+			assert.Equal(t, tc.expectedStatusCode, resp.StatusCode)
+
+			respBody, err := io.ReadAll(resp.Body)
+			require.NoError(t, err)
+
+			// For partial success, we can't do a direct JSONEq because MessageId and SequenceNumber are dynamic.
+			if tc.name == "PartialSuccess" {
+				var actualResp models.SendMessageBatchResponse
+				err := json.Unmarshal(respBody, &actualResp)
+				require.NoError(t, err)
+				assert.Len(t, actualResp.Successful, 1)
+				assert.Len(t, actualResp.Failed, 1)
+				assert.Equal(t, "ok", actualResp.Successful[0].Id)
+				assert.Equal(t, "bad", actualResp.Failed[0].Id)
+				assert.Equal(t, "InvalidParameterValue", actualResp.Failed[0].Code)
+			} else if tc.expectedBody != "" {
+				assert.JSONEq(t, tc.expectedBody, string(respBody))
+			}
+		})
+	}
 }
 
 func TestIntegration_FifoFairness(t *testing.T) {
