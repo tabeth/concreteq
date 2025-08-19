@@ -254,6 +254,171 @@ func TestFDBStore_DeleteQueue(t *testing.T) {
 	})
 }
 
+func TestFDBStore_FifoQueue_Fairness(t *testing.T) {
+	ctx := context.Background()
+	store, teardown := setupTestDB(t)
+	defer teardown()
+
+	queueName := "test-fifo-fairness.fifo"
+	err := store.CreateQueue(ctx, queueName, map[string]string{"FifoQueue": "true"}, nil)
+	require.NoError(t, err)
+
+	// Send many messages to group-a (the noisy neighbor)
+	// and one message to two other groups.
+	noisyGroup := "group-a"
+	quietGroupB := "group-b"
+	quietGroupC := "group-c"
+
+	for i := 0; i < 10; i++ {
+		_, err := store.SendMessage(ctx, queueName, &models.SendMessageRequest{
+			MessageBody:    fmt.Sprintf("noisy-%d", i),
+			QueueUrl:       queueName,
+			MessageGroupId: &noisyGroup,
+		})
+		require.NoError(t, err)
+	}
+	_, err = store.SendMessage(ctx, queueName, &models.SendMessageRequest{
+		MessageBody:    "quiet-b",
+		QueueUrl:       queueName,
+		MessageGroupId: &quietGroupB,
+	})
+	require.NoError(t, err)
+	_, err = store.SendMessage(ctx, queueName, &models.SendMessageRequest{
+		MessageBody:    "quiet-c",
+		QueueUrl:       queueName,
+		MessageGroupId: &quietGroupC,
+	})
+	require.NoError(t, err)
+
+	// In an unfair system, we would expect to receive all 10 messages from 'group-a'
+	// before ever seeing messages from the other groups.
+	// A fair system should interleave messages from different groups.
+
+	var receivedGroupIDs []string
+	for i := 0; i < 3; i++ {
+		// Receive one message at a time to see the ordering.
+		// We set a high visibility timeout to ensure groups are locked for the duration of the test.
+		resp, err := store.ReceiveMessage(ctx, queueName, &models.ReceiveMessageRequest{
+			MaxNumberOfMessages: 1,
+			QueueUrl:            queueName,
+			VisibilityTimeout:   60,
+		})
+		require.NoError(t, err)
+		// It's possible to receive no messages if all groups are locked,
+		// but in this test setup, we should always get a message.
+		if len(resp.Messages) > 0 {
+			msg := resp.Messages[0]
+			// To get the group ID, we need to fetch the full message from the DB,
+			// as it's not returned in the ReceiveMessage response.
+			fullMsg, err := getMessageFromDB(store, queueName, msg.MessageId)
+			require.NoError(t, err)
+			receivedGroupIDs = append(receivedGroupIDs, fullMsg.MessageGroupId)
+
+			// We must delete the message to unlock the group for the next receive.
+			// This simulates a worker processing the message and deleting it.
+			err = store.DeleteMessage(ctx, queueName, msg.ReceiptHandle)
+			require.NoError(t, err)
+		}
+	}
+
+	// With the current unfair implementation, this will be ["group-a", "group-a", "group-a"]
+	// A perfectly fair implementation would be ["group-a", "group-b", "group-c"] in some order.
+	// We will assert that we see messages from at least two different groups in the first 3 receives.
+	t.Logf("Received group IDs: %v", receivedGroupIDs)
+	groupSet := make(map[string]bool)
+	for _, id := range receivedGroupIDs {
+		groupSet[id] = true
+	}
+	assert.Greater(t, len(groupSet), 1, "Expected to receive messages from more than one group")
+}
+
+// Helper function to get the full message details from the database
+func getMessageFromDB(s *FDBStore, queueName, messageID string) (*models.Message, error) {
+	var msg models.Message
+	_, err := s.db.ReadTransact(func(rtr fdb.ReadTransaction) (interface{}, error) {
+		queueDir, err := directory.Open(rtr, []string{"concreteq", queueName}, nil)
+		if err != nil {
+			return nil, err
+		}
+		messagesDir := queueDir.Sub("messages")
+		msgBytes, err := rtr.Get(messagesDir.Pack(tuple.Tuple{messageID})).Get()
+		if err != nil {
+			return nil, err
+		}
+		if msgBytes == nil {
+			return nil, fmt.Errorf("message %s not found", messageID)
+		}
+		if err := json.Unmarshal(msgBytes, &msg); err != nil {
+			return nil, err
+		}
+		return nil, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &msg, nil
+}
+
+func TestFDBStore_DeleteMessage(t *testing.T) {
+	ctx := context.Background()
+	store, teardown := setupTestDB(t)
+	defer teardown()
+
+	queueName := "test-delete-queue"
+	err := store.CreateQueue(ctx, queueName, nil, nil)
+	require.NoError(t, err)
+
+	// --- Sub-test: Successful Deletion ---
+	t.Run("Successful Deletion", func(t *testing.T) {
+		// Send and receive a message to get a valid receipt handle
+		_, err := store.SendMessage(ctx, queueName, &models.SendMessageRequest{MessageBody: "msg-to-delete"})
+		require.NoError(t, err)
+		resp, err := store.ReceiveMessage(ctx, queueName, &models.ReceiveMessageRequest{MaxNumberOfMessages: 1})
+		require.NoError(t, err)
+		require.Len(t, resp.Messages, 1)
+
+		// Delete the message
+		err = store.DeleteMessage(ctx, queueName, resp.Messages[0].ReceiptHandle)
+		assert.NoError(t, err)
+
+		// Verify the message is gone by trying to receive again after timeout
+		// (though in this implementation, deleting also removes it from inflight)
+		time.Sleep(100 * time.Millisecond) // Give time for any background processing
+		resp2, err := store.ReceiveMessage(ctx, queueName, &models.ReceiveMessageRequest{MaxNumberOfMessages: 1, WaitTimeSeconds: 0})
+		require.NoError(t, err)
+		assert.Len(t, resp2.Messages, 0)
+	})
+
+	// --- Sub-test: Non-Existent Receipt Handle ---
+	t.Run("Non-Existent Receipt Handle", func(t *testing.T) {
+		// Attempting to delete a message with a handle that doesn't exist should succeed
+		err := store.DeleteMessage(ctx, queueName, "non-existent-handle")
+		assert.NoError(t, err, "deleting a non-existent receipt handle should not return an error")
+	})
+
+	// --- Sub-test: Deleting from Non-Existent Queue ---
+	t.Run("Non-Existent Queue", func(t *testing.T) {
+		err := store.DeleteMessage(ctx, "non-existent-queue", "any-handle")
+		assert.ErrorIs(t, err, ErrQueueDoesNotExist)
+	})
+
+	// --- Sub-test: Malformed Receipt Handle ---
+	t.Run("Malformed Receipt Handle", func(t *testing.T) {
+		// To test this, we need to manually insert a bad receipt handle into FDB
+		badHandle := "bad-handle"
+		_, err := store.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
+			queueDir, _ := directory.Open(tr, []string{"concreteq", queueName}, nil)
+			inflightDir := queueDir.Sub("inflight")
+			tr.Set(inflightDir.Pack(tuple.Tuple{badHandle}), []byte("this is not valid json"))
+			return nil, nil
+		})
+		require.NoError(t, err)
+
+		err = store.DeleteMessage(ctx, queueName, badHandle)
+		assert.ErrorIs(t, err, ErrInvalidReceiptHandle)
+	})
+}
+
 func TestFDBStore_StandardQueue_ReceiveDelete(t *testing.T) {
 	ctx := context.Background()
 	store, teardown := setupTestDB(t)
