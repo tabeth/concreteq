@@ -254,6 +254,145 @@ func TestFDBStore_DeleteQueue(t *testing.T) {
 	})
 }
 
+func TestFDBStore_SendMessageBatch(t *testing.T) {
+	ctx := context.Background()
+	store, teardown := setupTestDB(t)
+	defer teardown()
+
+	queueName := "test-batch-queue"
+	err := store.CreateQueue(ctx, queueName, nil, nil)
+	require.NoError(t, err)
+
+	t.Run("sends a batch successfully to a standard queue", func(t *testing.T) {
+		batchRequest := &models.SendMessageBatchRequest{
+			QueueUrl: "http://localhost/" + queueName,
+			Entries: []models.SendMessageBatchRequestEntry{
+				{Id: "msg1", MessageBody: "batch message 1"},
+				{Id: "msg2", MessageBody: "batch message 2"},
+			},
+		}
+
+		resp, err := store.SendMessageBatch(ctx, queueName, batchRequest)
+		assert.NoError(t, err)
+		require.NotNil(t, resp)
+
+		assert.Len(t, resp.Successful, 2)
+		assert.Len(t, resp.Failed, 0)
+
+		// Verify messages in DB
+		for _, success := range resp.Successful {
+			msg, err := getMessageFromDB(store, queueName, success.MessageId)
+			require.NoError(t, err)
+			if success.Id == "msg1" {
+				assert.Equal(t, "batch message 1", msg.Body)
+			} else {
+				assert.Equal(t, "batch message 2", msg.Body)
+			}
+		}
+	})
+
+	t.Run("sends a batch to a fifo queue with deduplication", func(t *testing.T) {
+		fifoQueueName := "test-batch-fifo.fifo"
+		err := store.CreateQueue(ctx, fifoQueueName, map[string]string{"FifoQueue": "true"}, nil)
+		require.NoError(t, err)
+
+		dedupID := "batch-dedup-1"
+		gID := "batch-group-1"
+
+		batchRequest := &models.SendMessageBatchRequest{
+			QueueUrl: "http://localhost/" + fifoQueueName,
+			Entries: []models.SendMessageBatchRequestEntry{
+				{Id: "fifo1", MessageBody: "fifo batch 1", MessageGroupId: &gID, MessageDeduplicationId: &dedupID},
+				{Id: "fifo2", MessageBody: "fifo batch 2", MessageGroupId: &gID},
+			},
+		}
+
+		// First send
+		resp1, err := store.SendMessageBatch(ctx, fifoQueueName, batchRequest)
+		assert.NoError(t, err)
+		require.NotNil(t, resp1)
+		assert.Len(t, resp1.Successful, 2)
+		assert.Len(t, resp1.Failed, 0)
+		originalMsg1ID := resp1.Successful[0].MessageId
+
+		// Second send with one duplicate entry
+		batchRequest2 := &models.SendMessageBatchRequest{
+			QueueUrl: "http://localhost/" + fifoQueueName,
+			Entries: []models.SendMessageBatchRequestEntry{
+				{Id: "fifo1", MessageBody: "fifo batch 1", MessageGroupId: &gID, MessageDeduplicationId: &dedupID}, // This one is a duplicate
+				{Id: "fifo3", MessageBody: "fifo batch 3", MessageGroupId: &gID},
+			},
+		}
+
+		resp2, err := store.SendMessageBatch(ctx, fifoQueueName, batchRequest2)
+		assert.NoError(t, err)
+		require.NotNil(t, resp2)
+		assert.Len(t, resp2.Successful, 2)
+		assert.Len(t, resp2.Failed, 0)
+
+		// Check that the first message was deduplicated (same message ID)
+		assert.Equal(t, originalMsg1ID, resp2.Successful[0].MessageId)
+		// Check that the second message is new
+		assert.NotEqual(t, resp1.Successful[1].MessageId, resp2.Successful[1].MessageId)
+	})
+
+	t.Run("returns error if queue does not exist", func(t *testing.T) {
+		batchRequest := &models.SendMessageBatchRequest{
+			QueueUrl: "http://localhost/non-existent",
+			Entries: []models.SendMessageBatchRequestEntry{
+				{Id: "msg1", MessageBody: "wont be sent"},
+			},
+		}
+		_, err := store.SendMessageBatch(ctx, "non-existent", batchRequest)
+		assert.ErrorIs(t, err, ErrQueueDoesNotExist)
+	})
+
+	t.Run("handles partial failures within a batch", func(t *testing.T) {
+		gID := "batch-group-2"
+		batchRequest := &models.SendMessageBatchRequest{
+			QueueUrl: "http://localhost/" + queueName,
+			Entries: []models.SendMessageBatchRequestEntry{
+				{Id: "valid1", MessageBody: "this one is fine"},
+				{Id: "invalid1", MessageBody: "this one has delay on fifo", DelaySeconds: new(int32), MessageGroupId: &gID},
+				{Id: "valid2", MessageBody: "this one is also fine"},
+				{Id: "invalid2", MessageBody: "this one is missing group id", MessageDeduplicationId: new(string)},
+			},
+		}
+
+		// Use a FIFO queue to test FIFO-specific validation
+		fifoQueueName := "test-batch-partial-fail.fifo"
+		err := store.CreateQueue(ctx, fifoQueueName, map[string]string{"FifoQueue": "true"}, nil)
+		require.NoError(t, err)
+
+		// Set group IDs for valid entries
+		batchRequest.Entries[0].MessageGroupId = &gID
+		batchRequest.Entries[2].MessageGroupId = &gID
+
+		resp, err := store.SendMessageBatch(ctx, fifoQueueName, batchRequest)
+		assert.NoError(t, err)
+		require.NotNil(t, resp)
+
+		assert.Len(t, resp.Successful, 2)
+		assert.Len(t, resp.Failed, 2)
+
+		// Verify the successful messages are in the DB
+		_, err = getMessageFromDB(store, fifoQueueName, resp.Successful[0].MessageId)
+		assert.NoError(t, err)
+		_, err = getMessageFromDB(store, fifoQueueName, resp.Successful[1].MessageId)
+		assert.NoError(t, err)
+
+		// Verify the failed messages have the correct error codes
+		for _, f := range resp.Failed {
+			if f.Id == "invalid1" {
+				assert.Equal(t, "InvalidParameterValue", f.Code)
+			}
+			if f.Id == "invalid2" {
+				assert.Equal(t, "MissingParameter", f.Code)
+			}
+		}
+	})
+}
+
 func TestFDBStore_FifoQueue_Fairness(t *testing.T) {
 	ctx := context.Background()
 	store, teardown := setupTestDB(t)
