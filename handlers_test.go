@@ -58,8 +58,12 @@ func (m *MockStore) SendMessage(ctx context.Context, queueName string, message *
 	}
 	return args.Get(0).(*models.SendMessageResponse), args.Error(1)
 }
-func (m *MockStore) SendMessageBatch(ctx context.Context, queueName string, messages []string) ([]string, error) {
-	return nil, nil
+func (m *MockStore) SendMessageBatch(ctx context.Context, queueName string, req *models.SendMessageBatchRequest) (*models.SendMessageBatchResponse, error) {
+	args := m.Called(ctx, queueName, req)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*models.SendMessageBatchResponse), args.Error(1)
 }
 func (m *MockStore) ReceiveMessage(ctx context.Context, queueName string, req *models.ReceiveMessageRequest) (*models.ReceiveMessageResponse, error) {
 	args := m.Called(ctx, queueName, req)
@@ -236,6 +240,148 @@ func TestCreateQueueHandler(t *testing.T) {
 				} else { // It's a plain text error message from our old http.Error calls, which we should not have
 					assert.Fail(t, "Received unexpected plain text error response", "Response body: %s", rr.Body.String())
 				}
+			}
+
+			mockStore.AssertExpectations(t)
+		})
+	}
+}
+
+func TestSendMessageBatchHandler(t *testing.T) {
+	tests := []struct {
+		name               string
+		inputBody          string
+		mockSetup          func(*MockStore)
+		expectedStatusCode int
+		expectedBody       string
+	}{
+		{
+			name: "Successful Batch Send",
+			inputBody: `{
+				"QueueUrl": "http://localhost:8080/queues/my-queue",
+				"Entries": [
+					{"Id": "1", "MessageBody": "msg1"},
+					{"Id": "2", "MessageBody": "msg2"}
+				]
+			}`,
+			mockSetup: func(ms *MockStore) {
+				ms.On("SendMessageBatch", mock.Anything, "my-queue", mock.AnythingOfType("*models.SendMessageBatchRequest")).Return(&models.SendMessageBatchResponse{
+					Successful: []models.SendMessageBatchResultEntry{
+						{Id: "1", MessageId: "uuid1", MD5OfMessageBody: "md5-1"},
+						{Id: "2", MessageId: "uuid2", MD5OfMessageBody: "md5-2"},
+					},
+					Failed: []models.BatchResultErrorEntry{},
+				}, nil)
+			},
+			expectedStatusCode: http.StatusOK,
+			expectedBody:       `{"Successful":[{"Id":"1","MessageId":"uuid1","MD5OfMessageBody":"md5-1"},{"Id":"2","MessageId":"uuid2","MD5OfMessageBody":"md5-2"}],"Failed":[]}`,
+		},
+		{
+			name:               "Too Many Entries",
+			inputBody:          `{"QueueUrl": "http://localhost/queues/q", "Entries": [` + strings.Repeat(`{"Id":"_","MessageBody":"_"},`, 10) + `{"Id":"_","MessageBody":"_"}]}`,
+			mockSetup:          func(ms *MockStore) {},
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       `{"__type":"TooManyEntriesInBatchRequest", "message":"The batch request contains more entries than permissible."}`,
+		},
+		{
+			name: "Duplicate Entry Ids",
+			inputBody: `{
+				"QueueUrl": "http://localhost/queues/q",
+				"Entries": [
+					{"Id": "1", "MessageBody": "msg1"},
+					{"Id": "1", "MessageBody": "msg2"}
+				]
+			}`,
+			mockSetup:          func(ms *MockStore) {},
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       `{"__type":"BatchEntryIdsNotDistinct", "message":"Two or more batch entries in the request have the same Id."}`,
+		},
+		{
+			name:               "Empty Batch Request",
+			inputBody:          `{"QueueUrl": "http://localhost/queues/q", "Entries": []}`,
+			mockSetup:          func(ms *MockStore) {},
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       `{"__type":"EmptyBatchRequest", "message":"The batch request doesn't contain any entries."}`,
+		},
+		{
+			name: "Batch Request Too Long",
+			inputBody: `{
+				"QueueUrl": "http://localhost/queues/q",
+				"Entries": [
+					{"Id": "1", "MessageBody": "` + strings.Repeat("a", 200*1024) + `"},
+					{"Id": "2", "MessageBody": "` + strings.Repeat("b", 60*1024) + `"}
+				]
+			}`,
+			mockSetup:          func(ms *MockStore) {},
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       `{"__type":"BatchRequestTooLong", "message":"The length of all the messages put together is more than the limit."}`,
+		},
+		{
+			name: "Queue Does Not Exist",
+			inputBody: `{
+				"QueueUrl": "http://localhost/queues/non-existent",
+				"Entries": [{"Id": "1", "MessageBody": "msg1"}]
+			}`,
+			mockSetup: func(ms *MockStore) {
+				ms.On("SendMessageBatch", mock.Anything, "non-existent", mock.AnythingOfType("*models.SendMessageBatchRequest")).Return(nil, store.ErrQueueDoesNotExist)
+			},
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       `{"__type":"QueueDoesNotExist", "message":"The specified queue does not exist."}`,
+		},
+		{
+			name: "Partial Success",
+			inputBody: `{
+				"QueueUrl": "http://localhost/queues/my-queue",
+				"Entries": [
+					{"Id": "1", "MessageBody": "valid"},
+					{"Id": "2", "MessageBody": "invalid", "DelaySeconds": 901}
+				]
+			}`,
+			mockSetup: func(ms *MockStore) {
+				ms.On("SendMessageBatch", mock.Anything, "my-queue", mock.AnythingOfType("*models.SendMessageBatchRequest")).Return(&models.SendMessageBatchResponse{
+					Successful: []models.SendMessageBatchResultEntry{
+						{Id: "1", MessageId: "uuid1", MD5OfMessageBody: "md5-1"},
+					},
+					Failed: []models.BatchResultErrorEntry{
+						{Id: "2", Code: "InvalidParameterValue", Message: "DelaySeconds must be between 0 and 900.", SenderFault: true},
+					},
+				}, nil)
+			},
+			expectedStatusCode: http.StatusOK,
+			expectedBody:       `{"Successful":[{"Id":"1","MessageId":"uuid1","MD5OfMessageBody":"md5-1"}],"Failed":[{"Id":"2","Code":"InvalidParameterValue","Message":"DelaySeconds must be between 0 and 900.","SenderFault":true}]}`,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mockStore := new(MockStore)
+			tc.mockSetup(mockStore)
+
+			app := &App{Store: mockStore}
+			r := chi.NewRouter()
+			// We need to register the specific handler for this test
+			r.Post("/queues/{queueName}/messages/batch", app.SendMessageBatchHandler)
+
+			// Extract queue name from the URL in the payload
+			var payload struct {
+				QueueUrl string `json:"QueueUrl"`
+			}
+			json.Unmarshal([]byte(tc.inputBody), &payload)
+			queueName := chi.URLParam(httptest.NewRequest("POST", payload.QueueUrl, nil), "queueName")
+			if queueName == "" && payload.QueueUrl != "" {
+				queueName = payload.QueueUrl[strings.LastIndex(payload.QueueUrl, "/")+1:]
+			}
+
+			requestURL := "/queues/" + queueName + "/messages/batch"
+			req, _ := http.NewRequest("POST", requestURL, bytes.NewBufferString(tc.inputBody))
+			rr := httptest.NewRecorder()
+
+			r.ServeHTTP(rr, req)
+
+			assert.Equal(t, tc.expectedStatusCode, rr.Code)
+
+			if tc.expectedBody != "" {
+				require.JSONEq(t, tc.expectedBody, rr.Body.String())
 			}
 
 			mockStore.AssertExpectations(t)
