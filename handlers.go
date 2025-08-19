@@ -539,8 +539,20 @@ func (app *App) SendMessageHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(resp)
 }
 func (app *App) SendMessageBatchHandler(w http.ResponseWriter, r *http.Request) {
+	bodyBytes, err := io.ReadAll(r.Body)
+	if err != nil {
+		app.sendErrorResponse(w, "InvalidRequest", "Cannot read request body", http.StatusBadRequest)
+		return
+	}
+
+	// Check total payload size before unmarshaling
+	if len(bodyBytes) > 256*1024 {
+		app.sendErrorResponse(w, "BatchRequestTooLong", "The length of all the messages put together is more than the limit.", http.StatusBadRequest)
+		return
+	}
+
 	var req models.SendMessageBatchRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.Unmarshal(bodyBytes, &req); err != nil {
 		app.sendErrorResponse(w, "InvalidRequest", "Invalid request body", http.StatusBadRequest)
 		return
 	}
