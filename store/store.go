@@ -32,7 +32,7 @@ type Store interface {
 
 	// Message Management
 	SendMessage(ctx context.Context, queueName string, message *models.SendMessageRequest) (*models.SendMessageResponse, error)
-	SendMessageBatch(ctx context.Context, queueName string, messages []string) ([]string, error)
+	SendMessageBatch(ctx context.Context, queueName string, req *models.SendMessageBatchRequest) (*models.SendMessageBatchResponse, error)
 	ReceiveMessage(ctx context.Context, queueName string, req *models.ReceiveMessageRequest) (*models.ReceiveMessageResponse, error)
 	DeleteMessage(ctx context.Context, queueName string, receiptHandle string) error
 	DeleteMessageBatch(ctx context.Context, queueName string, receiptHandles []string) error

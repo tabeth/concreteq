@@ -539,7 +539,96 @@ func (app *App) SendMessageHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(resp)
 }
 func (app *App) SendMessageBatchHandler(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(http.StatusNotImplemented)
+	bodyBytes, err := io.ReadAll(r.Body)
+	if err != nil {
+		app.sendErrorResponse(w, "InvalidRequest", "Cannot read request body", http.StatusBadRequest)
+		return
+	}
+
+	// Check total payload size before unmarshaling
+	if len(bodyBytes) > 256*1024 {
+		app.sendErrorResponse(w, "BatchRequestTooLong", "The length of all the messages put together is more than the limit.", http.StatusBadRequest)
+		return
+	}
+
+	var req models.SendMessageBatchRequest
+	if err := json.Unmarshal(bodyBytes, &req); err != nil {
+		app.sendErrorResponse(w, "InvalidRequest", "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	// --- Comprehensive Validation ---
+
+	// QueueUrl
+	if req.QueueUrl == "" {
+		app.sendErrorResponse(w, "MissingParameter", "The request must contain a QueueUrl.", http.StatusBadRequest)
+		return
+	}
+
+	// EmptyBatchRequest
+	if len(req.Entries) == 0 {
+		app.sendErrorResponse(w, "EmptyBatchRequest", "The batch request doesn't contain any entries.", http.StatusBadRequest)
+		return
+	}
+
+	// TooManyEntriesInBatchRequest
+	if len(req.Entries) > 10 {
+		app.sendErrorResponse(w, "TooManyEntriesInBatchRequest", "The batch request contains more entries than permissible.", http.StatusBadRequest)
+		return
+	}
+
+	// BatchEntryIdsNotDistinct and other per-entry validation
+	ids := make(map[string]struct{})
+	totalPayloadSize := 0
+	queueName := chi.URLParam(r, "queueName")
+
+	for _, entry := range req.Entries {
+		// Check for distinct IDs
+		if _, exists := ids[entry.Id]; exists {
+			app.sendErrorResponse(w, "BatchEntryIdsNotDistinct", "Two or more batch entries in the request have the same Id.", http.StatusBadRequest)
+			return
+		}
+		ids[entry.Id] = struct{}{}
+
+		// Validate ID format (basic check)
+		if len(entry.Id) > 80 || !isValidSqsChars(entry.Id) {
+			app.sendErrorResponse(w, "InvalidBatchEntryId", "The Id of a batch entry in a batch request doesn't abide by the specification.", http.StatusBadRequest)
+			return
+		}
+
+		// Validate message body size
+		if len(entry.MessageBody) > 256*1024 {
+			app.sendErrorResponse(w, "InvalidParameterValue", fmt.Sprintf("Message body for entry with Id '%s' is too long.", entry.Id), http.StatusBadRequest)
+			return
+		}
+		totalPayloadSize += len(entry.MessageBody)
+
+		// Per-entry validation that can be handled by the store layer for partial success
+		// is now moved to the store. We only perform batch-level validation here.
+	}
+
+	// BatchRequestTooLong
+	if totalPayloadSize > 256*1024 {
+		app.sendErrorResponse(w, "BatchRequestTooLong", "The length of all the messages put together is more than the limit.", http.StatusBadRequest)
+		return
+	}
+
+	// Call the store to send the message batch
+	resp, err := app.Store.SendMessageBatch(r.Context(), queueName, &req)
+	if err != nil {
+		if errors.Is(err, store.ErrQueueDoesNotExist) {
+			app.sendErrorResponse(w, "QueueDoesNotExist", "The specified queue does not exist.", http.StatusBadRequest)
+			return
+		}
+		// For other errors, the store layer might have already populated the "Failed" part of the response.
+		// If the error is a catastrophic transaction failure, we might need to construct a failure response for all entries.
+		// For now, we assume the store handles partial failures gracefully.
+		app.sendErrorResponse(w, "InternalFailure", "Failed to send message batch", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
 }
 func (app *App) ReceiveMessageHandler(w http.ResponseWriter, r *http.Request) {
 	var req models.ReceiveMessageRequest

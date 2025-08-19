@@ -527,9 +527,157 @@ func hashSystemAttributes(attributes map[string]models.MessageSystemAttributeVal
 }
 
 
-func (s *FDBStore) SendMessageBatch(ctx context.Context, queueName string, messages []string) ([]string, error) {
-	// TODO: Implement in FoundationDB
-	return nil, nil
+func (s *FDBStore) SendMessageBatch(ctx context.Context, queueName string, req *models.SendMessageBatchRequest) (*models.SendMessageBatchResponse, error) {
+	resp, err := s.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
+		exists, err := s.dir.Exists(tr, []string{queueName})
+		if err != nil {
+			return nil, err
+		}
+		if !exists {
+			return nil, ErrQueueDoesNotExist
+		}
+
+		queueDir, err := s.dir.Open(tr, []string{queueName}, nil)
+		if err != nil {
+			return nil, err
+		}
+		messagesDir := queueDir.Sub("messages")
+		isFifo := strings.HasSuffix(queueName, ".fifo")
+
+		successful := []models.SendMessageBatchResultEntry{}
+		failed := []models.BatchResultErrorEntry{}
+
+		for _, entry := range req.Entries {
+			// Per-entry validation
+			if entry.DelaySeconds != nil {
+				if *entry.DelaySeconds < 0 || *entry.DelaySeconds > 900 {
+					failed = append(failed, models.BatchResultErrorEntry{Id: entry.Id, Code: "InvalidParameterValue", Message: "DelaySeconds must be between 0 and 900.", SenderFault: true})
+					continue
+				}
+				if isFifo {
+					failed = append(failed, models.BatchResultErrorEntry{Id: entry.Id, Code: "InvalidParameterValue", Message: "DelaySeconds is not supported for FIFO queues.", SenderFault: true})
+					continue
+				}
+			}
+			if isFifo && entry.MessageGroupId == nil {
+				failed = append(failed, models.BatchResultErrorEntry{Id: entry.Id, Code: "MissingParameter", Message: "MessageGroupId is required for FIFO queues.", SenderFault: true})
+				continue
+			}
+
+			// FIFO-specific: Check for send deduplication
+			if isFifo && entry.MessageDeduplicationId != nil && *entry.MessageDeduplicationId != "" {
+				dedupDir := queueDir.Sub("dedup")
+				dedupKey := dedupDir.Pack(tuple.Tuple{*entry.MessageDeduplicationId})
+				val, err := tr.Get(dedupKey).Get()
+				if err != nil {
+					// Add to failed and continue
+					failed = append(failed, models.BatchResultErrorEntry{Id: entry.Id, Code: "InternalError", Message: err.Error(), SenderFault: false})
+					continue
+				}
+				if val != nil {
+					// Message with this dedup ID already exists.
+					// SQS returns the original stored response for a duplicate.
+					var storedResp models.SendMessageBatchResultEntry
+					if err := json.Unmarshal(val, &storedResp); err == nil {
+						successful = append(successful, storedResp)
+						continue
+					}
+				}
+			}
+
+			messageID := uuid.New().String()
+			bodyHash := md5.Sum([]byte(entry.MessageBody))
+			md5OfBody := hex.EncodeToString(bodyHash[:])
+			var md5OfAttributes string
+			if len(entry.MessageAttributes) > 0 {
+				attrHash := md5.Sum(hashAttributes(entry.MessageAttributes, nil))
+				md5OfAttributes = hex.EncodeToString(attrHash[:])
+			}
+
+			sentTimestamp := time.Now().Unix()
+			internalMessage := models.Message{
+				ID:              messageID,
+				Body:            entry.MessageBody,
+				Attributes:      entry.MessageAttributes,
+				MD5OfBody:       md5OfBody,
+				MD5OfAttributes: md5OfAttributes,
+				SentTimestamp:   sentTimestamp,
+				SenderId:        "123456789012", // Placeholder
+			}
+
+			if isFifo {
+				fifoIdxDir := queueDir.Sub("fifo_idx")
+				seq, err := s.getNextSequenceNumber(tr, queueDir)
+				if err != nil {
+					failed = append(failed, models.BatchResultErrorEntry{Id: entry.Id, Code: "InternalError", Message: "Failed to generate sequence number.", SenderFault: false})
+					continue
+				}
+				internalMessage.SequenceNumber = seq
+				internalMessage.MessageGroupId = *entry.MessageGroupId
+				fifoKey := fifoIdxDir.Pack(tuple.Tuple{*entry.MessageGroupId, seq})
+				tr.Set(fifoKey, []byte(messageID))
+			} else {
+				visibleIdxDir := queueDir.Sub("visible_idx")
+				visibleAfter := sentTimestamp
+				if entry.DelaySeconds != nil {
+					visibleAfter += int64(*entry.DelaySeconds)
+				}
+				internalMessage.VisibleAfter = visibleAfter
+				visKey := visibleIdxDir.Pack(tuple.Tuple{visibleAfter, messageID})
+				tr.Set(visKey, []byte{})
+			}
+
+			msgBytes, err := json.Marshal(internalMessage)
+			if err != nil {
+				failed = append(failed, models.BatchResultErrorEntry{Id: entry.Id, Code: "InternalError", Message: "Failed to marshal message.", SenderFault: false})
+				continue
+			}
+			tr.Set(messagesDir.Pack(tuple.Tuple{messageID}), msgBytes)
+
+			resultEntry := models.SendMessageBatchResultEntry{
+				Id:               entry.Id,
+				MessageId:        messageID,
+				MD5OfMessageBody: md5OfBody,
+			}
+			if md5OfAttributes != "" {
+				resultEntry.MD5OfMessageAttributes = &md5OfAttributes
+			}
+			if isFifo {
+				seqStr := strconv.FormatInt(internalMessage.SequenceNumber, 10)
+				resultEntry.SequenceNumber = &seqStr
+			}
+
+			successful = append(successful, resultEntry)
+
+			if isFifo && entry.MessageDeduplicationId != nil && *entry.MessageDeduplicationId != "" {
+				dedupDir := queueDir.Sub("dedup")
+				dedupKey := dedupDir.Pack(tuple.Tuple{*entry.MessageDeduplicationId})
+				// Store the result entry for future deduplication lookups
+				respBytes, err := json.Marshal(resultEntry)
+				if err == nil {
+					tr.Set(dedupKey, respBytes)
+				}
+			}
+		}
+
+		return &models.SendMessageBatchResponse{Successful: successful, Failed: failed}, nil
+	})
+
+	if err != nil {
+		// If the transaction fails, we need to construct a failure response for all entries.
+		if errors.Is(err, ErrQueueDoesNotExist) {
+			// Special case where the entire batch fails because the queue doesn't exist.
+			// SQS would likely throw a single QueueDoesNotExist error at the top level.
+			// Our handler should manage this. For the store, returning the specific error is correct.
+			return nil, err
+		}
+		// For other transaction-level errors, we can't know which message failed.
+		// A robust implementation might return a generic failure for all entries.
+		// However, for simplicity, we'll propagate the error up.
+		return nil, err
+	}
+
+	return resp.(*models.SendMessageBatchResponse), nil
 }
 
 func (s *FDBStore) receiveStandardMessages(tr fdb.Transaction, queueDir directory.DirectorySubspace, req *models.ReceiveMessageRequest, maxMessages int, visibilityTimeout int) ([]models.ResponseMessage, error) {
