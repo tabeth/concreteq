@@ -131,3 +131,44 @@ type ErrorResponse struct {
 	Type    string `json:"__type"`
 	Message string `json:"message"`
 }
+
+// SendMessageBatchRequest defines the parameters for SendMessageBatch action.
+type SendMessageBatchRequest struct {
+	QueueUrl string                         `json:"QueueUrl"`
+	Entries  []SendMessageBatchRequestEntry `json:"Entries"`
+}
+
+// SendMessageBatchRequestEntry defines a single message to be sent in a batch.
+type SendMessageBatchRequestEntry struct {
+	Id                      string                             `json:"Id"`
+	MessageBody             string                             `json:"MessageBody"`
+	DelaySeconds            *int32                             `json:"DelaySeconds,omitempty"`
+	MessageAttributes       map[string]MessageAttributeValue   `json:"MessageAttributes,omitempty"`
+	MessageSystemAttributes map[string]MessageSystemAttributeValue `json:"MessageSystemAttributes,omitempty"`
+	MessageDeduplicationId  *string                            `json:"MessageDeduplicationId,omitempty"`
+	MessageGroupId          *string                            `json:"MessageGroupId,omitempty"`
+}
+
+// SendMessageBatchResponse defines the structure for the SendMessageBatch response.
+type SendMessageBatchResponse struct {
+	Successful []SendMessageBatchResultEntry `json:"Successful"`
+	Failed     []BatchResultErrorEntry       `json:"Failed"`
+}
+
+// SendMessageBatchResultEntry contains the details of a successfully sent message in a batch.
+type SendMessageBatchResultEntry struct {
+	Id                           string  `json:"Id"`
+	MessageId                    string  `json:"MessageId"`
+	MD5OfMessageBody             string  `json:"MD5OfMessageBody"`
+	MD5OfMessageAttributes       *string `json:"MD5OfMessageAttributes,omitempty"`
+	MD5OfMessageSystemAttributes *string `json:"MD5OfMessageSystemAttributes,omitempty"`
+	SequenceNumber               *string `json:"SequenceNumber,omitempty"`
+}
+
+// BatchResultErrorEntry contains the details of a failed message in a batch.
+type BatchResultErrorEntry struct {
+	Id          string `json:"Id"`
+	Code        string `json:"Code"`
+	Message     string `json:"Message"`
+	SenderFault bool   `json:"SenderFault"`
+}
