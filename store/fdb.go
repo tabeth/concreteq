@@ -396,6 +396,12 @@ func (s *FDBStore) buildResponseAttributes(msg *models.Message, req *models.Rece
 	if wantsAll || requestedAttrs["SenderId"] {
 		attrs["SenderId"] = msg.SenderId
 	}
+	if msg.MessageGroupId != "" && (wantsAll || requestedAttrs["MessageGroupId"]) {
+		attrs["MessageGroupId"] = msg.MessageGroupId
+	}
+	if msg.SequenceNumber != 0 && (wantsAll || requestedAttrs["SequenceNumber"]) {
+		attrs["SequenceNumber"] = strconv.FormatInt(msg.SequenceNumber, 10)
+	}
 
 	return attrs
 }
@@ -806,16 +812,19 @@ func (s *FDBStore) DeleteMessage(ctx context.Context, queueName string, receiptH
 		// 1. Find the receipt handle in the inflight records
 		inflightKey := inflightDir.Pack(tuple.Tuple{receiptHandle})
 		receiptBytes, err := tr.Get(inflightKey).Get()
-		if err != nil { return nil, err }
+		if err != nil {
+			return nil, err
+		}
+		// If the receipt handle doesn't exist, the message is already considered
+		// deleted or was never in-flight. SQS considers this a successful deletion.
 		if receiptBytes == nil {
-			// TODO: This should be a specific SQS error, InvalidReceiptHandle
-			return nil, errors.New("receipt handle not found")
+			return nil, nil
 		}
 
 		var receiptData map[string]interface{}
 		if err := json.Unmarshal(receiptBytes, &receiptData); err != nil {
-			// Corrupt receipt, treat as invalid
-			return nil, errors.New("invalid receipt handle")
+			// If the handle is corrupt, it's an invalid handle.
+			return nil, ErrInvalidReceiptHandle
 		}
 
 		messageID := receiptData["id"].(string)
