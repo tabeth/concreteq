@@ -76,8 +76,12 @@ func (m *MockStore) DeleteMessage(ctx context.Context, queueName string, receipt
 	args := m.Called(ctx, queueName, receiptHandle)
 	return args.Error(0)
 }
-func (m *MockStore) DeleteMessageBatch(ctx context.Context, queueName string, receiptHandles []string) error {
-	return nil
+func (m *MockStore) DeleteMessageBatch(ctx context.Context, queueName string, entries []models.DeleteMessageBatchRequestEntry) (*models.DeleteMessageBatchResponse, error) {
+	args := m.Called(ctx, queueName, entries)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*models.DeleteMessageBatchResponse), args.Error(1)
 }
 func (m *MockStore) ChangeMessageVisibility(ctx context.Context, queueName string, receiptHandle string, visibilityTimeout int) error {
 	return nil
@@ -240,6 +244,98 @@ func TestCreateQueueHandler(t *testing.T) {
 				} else { // It's a plain text error message from our old http.Error calls, which we should not have
 					assert.Fail(t, "Received unexpected plain text error response", "Response body: %s", rr.Body.String())
 				}
+			}
+
+			mockStore.AssertExpectations(t)
+		})
+	}
+}
+
+func TestDeleteMessageBatchHandler(t *testing.T) {
+	tests := []struct {
+		name               string
+		inputBody          string
+		mockSetup          func(*MockStore)
+		expectedStatusCode int
+		expectedBody       string
+	}{
+		{
+			name: "Successful Batch Deletion",
+			inputBody: `{
+				"QueueUrl": "http://localhost:8080/queues/my-queue",
+				"Entries": [
+					{"Id": "msg1", "ReceiptHandle": "handle1"},
+					{"Id": "msg2", "ReceiptHandle": "handle2"}
+				]
+			}`,
+			mockSetup: func(ms *MockStore) {
+				ms.On("DeleteMessageBatch", mock.Anything, "my-queue", mock.AnythingOfType("[]models.DeleteMessageBatchRequestEntry")).Return(&models.DeleteMessageBatchResponse{
+					Successful: []models.DeleteMessageBatchResultEntry{
+						{Id: "msg1"},
+						{Id: "msg2"},
+					},
+					Failed: []models.BatchResultErrorEntry{},
+				}, nil)
+			},
+			expectedStatusCode: http.StatusOK,
+			expectedBody:       `{"Successful":[{"Id":"msg1"},{"Id":"msg2"}],"Failed":[]}`,
+		},
+		{
+			name:      "Queue Does Not Exist",
+			inputBody: `{"QueueUrl": "http://localhost/queues/non-existent", "Entries": [{"Id": "1", "ReceiptHandle": "h1"}]}`,
+			mockSetup: func(ms *MockStore) {
+				ms.On("DeleteMessageBatch", mock.Anything, "non-existent", mock.Anything).Return(nil, store.ErrQueueDoesNotExist)
+			},
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       `{"__type":"QueueDoesNotExist", "message":"The specified queue does not exist."}`,
+		},
+		{
+			name:      "Partial Failure",
+			inputBody: `{"QueueUrl": "http://localhost/queues/q", "Entries": [{"Id": "1", "ReceiptHandle": "h1"}]}`,
+			mockSetup: func(ms *MockStore) {
+				ms.On("DeleteMessageBatch", mock.Anything, "q", mock.Anything).Return(&models.DeleteMessageBatchResponse{
+					Successful: []models.DeleteMessageBatchResultEntry{{Id: "ok_id"}},
+					Failed:     []models.BatchResultErrorEntry{{Id: "fail_id", Code: "InternalError", Message: "something went wrong", SenderFault: false}},
+				}, nil)
+			},
+			expectedStatusCode: http.StatusOK,
+			expectedBody:       `{"Successful":[{"Id":"ok_id"}],"Failed":[{"Id":"fail_id","Code":"InternalError","Message":"something went wrong","SenderFault":false}]}`,
+		},
+		{
+			name:               "Too Many Entries",
+			inputBody:          `{"QueueUrl": "http://localhost/queues/q", "Entries": [` + strings.Repeat(`{"Id":"_","ReceiptHandle":"_"},`, 10) + `{"Id":"_","ReceiptHandle":"_"}]}`,
+			mockSetup:          func(ms *MockStore) {},
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       `{"__type":"TooManyEntriesInBatchRequest", "message":"The batch request contains more entries than permissible."}`,
+		},
+		{
+			name:               "Duplicate Entry Ids",
+			inputBody:          `{"QueueUrl": "http://localhost/queues/q", "Entries": [{"Id": "1", "ReceiptHandle": "h1"}, {"Id": "1", "ReceiptHandle": "h2"}]}`,
+			mockSetup:          func(ms *MockStore) {},
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       `{"__type":"BatchEntryIdsNotDistinct", "message":"Two or more batch entries in the request have the same Id."}`,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mockStore := new(MockStore)
+			tc.mockSetup(mockStore)
+
+			app := &App{Store: mockStore}
+			r := chi.NewRouter()
+			app.RegisterSQSHandlers(r)
+
+			req, _ := http.NewRequest("POST", "/", bytes.NewBufferString(tc.inputBody))
+			req.Header.Set("X-Amz-Target", "AmazonSQS.DeleteMessageBatch")
+			rr := httptest.NewRecorder()
+
+			r.ServeHTTP(rr, req)
+
+			assert.Equal(t, tc.expectedStatusCode, rr.Code)
+
+			if tc.expectedBody != "" {
+				require.JSONEq(t, tc.expectedBody, rr.Body.String())
 			}
 
 			mockStore.AssertExpectations(t)

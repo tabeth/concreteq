@@ -172,3 +172,26 @@ type BatchResultErrorEntry struct {
 	Message     string `json:"Message"`
 	SenderFault bool   `json:"SenderFault"`
 }
+
+// DeleteMessageBatchRequest defines the parameters for DeleteMessageBatch action.
+type DeleteMessageBatchRequest struct {
+	QueueUrl string                           `json:"QueueUrl"`
+	Entries  []DeleteMessageBatchRequestEntry `json:"Entries"`
+}
+
+// DeleteMessageBatchRequestEntry defines a single message to be deleted in a batch.
+type DeleteMessageBatchRequestEntry struct {
+	Id            string `json:"Id"`
+	ReceiptHandle string `json:"ReceiptHandle"`
+}
+
+// DeleteMessageBatchResponse defines the structure for the DeleteMessageBatch response.
+type DeleteMessageBatchResponse struct {
+	Successful []DeleteMessageBatchResultEntry `json:"Successful"`
+	Failed     []BatchResultErrorEntry         `json:"Failed"`
+}
+
+// DeleteMessageBatchResultEntry contains the details of a successfully deleted message in a batch.
+type DeleteMessageBatchResultEntry struct {
+	Id string `json:"Id"`
+}
