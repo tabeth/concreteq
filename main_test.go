@@ -718,6 +718,96 @@ func TestIntegration_FifoFairness(t *testing.T) {
 	assert.Greater(t, len(groupSet), 1, "Expected to receive messages from more than one group via HTTP")
 }
 
+func TestIntegration_DeleteMessageBatch(t *testing.T) {
+	app, teardown := setupIntegrationTest(t)
+	defer teardown()
+
+	ctx := context.Background()
+	queueName := "delete-batch-integ-queue"
+	queueURL := fmt.Sprintf("%s/queues/%s", app.baseURL, queueName)
+
+	// Setup: Create a queue
+	err := app.store.CreateQueue(ctx, queueName, nil, nil)
+	require.NoError(t, err)
+
+	t.Run("Successful Batch Deletion", func(t *testing.T) {
+		// Send 2 messages to delete
+		_, err := app.store.SendMessage(ctx, queueName, &models.SendMessageRequest{MessageBody: "msg1"})
+		require.NoError(t, err)
+		_, err = app.store.SendMessage(ctx, queueName, &models.SendMessageRequest{MessageBody: "msg2"})
+		require.NoError(t, err)
+
+		// Receive them to get receipt handles
+		recResp, err := app.store.ReceiveMessage(ctx, queueName, &models.ReceiveMessageRequest{MaxNumberOfMessages: 2})
+		require.NoError(t, err)
+		require.Len(t, recResp.Messages, 2)
+
+		// Construct and send the delete batch request
+		delReq := models.DeleteMessageBatchRequest{
+			QueueUrl: queueURL,
+			Entries: []models.DeleteMessageBatchRequestEntry{
+				{Id: "m1", ReceiptHandle: recResp.Messages[0].ReceiptHandle},
+				{Id: "m2", ReceiptHandle: recResp.Messages[1].ReceiptHandle},
+			},
+		}
+		bodyBytes, _ := json.Marshal(delReq)
+		req, _ := http.NewRequest("POST", app.baseURL+"/", bytes.NewBuffer(bodyBytes))
+		req.Header.Set("X-Amz-Target", "AmazonSQS.DeleteMessageBatch")
+		httpResp, err := http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		defer httpResp.Body.Close()
+
+		assert.Equal(t, http.StatusOK, httpResp.StatusCode)
+		var delResp models.DeleteMessageBatchResponse
+		err = json.NewDecoder(httpResp.Body).Decode(&delResp)
+		require.NoError(t, err)
+		assert.Len(t, delResp.Successful, 2)
+		assert.Len(t, delResp.Failed, 0)
+	})
+
+	t.Run("Partial Failure", func(t *testing.T) {
+		// Send 1 message to delete
+		_, err := app.store.SendMessage(ctx, queueName, &models.SendMessageRequest{MessageBody: "msg-partial"})
+		require.NoError(t, err)
+		recResp, err := app.store.ReceiveMessage(ctx, queueName, &models.ReceiveMessageRequest{MaxNumberOfMessages: 1})
+		require.NoError(t, err)
+		require.Len(t, recResp.Messages, 1)
+
+		// Construct and send the delete batch request with one valid and one invalid handle
+		delReq := models.DeleteMessageBatchRequest{
+			QueueUrl: queueURL,
+			Entries: []models.DeleteMessageBatchRequestEntry{
+				{Id: "valid_msg", ReceiptHandle: recResp.Messages[0].ReceiptHandle},
+				{Id: "invalid_msg", ReceiptHandle: "this-is-an-invalid-handle"},
+			},
+		}
+		// Manually insert a malformed receipt handle in the DB to test the "failed" path
+		_, err = app.store.GetDB().Transact(func(tr fdb.Transaction) (interface{}, error) {
+			qDir, _ := directory.Open(tr, []string{"concreteq", queueName}, nil)
+			tr.Set(qDir.Sub("inflight").Pack(tuple.Tuple{"this-is-an-invalid-handle"}), []byte("bad-data"))
+			return nil, nil
+		})
+		require.NoError(t, err)
+
+
+		bodyBytes, _ := json.Marshal(delReq)
+		req, _ := http.NewRequest("POST", app.baseURL+"/", bytes.NewBuffer(bodyBytes))
+		req.Header.Set("X-Amz-Target", "AmazonSQS.DeleteMessageBatch")
+		httpResp, err := http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		defer httpResp.Body.Close()
+
+		assert.Equal(t, http.StatusOK, httpResp.StatusCode)
+		var delResp models.DeleteMessageBatchResponse
+		err = json.NewDecoder(httpResp.Body).Decode(&delResp)
+		require.NoError(t, err)
+		assert.Len(t, delResp.Successful, 1)
+		assert.Len(t, delResp.Failed, 1)
+		assert.Equal(t, "valid_msg", delResp.Successful[0].Id)
+		assert.Equal(t, "invalid_msg", delResp.Failed[0].Id)
+	})
+}
+
 func TestIntegration_DeleteMessage(t *testing.T) {
 	app, teardown := setupIntegrationTest(t)
 	defer teardown()
