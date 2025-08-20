@@ -32,15 +32,21 @@ func (s *FDBStore) GetDB() fdb.Database {
 	return s.db
 }
 
-// NewFDBStore creates a new FDBStore.
+// NewFDBStore creates a new FDBStore with the default application path.
 func NewFDBStore() (*FDBStore, error) {
+	return NewFDBStoreAtPath("concreteq")
+}
+
+// NewFDBStoreAtPath creates a new FDBStore at a specific directory path.
+// This is useful for testing to isolate test runs.
+func NewFDBStoreAtPath(path ...string) (*FDBStore, error) {
 	fdb.MustAPIVersion(730)
 	db, err := fdb.OpenDefault()
 	if err != nil {
 		return nil, err
 	}
 
-	dir, err := directory.CreateOrOpen(db, []string{"concreteq"}, nil)
+	dir, err := directory.CreateOrOpen(db, path, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -763,7 +769,7 @@ func (s *FDBStore) receiveStandardMessages(tr fdb.Transaction, queueDir director
 func (s *FDBStore) receiveFifoMessages(tr fdb.Transaction, queueDir directory.DirectorySubspace, req *models.ReceiveMessageRequest, maxMessages int, visibilityTimeout int) ([]models.ResponseMessage, error) {
 	messagesDir := queueDir.Sub("messages")
 	fifoIdxDir := queueDir.Sub("fifo_idx")
-	inflightDir := queueDir.Sub("inflight_groups")
+	inflightGroupsDir := queueDir.Sub("inflight_groups")
 	receiveAttemptsDir := queueDir.Sub("receive_attempts")
 	now := time.Now().Unix()
 
@@ -787,36 +793,54 @@ func (s *FDBStore) receiveFifoMessages(tr fdb.Transaction, queueDir directory.Di
 
 	var receivedMessages []models.ResponseMessage
 	var targetGroupID string
-	var processedGroups = make(map[string]bool)
 
-	// 2. Find an available message group
-	pr, _ := fdb.PrefixRange(fifoIdxDir.Pack(tuple.Tuple{}))
-	iter := tr.GetRange(pr, fdb.RangeOptions{}).Iterator()
+	// 2. Find an available message group with fairness
+	findAvailableGroup := func(startKey, endKey fdb.KeyConvertible) (string, error) {
+		iter := tr.GetRange(fdb.KeyRange{Begin: startKey, End: endKey}, fdb.RangeOptions{}).Iterator()
+		processedGroups := make(map[string]bool)
+		for iter.Advance() {
+			kv := iter.MustGet()
+			t, err := fifoIdxDir.Unpack(kv.Key)
+			if err != nil { continue }
+			groupID := t[0].(string)
+			if processedGroups[groupID] { continue }
+			processedGroups[groupID] = true
 
-	for iter.Advance() {
-		kv := iter.MustGet()
-		t, err := fifoIdxDir.Unpack(kv.Key)
-		if err != nil { continue }
+			lockKey := inflightGroupsDir.Pack(tuple.Tuple{groupID})
+			lockVal, err := tr.Get(lockKey).Get()
+			if err != nil { return "", err }
 
-		groupID := t[0].(string)
-		if processedGroups[groupID] { continue } // Already checked this group
-
-		// Check if the group is locked
-		lockKey := inflightDir.Pack(tuple.Tuple{groupID})
-		lockVal, err := tr.Get(lockKey).Get()
-		if err != nil { return nil, err }
-
-		if lockVal != nil {
-			lockExpiry, err := strconv.ParseInt(string(lockVal), 10, 64)
-			if err == nil && now < lockExpiry {
-				processedGroups[groupID] = true
-				continue // Group is locked, try next message
+			if lockVal != nil {
+				lockExpiry, err := strconv.ParseInt(string(lockVal), 10, 64)
+				if err == nil && now < lockExpiry {
+					continue // Group is locked
+				}
 			}
+			return groupID, nil // Found available group
 		}
+		return "", nil // No group found in this range
+	}
 
-		// This group is available, so we'll process it.
-		targetGroupID = groupID
-		break
+	lastGroupKey := queueDir.Pack(tuple.Tuple{"last_group_id"})
+	lastGroupBytes, err := tr.Get(lastGroupKey).Get()
+	if err != nil { return nil, err }
+
+	prefixRange, _ := fdb.PrefixRange(fifoIdxDir.Pack(tuple.Tuple{}))
+	scanStartKey := prefixRange.Begin
+	if len(lastGroupBytes) > 0 {
+		// Start scan after the last served group ID to be fair.
+		// A null byte is appended to ensure we start at the next possible key.
+		scanStartKey = fifoIdxDir.Pack(tuple.Tuple{string(lastGroupBytes) + "\x00"})
+	}
+
+	// First scan: from last served group to the end
+	targetGroupID, err = findAvailableGroup(scanStartKey, prefixRange.End)
+	if err != nil { return nil, err }
+
+	// Second scan (wrap around): from beginning to the last served group
+	if targetGroupID == "" {
+		targetGroupID, err = findAvailableGroup(prefixRange.Begin, scanStartKey)
+		if err != nil { return nil, err }
 	}
 
 	// 3. If no available group was found, return empty
@@ -830,7 +854,7 @@ func (s *FDBStore) receiveFifoMessages(tr fdb.Transaction, queueDir directory.Di
 	if err != nil { return nil, err }
 	r := tr.GetRange(pr, fdb.RangeOptions{Limit: maxMessages})
 
-	iter = r.Iterator()
+	iter := r.Iterator()
 	for iter.Advance() {
 		kv := iter.MustGet()
 		messageID := string(kv.Value)
@@ -871,7 +895,10 @@ func (s *FDBStore) receiveFifoMessages(tr fdb.Transaction, queueDir directory.Di
 	if len(receivedMessages) > 0 {
 		// Lock the group
 		lockExpiry := now + int64(visibilityTimeout)
-		tr.Set(inflightDir.Pack(tuple.Tuple{targetGroupID}), []byte(strconv.FormatInt(lockExpiry, 10)))
+		tr.Set(inflightGroupsDir.Pack(tuple.Tuple{targetGroupID}), []byte(strconv.FormatInt(lockExpiry, 10)))
+
+		// Update the last group served for fairness
+		tr.Set(lastGroupKey, []byte(targetGroupID))
 
 		// Store the result for deduplication
 		if req.ReceiveRequestAttemptId != "" {
@@ -977,23 +1004,40 @@ func (s *FDBStore) DeleteMessage(ctx context.Context, queueName string, receiptH
 
 		messageID := receiptData["id"].(string)
 
-		// 2. Delete the primary message
+		// 2. Get the full message to check its group ID for FIFO unlocking
+		msgBytes, err := tr.Get(messagesDir.Pack(tuple.Tuple{messageID})).Get()
+		if err != nil {
+			return nil, err
+		}
+		// If message is already gone, we can still treat deletion as success
+		if msgBytes != nil {
+			isFifo := strings.HasSuffix(queueName, ".fifo")
+			if isFifo {
+				var msg models.Message
+				if err := json.Unmarshal(msgBytes, &msg); err == nil && msg.MessageGroupId != "" {
+					// Unlock the message group
+					inflightGroupsDir := queueDir.Sub("inflight_groups")
+					tr.Clear(inflightGroupsDir.Pack(tuple.Tuple{msg.MessageGroupId}))
+				}
+			}
+		}
+
+		// 3. Delete the primary message
 		tr.Clear(messagesDir.Pack(tuple.Tuple{messageID}))
 
-		// 3. Delete the message from the correct index
+		// 4. Delete the message from the correct index
 		if fifoKeyStr, ok := receiptData["fifo_key"].(string); ok {
 			// It's a FIFO message, delete from fifo_idx
 			fifoKey, err := base64.StdEncoding.DecodeString(fifoKeyStr)
-			if err != nil { return nil, errors.New("invalid receipt handle: corrupt fifo_key") }
-			tr.Clear(fdb.Key(fifoKey))
-		} else if visKeyStr, ok := receiptData["vis_key"].(string); ok {
+			if err == nil {
+				tr.Clear(fdb.Key(fifoKey))
+			}
+		} else if visKeyBytes, ok := receiptData["vis_key"].([]byte); ok {
 			// It's a Standard message, delete from visible_idx
-			visKey, err := base64.StdEncoding.DecodeString(visKeyStr)
-			if err != nil { return nil, errors.New("invalid receipt handle: corrupt vis_key") }
-			tr.Clear(fdb.Key(visKey))
+			tr.Clear(fdb.Key(visKeyBytes))
 		}
 
-		// 4. Delete the inflight receipt handle
+		// 5. Delete the inflight receipt handle
 		tr.Clear(inflightKey)
 
 		return nil, nil
@@ -1001,9 +1045,93 @@ func (s *FDBStore) DeleteMessage(ctx context.Context, queueName string, receiptH
 	return err
 }
 
-func (s *FDBStore) DeleteMessageBatch(ctx context.Context, queueName string, receiptHandles []string) error {
-	// TODO: Implement in FoundationDB
-	return nil
+func (s *FDBStore) DeleteMessageBatch(ctx context.Context, queueName string, entries []models.DeleteMessageBatchRequestEntry) (*models.DeleteMessageBatchResponse, error) {
+	resp, err := s.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
+		exists, err := s.dir.Exists(tr, []string{queueName})
+		if err != nil {
+			return nil, err
+		}
+		if !exists {
+			// SQS returns a batch response with all entries failed if the queue doesn't exist.
+			// However, a top-level error is more idiomatic for a store layer.
+			// The handler can transform this into the appropriate batch response.
+			return nil, ErrQueueDoesNotExist
+		}
+
+		queueDir, err := s.dir.Open(tr, []string{queueName}, nil)
+		if err != nil {
+			return nil, err
+		}
+
+		messagesDir := queueDir.Sub("messages")
+		inflightDir := queueDir.Sub("inflight")
+		isFifo := strings.HasSuffix(queueName, ".fifo")
+
+		successful := []models.DeleteMessageBatchResultEntry{}
+		failed := []models.BatchResultErrorEntry{}
+
+		for _, entry := range entries {
+			receiptHandle := entry.ReceiptHandle
+			inflightKey := inflightDir.Pack(tuple.Tuple{receiptHandle})
+			receiptBytes, err := tr.Get(inflightKey).Get()
+			if err != nil {
+				// Transactional error, fail the whole batch.
+				return nil, err
+			}
+
+			// A non-existent receipt handle is considered a success by SQS.
+			if receiptBytes == nil {
+				successful = append(successful, models.DeleteMessageBatchResultEntry{Id: entry.Id})
+				continue
+			}
+
+			var receiptData map[string]interface{}
+			if err := json.Unmarshal(receiptBytes, &receiptData); err != nil {
+				failed = append(failed, models.BatchResultErrorEntry{Id: entry.Id, Code: "InvalidReceiptHandle", Message: "The receipt handle is not valid.", SenderFault: true})
+				continue
+			}
+
+			messageID, ok := receiptData["id"].(string)
+			if !ok {
+				failed = append(failed, models.BatchResultErrorEntry{Id: entry.Id, Code: "InvalidReceiptHandle", Message: "The receipt handle is corrupt.", SenderFault: true})
+				continue
+			}
+
+			// Get the full message to check its group ID for FIFO unlocking
+			msgBytes, err := tr.Get(messagesDir.Pack(tuple.Tuple{messageID})).Get()
+			if err != nil { return nil, err }
+
+			if msgBytes != nil && isFifo {
+				var msg models.Message
+				if err := json.Unmarshal(msgBytes, &msg); err == nil && msg.MessageGroupId != "" {
+					inflightGroupsDir := queueDir.Sub("inflight_groups")
+					tr.Clear(inflightGroupsDir.Pack(tuple.Tuple{msg.MessageGroupId}))
+				}
+			}
+
+			// Delete the primary message and the inflight handle
+			tr.Clear(messagesDir.Pack(tuple.Tuple{messageID}))
+			tr.Clear(inflightKey)
+
+			// Delete from the correct index
+			if fifoKeyStr, ok := receiptData["fifo_key"].(string); ok {
+				fifoKey, err := base64.StdEncoding.DecodeString(fifoKeyStr)
+				if err == nil {
+					tr.Clear(fdb.Key(fifoKey))
+				}
+			}
+
+			successful = append(successful, models.DeleteMessageBatchResultEntry{Id: entry.Id})
+		}
+
+		return &models.DeleteMessageBatchResponse{Successful: successful, Failed: failed}, nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	return resp.(*models.DeleteMessageBatchResponse), nil
 }
 
 func (s *FDBStore) ChangeMessageVisibility(ctx context.Context, queueName string, receiptHandle string, visibilityTimeout int) error {

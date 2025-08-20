@@ -35,7 +35,7 @@ type Store interface {
 	SendMessageBatch(ctx context.Context, queueName string, req *models.SendMessageBatchRequest) (*models.SendMessageBatchResponse, error)
 	ReceiveMessage(ctx context.Context, queueName string, req *models.ReceiveMessageRequest) (*models.ReceiveMessageResponse, error)
 	DeleteMessage(ctx context.Context, queueName string, receiptHandle string) error
-	DeleteMessageBatch(ctx context.Context, queueName string, receiptHandles []string) error
+	DeleteMessageBatch(ctx context.Context, queueName string, entries []models.DeleteMessageBatchRequestEntry) (*models.DeleteMessageBatchResponse, error)
 	ChangeMessageVisibility(ctx context.Context, queueName string, receiptHandle string, visibilityTimeout int) error
 	ChangeMessageVisibilityBatch(ctx context.Context, queueName string, entries map[string]int) error
 
