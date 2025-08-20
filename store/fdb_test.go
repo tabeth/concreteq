@@ -30,46 +30,46 @@ func generateRandomString(length int) string {
 	return hex.EncodeToString(bytes)
 }
 
-func setupTestDB(t *testing.T) (*FDBStore, func()) {
-	t.Helper()
+func setupTestDB(tb testing.TB) (*FDBStore, func()) {
+	tb.Helper()
 	fdb.MustAPIVersion(730)
 	db, err := fdb.OpenDefault()
 	if err != nil {
-		t.Logf("FoundationDB integration tests skipped: could not open default FDB database: %v", err)
-		t.Skip("skipping FoundationDB tests: could not open default FDB database")
+		tb.Logf("FoundationDB integration tests skipped: could not open default FDB database: %v", err)
+		tb.Skip("skipping FoundationDB tests: could not open default FDB database")
 	}
 
 	// Pre-test condition to check if the cluster is up with a short timeout.
-	t.Log("Checking FoundationDB cluster availability...")
+	tb.Log("Checking FoundationDB cluster availability...")
 	tr, err := db.CreateTransaction()
 	if err != nil {
-		t.Skipf("skipping FoundationDB tests: could not create transaction: %v", err)
+		tb.Skipf("skipping FoundationDB tests: could not create transaction: %v", err)
 	}
 	// Set a 1-second timeout for the check to avoid long waits.
 	err = tr.Options().SetTimeout(1000)
 	if err != nil {
-		t.Skipf("skipping FoundationDB tests: could not set transaction timeout: %v", err)
+		tb.Skipf("skipping FoundationDB tests: could not set transaction timeout: %v", err)
 	}
 
 	_, err = tr.Get(fdb.Key("\xff\xff/status/json")).Get()
 	if err != nil {
-		t.Logf("FoundationDB integration tests skipped: could not connect to cluster: %v. Please ensure FoundationDB is running.", err)
-		t.Skip("Please ensure FoundationDB is running and accessible.")
+		tb.Logf("FoundationDB integration tests skipped: could not connect to cluster: %v. Please ensure FoundationDB is running.", err)
+		tb.Skip("Please ensure FoundationDB is running and accessible.")
 	}
-	t.Log("FoundationDB cluster is available. Proceeding with tests.")
+	tb.Log("FoundationDB cluster is available. Proceeding with tests.")
 
 	// Create a unique directory for this test to ensure isolation
-	testDirName := "test-" + strings.ReplaceAll(t.Name(), "/", "_") + "-" + generateRandomString(4)
+	testDirName := "test-" + strings.ReplaceAll(tb.Name(), "/", "_") + "-" + generateRandomString(4)
 	testPath := []string{"concreteq_test_root", testDirName}
 
 	store, err := NewFDBStoreAtPath(testPath...)
-	require.NoError(t, err)
+	require.NoError(tb, err)
 
 	teardown := func() {
 		// Clean up the test directory after the test
 		root, err := directory.Open(db, []string{"concreteq_test_root"}, nil)
 		if err != nil {
-			t.Logf("failed to open root test directory for cleanup: %v", err)
+			tb.Logf("failed to open root test directory for cleanup: %v", err)
 			return
 		}
 		_, err = db.Transact(func(tr fdb.Transaction) (interface{}, error) {
@@ -77,7 +77,7 @@ func setupTestDB(t *testing.T) (*FDBStore, func()) {
 			return nil, err
 		})
 		if err != nil {
-			t.Logf("failed to remove test directory %s during cleanup: %v", testDirName, err)
+			tb.Logf("failed to remove test directory %s during cleanup: %v", testDirName, err)
 		}
 	}
 
