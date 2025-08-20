@@ -905,6 +905,33 @@ func TestFDBStore_PurgeQueue(t *testing.T) {
 	})
 }
 
+func TestFDBStore_DeleteRecreateIsolation(t *testing.T) {
+	ctx := context.Background()
+	store, teardown := setupTestDB(t)
+	defer teardown()
+
+	queueName := "queue-to-delete-and-recreate"
+	// 1. Create queue and add a message
+	err := store.CreateQueue(ctx, queueName, nil, nil)
+	require.NoError(t, err)
+	_, err = store.SendMessage(ctx, queueName, &models.SendMessageRequest{MessageBody: "this should be deleted"})
+	require.NoError(t, err)
+
+	// 2. Delete the queue
+	err = store.DeleteQueue(ctx, queueName)
+	require.NoError(t, err)
+
+	// 3. Re-create the queue with the same name
+	err = store.CreateQueue(ctx, queueName, nil, nil)
+	require.NoError(t, err)
+
+	// 4. Try to receive a message - should be empty
+	resp, err := store.ReceiveMessage(ctx, queueName, &models.ReceiveMessageRequest{MaxNumberOfMessages: 1, WaitTimeSeconds: 0})
+	require.NoError(t, err, "ReceiveMessage should not fail after delete and re-create")
+	require.NotNil(t, resp, "Response from ReceiveMessage should not be nil")
+	assert.Len(t, resp.Messages, 0, "queue should be empty after being deleted and re-created")
+}
+
 func TestFDBStore_SendMessage(t *testing.T) {
 	ctx := context.Background()
 	store, teardown := setupTestDB(t)
