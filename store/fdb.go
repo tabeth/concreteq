@@ -15,7 +15,7 @@ import (
 	"time"
 
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
-	"github.com/tabeth/concreteq/store/directory"
+	"github.com/apple/foundationdb/bindings/go/src/fdb/directory"
 	"github.com/apple/foundationdb/bindings/go/src/fdb/tuple"
 	"github.com/google/uuid"
 	"github.com/tabeth/concreteq/models"
@@ -132,58 +132,77 @@ func (s *FDBStore) DeleteQueue(ctx context.Context, name string) error {
 	return err
 }
 
+// ListQueues retrieves a list of all queue names.
+// It reads all subdirectories from the application's root directory.
+// Pagination and filtering are handled in-memory after fetching all names.
+// For very large numbers of queues, a more scalable approach would be needed.
 func (s *FDBStore) ListQueues(ctx context.Context, maxResults int, nextToken, queueNamePrefix string) ([]string, string, error) {
-	limit := 1000
-	if maxResults > 0 {
-		limit = maxResults
-	}
-	fetchLimit := limit + 1
-	type pageResult struct {
-		Queues    []string
-		NextToken string
-	}
-	res, err := s.db.ReadTransact(func(tr fdb.ReadTransaction) (interface{}, error) {
-		if nextToken != "" {
-			exists, err := s.dir.Exists(tr, []string{nextToken})
-			if err != nil {
-				return nil, err
-			}
-			if !exists {
-				return pageResult{Queues: []string{}, NextToken: ""}, nil
-			}
-		}
-		allQueues, err := s.dir.List(tr, []string{}, directory.ListOptions{
-			Limit: fetchLimit,
-			After: nextToken,
-		})
-		if err != nil {
-			return nil, err
-		}
-		var filteredQueues []string
-		if queueNamePrefix != "" {
-			for _, q := range allQueues {
-				if strings.HasPrefix(q, queueNamePrefix) {
-					filteredQueues = append(filteredQueues, q)
-				}
-			}
-		} else {
-			filteredQueues = allQueues
-		}
-		var newNextToken string
-		var queuesPage []string
-		if len(filteredQueues) > limit {
-			queuesPage = filteredQueues[:limit]
-			newNextToken = queuesPage[len(queuesPage)-1]
-		} else {
-			queuesPage = filteredQueues
-		}
-		return pageResult{Queues: queuesPage, NextToken: newNextToken}, nil
+	// A ReadTransact is used as we are only reading data.
+	queues, err := s.db.ReadTransact(func(tr fdb.ReadTransaction) (interface{}, error) {
+		return s.dir.List(tr, []string{})
 	})
 	if err != nil {
 		return nil, "", err
 	}
-	r := res.(pageResult)
-	return r.Queues, r.NextToken, nil
+
+	allQueues := queues.([]string)
+	var filteredQueues []string
+
+	// Filter by prefix if provided.
+	if queueNamePrefix != "" {
+		for _, q := range allQueues {
+			if strings.HasPrefix(q, queueNamePrefix) {
+				filteredQueues = append(filteredQueues, q)
+			}
+		}
+	} else {
+		filteredQueues = allQueues
+	}
+
+	// Implement pagination based on the nextToken.
+	startIndex := 0
+	if nextToken != "" {
+		found := false
+		// The nextToken is the name of the last queue from the previous page.
+		// We find it and start the next page from the following item.
+		for i, q := range filteredQueues {
+			if q == nextToken {
+				startIndex = i + 1
+				found = true
+				break
+			}
+		}
+		if !found {
+			// As per SQS behavior, an invalid token returns an empty list.
+			return []string{}, "", nil
+		}
+	}
+
+	if startIndex >= len(filteredQueues) {
+		return []string{}, "", nil // No more results.
+	}
+
+	// Slice the results for the current page.
+	var resultQueues []string
+	var newNextToken string
+
+	endIndex := len(filteredQueues)
+	if maxResults > 0 {
+		endIndex = startIndex + maxResults
+	}
+
+	if endIndex > len(filteredQueues) {
+		endIndex = len(filteredQueues)
+	}
+
+	resultQueues = filteredQueues[startIndex:endIndex]
+
+	// If there are more results, set the nextToken for the next call.
+	if maxResults > 0 && endIndex < len(filteredQueues) {
+		newNextToken = resultQueues[len(resultQueues)-1]
+	}
+
+	return resultQueues, newNextToken, nil
 }
 
 // GetQueueAttributes is not yet implemented.
