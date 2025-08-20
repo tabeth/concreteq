@@ -136,7 +136,7 @@ func (s *FDBStore) DeleteQueue(ctx context.Context, name string) error {
 // It reads all subdirectories from the application's root directory.
 // Pagination and filtering are handled in-memory after fetching all names.
 // For very large numbers of queues, a more scalable approach would be needed.
-func (s *FDBStore) ListQueues(ctx context.Context, maxResults int, nextToken, queueNamePrefix string) ([]string, string, error) {
+func (s *FDBStore) ListQueues(ctx context.Context, maxResults *int, nextToken, queueNamePrefix string) ([]string, string, error) {
 	// A ReadTransact is used as we are only reading data.
 	queues, err := s.db.ReadTransact(func(tr fdb.ReadTransaction) (interface{}, error) {
 		return s.dir.List(tr, []string{})
@@ -187,8 +187,8 @@ func (s *FDBStore) ListQueues(ctx context.Context, maxResults int, nextToken, qu
 	var newNextToken string
 
 	endIndex := len(filteredQueues)
-	if maxResults > 0 {
-		endIndex = startIndex + maxResults
+	if maxResults != nil && *maxResults > 0 {
+		endIndex = startIndex + *maxResults
 	}
 
 	if endIndex > len(filteredQueues) {
@@ -198,7 +198,7 @@ func (s *FDBStore) ListQueues(ctx context.Context, maxResults int, nextToken, qu
 	resultQueues = filteredQueues[startIndex:endIndex]
 
 	// If there are more results, set the nextToken for the next call.
-	if maxResults > 0 && endIndex < len(filteredQueues) {
+	if maxResults != nil && *maxResults > 0 && endIndex < len(filteredQueues) {
 		newNextToken = resultQueues[len(resultQueues)-1]
 	}
 
@@ -986,12 +986,12 @@ func (s *FDBStore) receiveFifoMessages(tr fdb.Transaction, queueDir directory.Di
 // ReceiveMessage orchestrates the message retrieval process, including long polling.
 func (s *FDBStore) ReceiveMessage(ctx context.Context, queueName string, req *models.ReceiveMessageRequest) (*models.ReceiveMessageResponse, error) {
 	maxMessages := 1
-	if req.MaxNumberOfMessages > 0 {
-		maxMessages = req.MaxNumberOfMessages
+	if req.MaxNumberOfMessages != nil && *req.MaxNumberOfMessages > 0 {
+		maxMessages = *req.MaxNumberOfMessages
 	}
 	waitTime := 0
-	if req.WaitTimeSeconds > 0 {
-		waitTime = req.WaitTimeSeconds
+	if req.WaitTimeSeconds != nil && *req.WaitTimeSeconds > 0 {
+		waitTime = *req.WaitTimeSeconds
 	}
 
 	isFifo := strings.HasSuffix(queueName, ".fifo")
@@ -1031,8 +1031,8 @@ func (s *FDBStore) ReceiveMessage(ctx context.Context, queueName string, req *mo
 					visibilityTimeout = vt
 				}
 			}
-			if req.VisibilityTimeout > 0 {
-				visibilityTimeout = req.VisibilityTimeout
+			if req.VisibilityTimeout != nil && *req.VisibilityTimeout > 0 {
+				visibilityTimeout = *req.VisibilityTimeout
 			}
 
 			// Call the appropriate receive logic based on queue type.

@@ -316,7 +316,7 @@ func (app *App) ListQueuesHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// SQS limits the result to 1000 queues if MaxResults is not specified.
-	if req.MaxResults == 0 && len(queueNames) > 1000 {
+	if req.MaxResults == nil && len(queueNames) > 1000 {
 		queueNames = queueNames[:1000]
 	}
 
@@ -679,24 +679,27 @@ func (app *App) ReceiveMessageHandler(w http.ResponseWriter, r *http.Request) {
 	queueName := path.Base(req.QueueUrl)
 
 	// MaxNumberOfMessages must be between 1 and 10.
-	if req.MaxNumberOfMessages < 1 || req.MaxNumberOfMessages > 10 {
-		// SQS defaults to 1 if the parameter is not specified. A value of 0 is invalid if provided.
-		if req.MaxNumberOfMessages != 0 {
+	if req.MaxNumberOfMessages != nil {
+		if *req.MaxNumberOfMessages < 1 || *req.MaxNumberOfMessages > 10 {
 			app.sendErrorResponse(w, "InvalidParameterValue", "Value for parameter MaxNumberOfMessages is invalid. Reason: Must be an integer from 1 to 10.", http.StatusBadRequest)
 			return
 		}
 	}
 
 	// WaitTimeSeconds enables long polling and must be between 0 and 20.
-	if req.WaitTimeSeconds < 0 || req.WaitTimeSeconds > 20 {
-		app.sendErrorResponse(w, "InvalidParameterValue", "Value for parameter WaitTimeSeconds is invalid. Reason: Must be an integer from 0 to 20.", http.StatusBadRequest)
-		return
+	if req.WaitTimeSeconds != nil {
+		if *req.WaitTimeSeconds < 0 || *req.WaitTimeSeconds > 20 {
+			app.sendErrorResponse(w, "InvalidParameterValue", "Value for parameter WaitTimeSeconds is invalid. Reason: Must be an integer from 0 to 20.", http.StatusBadRequest)
+			return
+		}
 	}
 
 	// VisibilityTimeout (if specified) overrides the queue's default.
-	if req.VisibilityTimeout < 0 || req.VisibilityTimeout > 43200 {
-		app.sendErrorResponse(w, "InvalidParameterValue", "Value for parameter VisibilityTimeout is invalid. Reason: Must be an integer from 0 to 43200.", http.StatusBadRequest)
-		return
+	if req.VisibilityTimeout != nil {
+		if *req.VisibilityTimeout < 0 || *req.VisibilityTimeout > 43200 {
+			app.sendErrorResponse(w, "InvalidParameterValue", "Value for parameter VisibilityTimeout is invalid. Reason: Must be an integer from 0 to 43200.", http.StatusBadRequest)
+			return
+		}
 	}
 
 	if req.ReceiveRequestAttemptId != "" {

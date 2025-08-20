@@ -44,7 +44,7 @@ type Store interface {
 	// DeleteQueue removes a queue and all of its messages.
 	DeleteQueue(ctx context.Context, name string) error
 	// ListQueues returns a list of queue names, supporting pagination and prefix filtering.
-	ListQueues(ctx context.Context, maxResults int, nextToken, queueNamePrefix string) (queueNames []string, newNextToken string, err error)
+	ListQueues(ctx context.Context, maxResults *int, nextToken, queueNamePrefix string) (queueNames []string, newNextToken string, err error)
 	// GetQueueAttributes retrieves the attributes for a specified queue.
 	GetQueueAttributes(ctx context.Context, name string) (map[string]string, error)
 	// SetQueueAttributes sets the attributes for a specified queue.

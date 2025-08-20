@@ -21,7 +21,7 @@ type CreateQueueResponse struct {
 // ListQueuesRequest defines the parameters for the SQS ListQueues action.
 // It supports pagination (MaxResults, NextToken) and filtering by prefix.
 type ListQueuesRequest struct {
-	MaxResults      int    `json:"MaxResults"`
+	MaxResults      *int   `json:"MaxResults,omitempty"`
 	NextToken       string `json:"NextToken"`
 	QueueNamePrefix string `json:"QueueNamePrefix"`
 }
@@ -113,14 +113,14 @@ type PurgeQueueRequest struct {
 // It allows callers to specify how many messages to get, how long to wait (long polling),
 // and how long the message should be hidden from other consumers (VisibilityTimeout).
 type ReceiveMessageRequest struct {
-	AttributeNames            []string `json:"AttributeNames"`
-	MaxNumberOfMessages       int      `json:"MaxNumberOfMessages"`
-	MessageAttributeNames     []string `json:"MessageAttributeNames"`
+	AttributeNames              []string `json:"AttributeNames"`
+	MaxNumberOfMessages         *int     `json:"MaxNumberOfMessages,omitempty"`
+	MessageAttributeNames       []string `json:"MessageAttributeNames"`
 	MessageSystemAttributeNames []string `json:"MessageSystemAttributeNames"`
-	QueueUrl                  string   `json:"QueueUrl"`
-	ReceiveRequestAttemptId   string   `json:"ReceiveRequestAttemptId"` // For FIFO queue receive deduplication.
-	VisibilityTimeout         int      `json:"VisibilityTimeout"`
-	WaitTimeSeconds           int      `json:"WaitTimeSeconds"`
+	QueueUrl                    string   `json:"QueueUrl"`
+	ReceiveRequestAttemptId     string   `json:"ReceiveRequestAttemptId"` // For FIFO queue receive deduplication.
+	VisibilityTimeout           *int     `json:"VisibilityTimeout,omitempty"`
+	WaitTimeSeconds             *int     `json:"WaitTimeSeconds,omitempty"`
 }
 
 // ReceiveMessageResponse defines the structure for the SQS ReceiveMessage action's output.

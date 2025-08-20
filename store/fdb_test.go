@@ -173,7 +173,7 @@ func TestFDBStore_ListQueues(t *testing.T) {
 
 	// --- Test Cases ---
 	t.Run("List all queues", func(t *testing.T) {
-		queues, nextToken, err := store.ListQueues(context.Background(), 0, "", "")
+		queues, nextToken, err := store.ListQueues(context.Background(), nil, "", "")
 		assert.NoError(t, err)
 		assert.Empty(t, nextToken)
 
@@ -189,14 +189,15 @@ func TestFDBStore_ListQueues(t *testing.T) {
 	})
 
 	t.Run("List with MaxResults", func(t *testing.T) {
-		queues, nextToken, err := store.ListQueues(context.Background(), 2, "", "")
+		maxResults := 2
+		queues, nextToken, err := store.ListQueues(context.Background(), &maxResults, "", "")
 		assert.NoError(t, err)
 		assert.NotEmpty(t, nextToken)
 		assert.Len(t, queues, 2)
 	})
 
 	t.Run("List with QueueNamePrefix", func(t *testing.T) {
-		queues, nextToken, err := store.ListQueues(context.Background(), 0, "", "prefix-")
+		queues, nextToken, err := store.ListQueues(context.Background(), nil, "", "prefix-")
 		assert.NoError(t, err)
 		assert.Empty(t, nextToken)
 		assert.Len(t, queues, 2)
@@ -206,13 +207,15 @@ func TestFDBStore_ListQueues(t *testing.T) {
 
 	t.Run("Pagination", func(t *testing.T) {
 		// Get the first page
-		queues1, nextToken1, err := store.ListQueues(context.Background(), 3, "", "")
+		maxResults1 := 3
+		queues1, nextToken1, err := store.ListQueues(context.Background(), &maxResults1, "", "")
 		assert.NoError(t, err)
 		assert.NotEmpty(t, nextToken1)
 		assert.Len(t, queues1, 3)
 
 		// Get the second page
-		queues2, _, err := store.ListQueues(context.Background(), 10, nextToken1, "")
+		maxResults2 := 10
+		queues2, _, err := store.ListQueues(context.Background(), &maxResults2, nextToken1, "")
 		assert.NoError(t, err)
 
 		// Check that the second page contains the rest of the queues
@@ -277,7 +280,9 @@ func TestFDBStore_DeleteQueue(t *testing.T) {
 		require.NoError(t, err)
 
 		// 4. Try to receive a message - should be empty
-		resp, err := store.ReceiveMessage(ctx, queueName, &models.ReceiveMessageRequest{MaxNumberOfMessages: 1, WaitTimeSeconds: 0})
+		maxMessages := 1
+		waitTime := 0
+		resp, err := store.ReceiveMessage(ctx, queueName, &models.ReceiveMessageRequest{MaxNumberOfMessages: &maxMessages, WaitTimeSeconds: &waitTime})
 		require.NoError(t, err)
 		assert.Len(t, resp.Messages, 0, "queue should be empty after being deleted and re-created")
 	})
@@ -446,10 +451,12 @@ func TestFDBStore_FifoQueue_Fairness(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		// Receive one message at a time to see the ordering.
 		// We set a high visibility timeout to ensure groups are locked for the duration of the test.
+		maxMessages := 1
+		visibilityTimeout := 60
 		resp, err := store.ReceiveMessage(ctx, queueName, &models.ReceiveMessageRequest{
-			MaxNumberOfMessages: 1,
+			MaxNumberOfMessages: &maxMessages,
 			QueueUrl:            queueName,
-			VisibilityTimeout:   60,
+			VisibilityTimeout:   &visibilityTimeout,
 		})
 		require.NoError(t, err)
 		// It's possible to receive no messages if all groups are locked,
@@ -512,6 +519,7 @@ func TestFDBStore_DeleteMessageBatch(t *testing.T) {
 	ctx := context.Background()
 	store, teardown := setupTestDB(t)
 	defer teardown()
+	var maxMessages int
 
 	t.Run("successfully deletes a batch from a standard queue", func(t *testing.T) {
 		queueName := "std-delete-batch"
@@ -523,7 +531,8 @@ func TestFDBStore_DeleteMessageBatch(t *testing.T) {
 		require.NoError(t, err)
 		_, err = store.SendMessage(ctx, queueName, &models.SendMessageRequest{MessageBody: "msg2"})
 		require.NoError(t, err)
-		resp, err := store.ReceiveMessage(ctx, queueName, &models.ReceiveMessageRequest{MaxNumberOfMessages: 2})
+		maxMessages = 2
+		resp, err := store.ReceiveMessage(ctx, queueName, &models.ReceiveMessageRequest{MaxNumberOfMessages: &maxMessages})
 		require.NoError(t, err)
 		require.Len(t, resp.Messages, 2)
 
@@ -538,7 +547,8 @@ func TestFDBStore_DeleteMessageBatch(t *testing.T) {
 		assert.Len(t, delResp.Failed, 0)
 
 		// Verify queue is empty
-		finalResp, err := store.ReceiveMessage(ctx, queueName, &models.ReceiveMessageRequest{MaxNumberOfMessages: 2})
+		maxMessages = 2
+		finalResp, err := store.ReceiveMessage(ctx, queueName, &models.ReceiveMessageRequest{MaxNumberOfMessages: &maxMessages})
 		require.NoError(t, err)
 		assert.Len(t, finalResp.Messages, 0)
 	})
@@ -551,7 +561,8 @@ func TestFDBStore_DeleteMessageBatch(t *testing.T) {
 		// Send and receive one message
 		_, err = store.SendMessage(ctx, queueName, &models.SendMessageRequest{MessageBody: "msg1"})
 		require.NoError(t, err)
-		resp, err := store.ReceiveMessage(ctx, queueName, &models.ReceiveMessageRequest{MaxNumberOfMessages: 1})
+		maxMessages = 1
+		resp, err := store.ReceiveMessage(ctx, queueName, &models.ReceiveMessageRequest{MaxNumberOfMessages: &maxMessages})
 		require.NoError(t, err)
 		require.Len(t, resp.Messages, 1)
 
@@ -587,13 +598,15 @@ func TestFDBStore_DeleteMessage(t *testing.T) {
 	queueName := "test-delete-queue"
 	err := store.CreateQueue(ctx, queueName, nil, nil)
 	require.NoError(t, err)
+	var maxMessages int
 
 	// --- Sub-test: Successful Deletion ---
 	t.Run("Successful Deletion", func(t *testing.T) {
 		// Send and receive a message to get a valid receipt handle
 		_, err := store.SendMessage(ctx, queueName, &models.SendMessageRequest{MessageBody: "msg-to-delete"})
 		require.NoError(t, err)
-		resp, err := store.ReceiveMessage(ctx, queueName, &models.ReceiveMessageRequest{MaxNumberOfMessages: 1})
+		maxMessages = 1
+		resp, err := store.ReceiveMessage(ctx, queueName, &models.ReceiveMessageRequest{MaxNumberOfMessages: &maxMessages})
 		require.NoError(t, err)
 		require.Len(t, resp.Messages, 1)
 
@@ -604,7 +617,9 @@ func TestFDBStore_DeleteMessage(t *testing.T) {
 		// Verify the message is gone by trying to receive again after timeout
 		// (though in this implementation, deleting also removes it from inflight)
 		time.Sleep(100 * time.Millisecond) // Give time for any background processing
-		resp2, err := store.ReceiveMessage(ctx, queueName, &models.ReceiveMessageRequest{MaxNumberOfMessages: 1, WaitTimeSeconds: 0})
+		maxMessages = 1
+		waitTime := 0
+		resp2, err := store.ReceiveMessage(ctx, queueName, &models.ReceiveMessageRequest{MaxNumberOfMessages: &maxMessages, WaitTimeSeconds: &waitTime})
 		require.NoError(t, err)
 		assert.Len(t, resp2.Messages, 0)
 	})
@@ -650,13 +665,15 @@ func TestFDBStore_DeleteMessage(t *testing.T) {
 		require.NoError(t, err)
 
 		// 1. Receive the first message, which should lock the group
-		resp1, err := store.ReceiveMessage(ctx, fifoQueueName, &models.ReceiveMessageRequest{MaxNumberOfMessages: 1})
+		maxMessages := 1
+		resp1, err := store.ReceiveMessage(ctx, fifoQueueName, &models.ReceiveMessageRequest{MaxNumberOfMessages: &maxMessages})
 		require.NoError(t, err)
 		require.Len(t, resp1.Messages, 1)
 		assert.Equal(t, "g1-msg1", resp1.Messages[0].Body)
 
 		// 2. Try to receive again, should get nothing because the group is locked
-		resp2, err := store.ReceiveMessage(ctx, fifoQueueName, &models.ReceiveMessageRequest{MaxNumberOfMessages: 1})
+		maxMessages = 1
+		resp2, err := store.ReceiveMessage(ctx, fifoQueueName, &models.ReceiveMessageRequest{MaxNumberOfMessages: &maxMessages})
 		require.NoError(t, err)
 		require.Len(t, resp2.Messages, 0)
 
@@ -665,7 +682,8 @@ func TestFDBStore_DeleteMessage(t *testing.T) {
 		require.NoError(t, err)
 
 		// 4. Receive again, should now get the second message
-		resp3, err := store.ReceiveMessage(ctx, fifoQueueName, &models.ReceiveMessageRequest{MaxNumberOfMessages: 1})
+		maxMessages = 1
+		resp3, err := store.ReceiveMessage(ctx, fifoQueueName, &models.ReceiveMessageRequest{MaxNumberOfMessages: &maxMessages})
 		require.NoError(t, err)
 		require.Len(t, resp3.Messages, 1)
 		assert.Equal(t, "g1-msg2", resp3.Messages[0].Body)
@@ -682,8 +700,8 @@ func TestFDBStore_ReceiveMessage(t *testing.T) {
 			queueName := "std-empty"
 			err := store.CreateQueue(ctx, queueName, nil, nil)
 			require.NoError(t, err)
-
-			resp, err := store.ReceiveMessage(ctx, queueName, &models.ReceiveMessageRequest{MaxNumberOfMessages: 1})
+			maxMessages := 1
+			resp, err := store.ReceiveMessage(ctx, queueName, &models.ReceiveMessageRequest{MaxNumberOfMessages: &maxMessages})
 			require.NoError(t, err)
 			assert.Len(t, resp.Messages, 0)
 		})
@@ -697,14 +715,14 @@ func TestFDBStore_ReceiveMessage(t *testing.T) {
 			require.NoError(t, err)
 			_, err = store.SendMessage(ctx, queueName, &models.SendMessageRequest{MessageBody: "visible-test"})
 			require.NoError(t, err)
-
+			maxMessages := 1
 			// 1. Receive the message
-			resp1, err := store.ReceiveMessage(ctx, queueName, &models.ReceiveMessageRequest{MaxNumberOfMessages: 1})
+			resp1, err := store.ReceiveMessage(ctx, queueName, &models.ReceiveMessageRequest{MaxNumberOfMessages: &maxMessages})
 			require.NoError(t, err)
 			require.Len(t, resp1.Messages, 1)
 
 			// 2. Immediately try to receive again, should get nothing
-			resp2, err := store.ReceiveMessage(ctx, queueName, &models.ReceiveMessageRequest{MaxNumberOfMessages: 1})
+			resp2, err := store.ReceiveMessage(ctx, queueName, &models.ReceiveMessageRequest{MaxNumberOfMessages: &maxMessages})
 			require.NoError(t, err)
 			assert.Len(t, resp2.Messages, 0)
 
@@ -712,7 +730,7 @@ func TestFDBStore_ReceiveMessage(t *testing.T) {
 			time.Sleep(1200 * time.Millisecond)
 
 			// 4. Receive again, should get the same message
-			resp3, err := store.ReceiveMessage(ctx, queueName, &models.ReceiveMessageRequest{MaxNumberOfMessages: 1})
+			resp3, err := store.ReceiveMessage(ctx, queueName, &models.ReceiveMessageRequest{MaxNumberOfMessages: &maxMessages})
 			require.NoError(t, err)
 			require.Len(t, resp3.Messages, 1)
 			assert.Equal(t, resp1.Messages[0].Body, resp3.Messages[0].Body)
@@ -728,7 +746,8 @@ func TestFDBStore_ReceiveMessage(t *testing.T) {
 			msgChan := make(chan *models.ReceiveMessageResponse)
 			go func() {
 				// This will block for up to 2 seconds
-				resp, err := store.ReceiveMessage(ctx, queueName, &models.ReceiveMessageRequest{WaitTimeSeconds: 2})
+				waitTime := 2
+				resp, err := store.ReceiveMessage(ctx, queueName, &models.ReceiveMessageRequest{WaitTimeSeconds: &waitTime})
 				assert.NoError(t, err)
 				msgChan <- resp
 			}()
@@ -761,21 +780,21 @@ func TestFDBStore_ReceiveMessage(t *testing.T) {
 			require.NoError(t, err)
 			_, err = store.SendMessage(ctx, queueName, &models.SendMessageRequest{MessageBody: "g2-msg1", MessageGroupId: &g2})
 			require.NoError(t, err)
-
+			maxMessages := 1
 			// 1. Receive, should get g1-msg1 and lock group1
-			resp1, err := store.ReceiveMessage(ctx, queueName, &models.ReceiveMessageRequest{MaxNumberOfMessages: 1})
+			resp1, err := store.ReceiveMessage(ctx, queueName, &models.ReceiveMessageRequest{MaxNumberOfMessages: &maxMessages})
 			require.NoError(t, err)
 			require.Len(t, resp1.Messages, 1)
 			assert.Equal(t, "g1-msg1", resp1.Messages[0].Body)
 
 			// 2. Receive again, should get g2-msg1 because group1 is locked
-			resp2, err := store.ReceiveMessage(ctx, queueName, &models.ReceiveMessageRequest{MaxNumberOfMessages: 1})
+			resp2, err := store.ReceiveMessage(ctx, queueName, &models.ReceiveMessageRequest{MaxNumberOfMessages: &maxMessages})
 			require.NoError(t, err)
 			require.Len(t, resp2.Messages, 1)
 			assert.Equal(t, "g2-msg1", resp2.Messages[0].Body)
 
 			// 3. Receive again, should get nothing because both groups are locked
-			resp3, err := store.ReceiveMessage(ctx, queueName, &models.ReceiveMessageRequest{MaxNumberOfMessages: 1})
+			resp3, err := store.ReceiveMessage(ctx, queueName, &models.ReceiveMessageRequest{MaxNumberOfMessages: &maxMessages})
 			require.NoError(t, err)
 			assert.Len(t, resp3.Messages, 0)
 		})
@@ -899,7 +918,8 @@ func TestFDBStore_PurgeQueue(t *testing.T) {
 		assert.NoError(t, err)
 
 		// Verify queue is empty
-		resp, err := store.ReceiveMessage(ctx, queueName, &models.ReceiveMessageRequest{MaxNumberOfMessages: 1})
+		maxMessages := 1
+		resp, err := store.ReceiveMessage(ctx, queueName, &models.ReceiveMessageRequest{MaxNumberOfMessages: &maxMessages})
 		require.NoError(t, err)
 		assert.Len(t, resp.Messages, 0, "fifo queue should be empty after purge")
 	})

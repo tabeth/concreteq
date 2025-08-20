@@ -374,7 +374,7 @@ func TestIntegration_ListDeletePurgeQueues(t *testing.T) {
 			require.NotEmpty(t, listResp1.NextToken)
 
 			// Page 2
-			body2 := bytes.NewBufferString(fmt.Sprintf(`{"MaxResults": 3, "NextToken": "%s"}`, listResp1.NextToken))
+			body2 := bytes.NewBufferString(fmt.Sprintf(`{"NextToken": "%s"}`, listResp1.NextToken))
 			req2, _ := http.NewRequest("POST", app.baseURL+"/", body2)
 			req2.Header.Set("X-Amz-Target", "AmazonSQS.ListQueues")
 			resp2, err := http.DefaultClient.Do(req2)
@@ -457,7 +457,9 @@ func TestIntegration_ListDeletePurgeQueues(t *testing.T) {
 			assert.Equal(t, http.StatusOK, resp.StatusCode)
 
 			// Verify message is gone by trying to receive it
-			receiveResp, err := app.store.ReceiveMessage(ctx, queueToPurge, &models.ReceiveMessageRequest{MaxNumberOfMessages: 1})
+			maxMessages := 1
+			waitTime := 0
+			receiveResp, err := app.store.ReceiveMessage(ctx, queueToPurge, &models.ReceiveMessageRequest{MaxNumberOfMessages: &maxMessages, WaitTimeSeconds: &waitTime})
 			require.NoError(t, err)
 			assert.Empty(t, receiveResp.Messages, "Expected no messages after purge")
 		})
@@ -671,10 +673,12 @@ func TestIntegration_FifoFairness(t *testing.T) {
 	// 3. Receive messages one by one and check their group ID
 	var receivedGroupIDs []string
 	for i := 0; i < 3; i++ {
+		maxMessages := 1
+		visibilityTimeout := 60
 		recReq := models.ReceiveMessageRequest{
-			QueueUrl:                  queueURL,
-			MaxNumberOfMessages:       1,
-			VisibilityTimeout:         60, // Lock the group for the test duration
+			QueueUrl:                    queueURL,
+			MaxNumberOfMessages:         &maxMessages,
+			VisibilityTimeout:           &visibilityTimeout, // Lock the group for the test duration
 			MessageSystemAttributeNames: []string{"All"},
 		}
 		bodyBytes, _ := json.Marshal(recReq)
@@ -738,7 +742,9 @@ func TestIntegration_DeleteMessageBatch(t *testing.T) {
 		require.NoError(t, err)
 
 		// Receive them to get receipt handles
-		recResp, err := app.store.ReceiveMessage(ctx, queueName, &models.ReceiveMessageRequest{MaxNumberOfMessages: 2})
+		maxMessages := 2
+		waitTime := 0
+		recResp, err := app.store.ReceiveMessage(ctx, queueName, &models.ReceiveMessageRequest{MaxNumberOfMessages: &maxMessages, WaitTimeSeconds: &waitTime})
 		require.NoError(t, err)
 		require.Len(t, recResp.Messages, 2)
 
@@ -769,7 +775,9 @@ func TestIntegration_DeleteMessageBatch(t *testing.T) {
 		// Send 1 message to delete
 		_, err := app.store.SendMessage(ctx, queueName, &models.SendMessageRequest{MessageBody: "msg-partial"})
 		require.NoError(t, err)
-		recResp, err := app.store.ReceiveMessage(ctx, queueName, &models.ReceiveMessageRequest{MaxNumberOfMessages: 1})
+		maxMessages := 1
+		waitTime := 0
+		recResp, err := app.store.ReceiveMessage(ctx, queueName, &models.ReceiveMessageRequest{MaxNumberOfMessages: &maxMessages, WaitTimeSeconds: &waitTime})
 		require.NoError(t, err)
 		require.Len(t, recResp.Messages, 1)
 
@@ -821,7 +829,9 @@ func TestIntegration_DeleteMessage(t *testing.T) {
 	require.NoError(t, err)
 	_, err = app.store.SendMessage(ctx, queueName, &models.SendMessageRequest{MessageBody: "a message"})
 	require.NoError(t, err)
-	recResp, err := app.store.ReceiveMessage(ctx, queueName, &models.ReceiveMessageRequest{MaxNumberOfMessages: 1})
+	maxMessages := 1
+	waitTime := 0
+	recResp, err := app.store.ReceiveMessage(ctx, queueName, &models.ReceiveMessageRequest{MaxNumberOfMessages: &maxMessages, WaitTimeSeconds: &waitTime})
 	require.NoError(t, err)
 	require.Len(t, recResp.Messages, 1)
 	validReceiptHandle := recResp.Messages[0].ReceiptHandle
@@ -830,7 +840,8 @@ func TestIntegration_DeleteMessage(t *testing.T) {
 		// We need a fresh message for this test case
 		_, err := app.store.SendMessage(ctx, queueName, &models.SendMessageRequest{MessageBody: "another message"})
 		require.NoError(t, err)
-		resp, err := app.store.ReceiveMessage(ctx, queueName, &models.ReceiveMessageRequest{MaxNumberOfMessages: 1})
+		maxMessages := 1
+		resp, err := app.store.ReceiveMessage(ctx, queueName, &models.ReceiveMessageRequest{MaxNumberOfMessages: &maxMessages, WaitTimeSeconds: &waitTime})
 		require.NoError(t, err)
 		require.Len(t, resp.Messages, 1)
 

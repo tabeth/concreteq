@@ -32,7 +32,7 @@ func (m *MockStore) DeleteQueue(ctx context.Context, name string) error {
 	args := m.Called(ctx, name)
 	return args.Error(0)
 }
-func (m *MockStore) ListQueues(ctx context.Context, maxResults int, nextToken, queueNamePrefix string) ([]string, string, error) {
+func (m *MockStore) ListQueues(ctx context.Context, maxResults *int, nextToken, queueNamePrefix string) ([]string, string, error) {
 	args := m.Called(ctx, maxResults, nextToken, queueNamePrefix)
 	var queues []string
 	if args.Get(0) != nil {
@@ -861,7 +861,7 @@ func TestListQueuesHandler(t *testing.T) {
 			name:      "Successful Listing",
 			inputBody: `{"MaxResults": 1, "QueueNamePrefix": "test"}`,
 			mockSetup: func(ms *MockStore) {
-				ms.On("ListQueues", mock.Anything, 1, "", "test").Return([]string{"test-q1"}, "test-q1", nil)
+				ms.On("ListQueues", mock.Anything, mock.AnythingOfType("*int"), "", "test").Return([]string{"test-q1"}, "test-q1", nil)
 			},
 			expectedStatusCode: http.StatusOK,
 			expectedBody:       `{"QueueUrls":["http://localhost:8080/queues/test-q1"],"NextToken":"test-q1"}`,
