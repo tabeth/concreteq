@@ -1,3 +1,25 @@
+/*
+ * directory_layer.go
+ *
+ * This source file is part of the FoundationDB open source project
+ *
+ * Copyright 2013-2024 Apple Inc. and the FoundationDB project authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+// FoundationDB Go Directory Layer
+
 package directory
 
 import (
@@ -23,6 +45,18 @@ type directoryLayer struct {
 	path []string
 }
 
+// NewDirectoryLayer returns a new root directory (as a Directory). The
+// subspaces nodeSS and contentSS control where the directory metadata and
+// contents are stored. The default root directory has a nodeSS of
+// subspace.FromBytes([]byte{0xFE}) and a contentSS of
+// subspace.AllKeys(). Specifying more restrictive values for nodeSS and
+// contentSS will allow using the directory layer alongside other content in a
+// database.
+//
+// If allowManualPrefixes is false, all calls to CreatePrefix on the returned
+// Directory (or any subdirectories) will fail, and all directory prefixes will
+// be automatically allocated. The default root directory does not allow manual
+// prefixes.
 func NewDirectoryLayer(nodeSS, contentSS subspace.Subspace, allowManualPrefixes bool) Directory {
 	var dl directoryLayer
 
@@ -535,6 +569,10 @@ func (dl directoryLayer) checkVersion(rtr fdb.ReadTransaction, tr *fdb.Transacti
 func (dl directoryLayer) initializeDirectory(tr fdb.Transaction) {
 	buf := new(bytes.Buffer)
 
+	// bytes.Buffer claims that Write will always return a nil error, which
+	// means the error return here can only be an encoding issue. So long as
+	// we don't set our own versions to something completely invalid, we should
+	// be OK to ignore error returns.
 	binary.Write(buf, binary.LittleEndian, _MAJORVERSION)
 	binary.Write(buf, binary.LittleEndian, _MINORVERSION)
 	binary.Write(buf, binary.LittleEndian, _MICROVERSION)
