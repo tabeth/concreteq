@@ -30,8 +30,10 @@ var (
 
 // ListOptions specifies the options for a paginated list operation.
 type ListOptions struct {
-	Limit int
-	After string
+	Limit   int
+	After   string
+	Before  string
+	Reverse bool
 }
 
 // Directory represents a subspace of keys in a FoundationDB database,

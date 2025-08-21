@@ -213,6 +213,10 @@ func (dl directoryLayer) Exists(rt fdb.ReadTransactor, path []string) (bool, err
 }
 
 func (dl directoryLayer) List(rt fdb.ReadTransactor, path []string, options ListOptions) ([]string, error) {
+	if options.After != "" && options.Before != "" {
+		return nil, errors.New("cannot specify both After and Before")
+	}
+
 	r, err := rt.ReadTransact(func(rtr fdb.ReadTransaction) (interface{}, error) {
 		if err := dl.checkVersion(rtr, nil); err != nil {
 			return nil, err
@@ -380,40 +384,46 @@ func (dl directoryLayer) GetPath() []string {
 
 func (dl directoryLayer) subdirNames(rtr fdb.ReadTransaction, node subspace.Subspace, options ListOptions) ([]string, error) {
 	sd := node.Sub(_SUBDIRS)
-
 	kr, err := fdb.PrefixRange(sd.Bytes())
 	if err != nil {
 		return nil, err
-	}
-
-	begin := kr.Begin
-	if options.After != "" {
-		begin = fdb.Key(append(sd.Pack(tuple.Tuple{options.After}), 0x00))
 	}
 
 	rangeOpts := fdb.RangeOptions{}
 	if options.Limit > 0 {
 		rangeOpts.Limit = options.Limit
 	}
+	rangeOpts.Reverse = options.Reverse
 
-	ri := rtr.GetRange(fdb.KeyRange{Begin: begin, End: kr.End}, rangeOpts).Iterator()
+	var krng fdb.KeyRange
+	if options.Reverse {
+		begin := kr.Begin
+		end := kr.End
+		if options.Before != "" {
+			end = fdb.Key(sd.Pack(tuple.Tuple{options.Before}))
+		}
+		krng = fdb.KeyRange{Begin: begin, End: end}
+	} else {
+		begin := kr.Begin
+		if options.After != "" {
+			begin = fdb.Key(append(sd.Pack(tuple.Tuple{options.After}), 0x00))
+		}
+		krng = fdb.KeyRange{Begin: begin, End: kr.End}
+	}
 
+	ri := rtr.GetRange(krng, rangeOpts).Iterator()
 	var ret []string
-
 	for ri.Advance() {
 		kv, err := ri.Get()
 		if err != nil {
 			return nil, err
 		}
-
 		p, err := sd.Unpack(kv.Key)
 		if err != nil {
 			return nil, err
 		}
-
 		ret = append(ret, p[0].(string))
 	}
-
 	return ret, nil
 }
 
