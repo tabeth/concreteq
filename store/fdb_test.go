@@ -30,46 +30,46 @@ func generateRandomString(length int) string {
 	return hex.EncodeToString(bytes)
 }
 
-func setupTestDB(t *testing.T) (*FDBStore, func()) {
-	t.Helper()
+func setupTestDB(tb testing.TB) (*FDBStore, func()) {
+	tb.Helper()
 	fdb.MustAPIVersion(730)
 	db, err := fdb.OpenDefault()
 	if err != nil {
-		t.Logf("FoundationDB integration tests skipped: could not open default FDB database: %v", err)
-		t.Skip("skipping FoundationDB tests: could not open default FDB database")
+		tb.Logf("FoundationDB integration tests skipped: could not open default FDB database: %v", err)
+		tb.Skip("skipping FoundationDB tests: could not open default FDB database")
 	}
 
 	// Pre-test condition to check if the cluster is up with a short timeout.
-	t.Log("Checking FoundationDB cluster availability...")
+	tb.Log("Checking FoundationDB cluster availability...")
 	tr, err := db.CreateTransaction()
 	if err != nil {
-		t.Skipf("skipping FoundationDB tests: could not create transaction: %v", err)
+		tb.Skipf("skipping FoundationDB tests: could not create transaction: %v", err)
 	}
 	// Set a 1-second timeout for the check to avoid long waits.
 	err = tr.Options().SetTimeout(1000)
 	if err != nil {
-		t.Skipf("skipping FoundationDB tests: could not set transaction timeout: %v", err)
+		tb.Skipf("skipping FoundationDB tests: could not set transaction timeout: %v", err)
 	}
 
 	_, err = tr.Get(fdb.Key("\xff\xff/status/json")).Get()
 	if err != nil {
-		t.Logf("FoundationDB integration tests skipped: could not connect to cluster: %v. Please ensure FoundationDB is running.", err)
-		t.Skip("Please ensure FoundationDB is running and accessible.")
+		tb.Logf("FoundationDB integration tests skipped: could not connect to cluster: %v. Please ensure FoundationDB is running.", err)
+		tb.Skip("Please ensure FoundationDB is running and accessible.")
 	}
-	t.Log("FoundationDB cluster is available. Proceeding with tests.")
+	tb.Log("FoundationDB cluster is available. Proceeding with tests.")
 
 	// Create a unique directory for this test to ensure isolation
-	testDirName := "test-" + strings.ReplaceAll(t.Name(), "/", "_") + "-" + generateRandomString(4)
+	testDirName := "test-" + strings.ReplaceAll(tb.Name(), "/", "_") + "-" + generateRandomString(4)
 	testPath := []string{"concreteq_test_root", testDirName}
 
 	store, err := NewFDBStoreAtPath(testPath...)
-	require.NoError(t, err)
+	require.NoError(tb, err)
 
 	teardown := func() {
 		// Clean up the test directory after the test
 		root, err := directory.Open(db, []string{"concreteq_test_root"}, nil)
 		if err != nil {
-			t.Logf("failed to open root test directory for cleanup: %v", err)
+			tb.Logf("failed to open root test directory for cleanup: %v", err)
 			return
 		}
 		_, err = db.Transact(func(tr fdb.Transaction) (interface{}, error) {
@@ -77,7 +77,7 @@ func setupTestDB(t *testing.T) (*FDBStore, func()) {
 			return nil, err
 		})
 		if err != nil {
-			t.Logf("failed to remove test directory %s during cleanup: %v", testDirName, err)
+			tb.Logf("failed to remove test directory %s during cleanup: %v", testDirName, err)
 		}
 	}
 
@@ -903,6 +903,33 @@ func TestFDBStore_PurgeQueue(t *testing.T) {
 		require.NoError(t, err)
 		assert.Len(t, resp.Messages, 0, "fifo queue should be empty after purge")
 	})
+}
+
+func TestFDBStore_DeleteRecreateIsolation(t *testing.T) {
+	ctx := context.Background()
+	store, teardown := setupTestDB(t)
+	defer teardown()
+
+	queueName := "queue-to-delete-and-recreate"
+	// 1. Create queue and add a message
+	err := store.CreateQueue(ctx, queueName, nil, nil)
+	require.NoError(t, err)
+	_, err = store.SendMessage(ctx, queueName, &models.SendMessageRequest{MessageBody: "this should be deleted"})
+	require.NoError(t, err)
+
+	// 2. Delete the queue
+	err = store.DeleteQueue(ctx, queueName)
+	require.NoError(t, err)
+
+	// 3. Re-create the queue with the same name
+	err = store.CreateQueue(ctx, queueName, nil, nil)
+	require.NoError(t, err)
+
+	// 4. Try to receive a message - should be empty
+	resp, err := store.ReceiveMessage(ctx, queueName, &models.ReceiveMessageRequest{MaxNumberOfMessages: 1, WaitTimeSeconds: 0})
+	require.NoError(t, err, "ReceiveMessage should not fail after delete and re-create")
+	require.NotNil(t, resp, "Response from ReceiveMessage should not be nil")
+	assert.Len(t, resp.Messages, 0, "queue should be empty after being deleted and re-created")
 }
 
 func TestFDBStore_SendMessage(t *testing.T) {
