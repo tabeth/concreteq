@@ -15,10 +15,26 @@ import (
 	"time"
 
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
+	"math/rand"
+
 	"github.com/apple/foundationdb/bindings/go/src/fdb/directory"
 	"github.com/apple/foundationdb/bindings/go/src/fdb/tuple"
 	"github.com/google/uuid"
 	"github.com/tabeth/concreteq/models"
+)
+
+const (
+	// By sharding the queue's visibility index, we can distribute the load of
+	// dequeuing operations across multiple prefixes. This significantly reduces
+	// transaction conflicts under high contention, as consumers will be reading
+	// from different parts of the keyspace. A value of 16 is chosen as a
+	// reasonable starting point to provide a good balance of load distribution
+	// without creating an excessive number of sub-prefixes.
+	numShards = 16
+)
+
+var (
+	r = rand.New(rand.NewSource(time.Now().UnixNano()))
 )
 
 // FDBStore is a concrete implementation of the Store interface using FoundationDB.
@@ -362,8 +378,11 @@ func (s *FDBStore) SendMessage(ctx context.Context, queueName string, message *m
 			}
 			internalMessage.VisibleAfter = visibleAfter
 
-			// The index is ordered by when the message should become visible.
-			visKey := visibleIdxDir.Pack(tuple.Tuple{visibleAfter, messageID})
+			// The index is ordered by (shard, visibility_time, messageId).
+			// Sharding distributes the dequeue load across multiple prefixes,
+			// preventing hot spots on the head of the queue.
+			shardID := r.Intn(numShards)
+			visKey := visibleIdxDir.Pack(tuple.Tuple{shardID, visibleAfter, messageID})
 			tr.Set(visKey, []byte{})
 		}
 
@@ -660,7 +679,9 @@ func (s *FDBStore) SendMessageBatch(ctx context.Context, queueName string, req *
 					visibleAfter += int64(*entry.DelaySeconds)
 				}
 				internalMessage.VisibleAfter = visibleAfter
-				visKey := visibleIdxDir.Pack(tuple.Tuple{visibleAfter, messageID})
+				// Use the same sharding logic as the single send.
+				shardID := r.Intn(numShards)
+				visKey := visibleIdxDir.Pack(tuple.Tuple{shardID, visibleAfter, messageID})
 				tr.Set(visKey, []byte{})
 			}
 
@@ -710,6 +731,9 @@ func (s *FDBStore) SendMessageBatch(ctx context.Context, queueName string, req *
 }
 
 // receiveStandardMessages contains the logic for retrieving messages from a Standard SQS queue.
+// It iterates through randomized shards of the visibility index to find available messages.
+// This approach distributes the read load and significantly reduces transaction conflicts
+// under high contention compared to scanning the head of the queue every time.
 func (s *FDBStore) receiveStandardMessages(tr fdb.Transaction, queueDir directory.DirectorySubspace, req *models.ReceiveMessageRequest, maxMessages int, visibilityTimeout int) ([]models.ResponseMessage, error) {
 	messagesDir := queueDir.Sub("messages")
 	visibleIdxDir := queueDir.Sub("visible_idx")
@@ -718,85 +742,113 @@ func (s *FDBStore) receiveStandardMessages(tr fdb.Transaction, queueDir director
 	var receivedMessages []models.ResponseMessage
 	now := time.Now().Unix()
 
-	// Query the visibility index for messages that are currently visible.
-	// The key is `(visible_after_ts, messageId)`. We scan for all keys where
-	// `visible_after_ts` is less than or equal to the current time.
-	beginKey := visibleIdxDir.Pack(tuple.Tuple{0})
-	endKey := visibleIdxDir.Pack(tuple.Tuple{now + 1})
-	r := tr.GetRange(fdb.KeyRange{Begin: beginKey, End: endKey}, fdb.RangeOptions{Limit: maxMessages})
+	// Start scanning from a random shard to ensure consumers are distributed
+	// across the keyspace and not all hitting shard 0 simultaneously.
+	startShard := r.Intn(numShards)
 
-	iter := r.Iterator()
-	for iter.Advance() {
-		kv := iter.MustGet()
+	// Iterate through all shards, wrapping around, until we've collected
+	// enough messages or checked all shards.
+	for i := 0; i < numShards; i++ {
+		shardID := (startShard + i) % numShards
 
-		t, err := visibleIdxDir.Unpack(kv.Key)
-		if err != nil {
-			continue
-		}
-		messageID := t[1].(string)
+		// Query the visibility index for messages in the current shard that are visible.
+		// The key is `(shardID, visible_after_ts, messageId)`.
+		beginKey := visibleIdxDir.Pack(tuple.Tuple{shardID, 0})
+		endKey := visibleIdxDir.Pack(tuple.Tuple{shardID, now + 1})
+		keyRange := tr.GetRange(fdb.KeyRange{Begin: beginKey, End: endKey}, fdb.RangeOptions{Limit: maxMessages - len(receivedMessages)})
 
-		msgBytes, err := tr.Get(messagesDir.Pack(tuple.Tuple{messageID})).Get()
-		if err != nil || msgBytes == nil {
-			continue // Message might have been deleted since being indexed.
-		}
-		var msg models.Message
-		if err := json.Unmarshal(msgBytes, &msg); err != nil {
-			continue
-		}
+		iter := keyRange.Iterator()
+		for iter.Advance() {
+			kv := iter.MustGet()
 
-		// The message is now "in-flight".
-		// 1. Delete the old visibility index entry.
-		tr.Clear(kv.Key)
-
-		// 2. Update the message's internal state.
-		newVisibilityTimeout := now + int64(visibilityTimeout)
-		msg.VisibleAfter = newVisibilityTimeout
-		msg.ReceivedCount++
-		if msg.FirstReceived == 0 {
-			msg.FirstReceived = now
-		}
-
-		// 3. Write the updated message back.
-		newMsgBytes, err := json.Marshal(msg)
-		if err != nil {
-			continue
-		}
-		tr.Set(messagesDir.Pack(tuple.Tuple{messageID}), newMsgBytes)
-
-		// 4. Create a *new* index entry for when the message should become visible again
-		//    if it's not deleted. This implements the visibility timeout.
-		newVisKey := visibleIdxDir.Pack(tuple.Tuple{newVisibilityTimeout, messageID})
-		tr.Set(newVisKey, []byte{})
-
-		// 5. Generate a unique receipt handle for this specific receive operation.
-		//    Store a record of it so we can find the message later for deletion.
-		receiptHandle := uuid.New().String()
-		receiptData := map[string]interface{}{
-			"id":      msg.ID,
-			"vis_key": kv.Key, // Store the *original* key to delete it upon message deletion.
-		}
-		receiptBytes, _ := json.Marshal(receiptData)
-		tr.Set(inflightDir.Pack(tuple.Tuple{receiptHandle}), receiptBytes)
-
-		// 6. Construct the message object to be returned to the client.
-		responseMsg := models.ResponseMessage{
-			MessageId:     msg.ID,
-			ReceiptHandle: receiptHandle,
-			Body:          msg.Body,
-			MD5OfBody:     msg.MD5OfBody,
-		}
-		responseMsg.Attributes = s.buildResponseAttributes(&msg, req)
-		responseMsg.MessageAttributes = s.buildResponseMessageAttributes(&msg, req)
-		if len(responseMsg.MessageAttributes) > 0 {
-			var attrKeys []string
-			for k := range responseMsg.MessageAttributes {
-				attrKeys = append(attrKeys, k)
+			t, err := visibleIdxDir.Unpack(kv.Key)
+			if err != nil {
+				continue // Should not happen with well-formed keys.
 			}
-			md5Bytes := md5.Sum(hashAttributes(responseMsg.MessageAttributes, attrKeys))
-			md5Str := hex.EncodeToString(md5Bytes[:])
-			responseMsg.MD5OfMessageAttributes = &md5Str
+			// t[0] is shardID, t[1] is visibleAfter, t[2] is messageID
+			messageID := t[2].(string)
+
+			msgBytes, err := tr.Get(messagesDir.Pack(tuple.Tuple{messageID})).Get()
+			if err != nil || msgBytes == nil {
+				// Message might have been deleted or claimed by another consumer
+				// that committed first. This is an expected outcome of the race.
+				continue
+			}
+			var msg models.Message
+			if err := json.Unmarshal(msgBytes, &msg); err != nil {
+				continue
+			}
+
+			// The message is now "in-flight".
+			// 1. Delete the old visibility index entry.
+			tr.Clear(kv.Key)
+
+			// 2. Update the message's internal state.
+			newVisibilityTimeout := now + int64(visibilityTimeout)
+			msg.VisibleAfter = newVisibilityTimeout
+			msg.ReceivedCount++
+			if msg.FirstReceived == 0 {
+				msg.FirstReceived = now
+			}
+
+			// 3. Write the updated message back to the main message store.
+			newMsgBytes, err := json.Marshal(msg)
+			if err != nil {
+				continue
+			}
+			tr.Set(messagesDir.Pack(tuple.Tuple{messageID}), newMsgBytes)
+
+			// 4. Create a *new* index entry for when the message should become visible
+			//    again if it's not deleted. This entry is placed in a *new random shard*
+			//    to prevent a thundering herd problem on a single shard if many
+			//    messages time out simultaneously.
+			newShardID := r.Intn(numShards)
+			newVisKey := visibleIdxDir.Pack(tuple.Tuple{newShardID, newVisibilityTimeout, messageID})
+			tr.Set(newVisKey, []byte{})
+
+			// 5. Generate a unique receipt handle for this specific receive operation.
+			//    Store a record of it so we can find the message later for deletion.
+			receiptHandle := uuid.New().String()
+			// The receipt handle needs to know which shard the *new* visibility key
+			// is in so it can be deleted if ChangeMessageVisibility is called.
+			// For simplicity in DeleteMessage, we just store the old key.
+			receiptData := map[string]interface{}{
+				"id":      msg.ID,
+				"vis_key": kv.Key, // Store the *original* key.
+			}
+			receiptBytes, _ := json.Marshal(receiptData)
+			tr.Set(inflightDir.Pack(tuple.Tuple{receiptHandle}), receiptBytes)
+
+			// 6. Construct the message object to be returned to the client.
+			responseMsg := models.ResponseMessage{
+				MessageId:     msg.ID,
+				ReceiptHandle: receiptHandle,
+				Body:          msg.Body,
+				MD5OfBody:     msg.MD5OfBody,
+			}
+			responseMsg.Attributes = s.buildResponseAttributes(&msg, req)
+			responseMsg.MessageAttributes = s.buildResponseMessageAttributes(&msg, req)
+			if len(responseMsg.MessageAttributes) > 0 {
+				var attrKeys []string
+				for k := range responseMsg.MessageAttributes {
+					attrKeys = append(attrKeys, k)
+				}
+				md5Bytes := md5.Sum(hashAttributes(responseMsg.MessageAttributes, attrKeys))
+				md5Str := hex.EncodeToString(md5Bytes[:])
+				responseMsg.MD5OfMessageAttributes = &md5Str
+			}
+			receivedMessages = append(receivedMessages, responseMsg)
+
+			// If we've hit our max, we're done.
+			if len(receivedMessages) >= maxMessages {
+				break
+			}
 		}
-		receivedMessages = append(receivedMessages, responseMsg)
+
+		// If we've hit our max, we're done.
+		if len(receivedMessages) >= maxMessages {
+			break
+		}
 	}
 
 	return receivedMessages, nil
@@ -1239,6 +1291,13 @@ func (s *FDBStore) ChangeMessageVisibility(ctx context.Context, queueName string
 	// TODO: Implement in FoundationDB. This would involve finding the message by
 	// receipt handle, deleting its old visibility index key, and creating a new
 	// one with the updated timeout.
+	// NOTE: When implementing this, be aware that the receipt handle for standard
+	// queues (see `receiveStandardMessages`) only contains the *original*
+	// visibility key (`vis_key`). The new visibility key created during receive
+	// is placed in a *new random shard*. The receipt handle does not contain
+	// information about this new key. A robust implementation of this function
+	// may require modifying the data stored in the receipt handle to include
+	// the new key or shard information.
 	return nil
 }
 
