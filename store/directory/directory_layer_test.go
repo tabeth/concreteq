@@ -128,3 +128,33 @@ func TestDirectory_Pagination(t *testing.T) {
 	assert.Len(t, page3, 2)
 	assert.Equal(t, "page_test_08", page3[0])
 }
+
+func TestDirectory_Pagination_Reverse(t *testing.T) {
+	db, root := setupAllTests(t)
+
+	dirCount := 10
+	for i := 0; i < dirCount; i++ {
+		_, err := root.Create(db, []string{fmt.Sprintf("reverse_page_test_%02d", i)}, nil)
+		require.NoError(t, err)
+	}
+
+	// List in reverse with a limit
+	limit := 4
+	page1, err := root.List(db, []string{}, directory.ListOptions{Limit: limit, Reverse: true})
+	require.NoError(t, err)
+	assert.Len(t, page1, limit)
+	assert.Equal(t, "reverse_page_test_09", page1[0])
+	assert.Equal(t, "reverse_page_test_06", page1[3])
+
+	// Get the previous page (which is the next page when reading in reverse)
+	beforeToken := page1[len(page1)-1]
+	page2, err := root.List(db, []string{}, directory.ListOptions{Limit: limit, Before: beforeToken, Reverse: true})
+	require.NoError(t, err)
+	assert.Len(t, page2, limit)
+	assert.Equal(t, "reverse_page_test_05", page2[0])
+	assert.Equal(t, "reverse_page_test_02", page2[3])
+
+	// Test error case
+	_, err = root.List(db, []string{}, directory.ListOptions{After: "a", Before: "b"})
+	assert.Error(t, err)
+}
