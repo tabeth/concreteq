@@ -29,6 +29,10 @@ var (
 	// ErrInvalidReceiptHandle is returned when a receipt handle is malformed, expired, or invalid.
 	// This maps to the SQS `ReceiptHandleIsInvalid` error.
 	ErrInvalidReceiptHandle = errors.New("receipt handle is invalid")
+
+	// ErrMessageNotInflight is returned when trying to change the visibility of a message
+	// that is not currently in-flight.
+	ErrMessageNotInflight = errors.New("message not in flight")
 )
 
 // Store is the central interface for all data persistence operations.
