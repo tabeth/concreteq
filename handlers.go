@@ -58,7 +58,6 @@ func (app *App) RegisterSQSHandlers(r *chi.Mux) {
 	r.Post("/queues/{queueName}/messages/batch", app.SendMessageBatchHandler)
 	r.Delete("/queues/{queueName}/messages/{receiptHandle}", app.DeleteMessageHandler)
 	r.Post("/queues/{queueName}/messages/batch-delete", app.DeleteMessageBatchHandler)
-	r.Patch("/queues/{queueName}/messages/{receiptHandle}", app.ChangeMessageVisibilityHandler)
 	r.Post("/queues/{queueName}/messages/batch-visibility", app.ChangeMessageVisibilityBatchHandler)
 
 	// --- Placeholder handlers for unimplemented SQS features ---
@@ -107,6 +106,8 @@ func (app *App) RootSQSHandler(w http.ResponseWriter, r *http.Request) {
 		app.DeleteMessageHandler(w, r)
 	case "DeleteMessageBatch":
 		app.DeleteMessageBatchHandler(w, r)
+	case "ChangeMessageVisibility":
+		app.ChangeMessageVisibilityHandler(w, r)
 	default:
 		app.sendErrorResponse(w, "UnsupportedOperation", "Unsupported operation: "+action, http.StatusBadRequest)
 	}
@@ -830,8 +831,51 @@ func (app *App) DeleteMessageBatchHandler(w http.ResponseWriter, r *http.Request
 // --- Unimplemented Handlers ---
 
 func (app *App) ChangeMessageVisibilityHandler(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(http.StatusNotImplemented)
+	var req models.ChangeMessageVisibilityRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		app.sendErrorResponse(w, "InvalidRequest", "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if req.QueueUrl == "" {
+		app.sendErrorResponse(w, "MissingParameter", "The request must contain a QueueUrl.", http.StatusBadRequest)
+		return
+	}
+	if req.ReceiptHandle == "" {
+		app.sendErrorResponse(w, "MissingParameter", "The request must contain a ReceiptHandle.", http.StatusBadRequest)
+		return
+	}
+
+	// Validate VisibilityTimeout range (0 to 12 hours)
+	if req.VisibilityTimeout < 0 || req.VisibilityTimeout > 43200 {
+		app.sendErrorResponse(w, "InvalidParameterValue", "Value for parameter VisibilityTimeout is invalid. Reason: Must be an integer from 0 to 43200.", http.StatusBadRequest)
+		return
+	}
+
+	queueName := path.Base(req.QueueUrl)
+
+	err := app.Store.ChangeMessageVisibility(r.Context(), queueName, req.ReceiptHandle, req.VisibilityTimeout)
+	if err != nil {
+		if errors.Is(err, store.ErrInvalidReceiptHandle) {
+			app.sendErrorResponse(w, "ReceiptHandleIsInvalid", "The specified receipt handle isn't valid.", http.StatusBadRequest)
+			return
+		}
+		if errors.Is(err, store.ErrQueueDoesNotExist) {
+			app.sendErrorResponse(w, "QueueDoesNotExist", "The specified queue does not exist.", http.StatusBadRequest)
+			return
+		}
+		// A message not being in flight is a specific case of an invalid receipt handle.
+		if errors.Is(err, store.ErrMessageNotInflight) {
+			app.sendErrorResponse(w, "MessageNotInflight", "The specified message isn't in flight.", http.StatusBadRequest)
+			return
+		}
+		app.sendErrorResponse(w, "InternalFailure", "Failed to change message visibility", http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
 }
+
 func (app *App) ChangeMessageVisibilityBatchHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNotImplemented)
 }

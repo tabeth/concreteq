@@ -84,7 +84,8 @@ func (m *MockStore) DeleteMessageBatch(ctx context.Context, queueName string, en
 	return args.Get(0).(*models.DeleteMessageBatchResponse), args.Error(1)
 }
 func (m *MockStore) ChangeMessageVisibility(ctx context.Context, queueName string, receiptHandle string, visibilityTimeout int) error {
-	return nil
+	args := m.Called(ctx, queueName, receiptHandle, visibilityTimeout)
+	return args.Error(0)
 }
 func (m *MockStore) ChangeMessageVisibilityBatch(ctx context.Context, queueName string, entries map[string]int) error {
 	return nil
@@ -1034,6 +1035,105 @@ func TestSendMessageHandler(t *testing.T) {
 				} else { // It's a plain text error message from our old http.Error calls, which we should not have
 					assert.Fail(t, "Received unexpected plain text error response", "Response body: %s", rr.Body.String())
 				}
+			}
+
+			mockStore.AssertExpectations(t)
+		})
+	}
+}
+
+func TestChangeMessageVisibilityHandler(t *testing.T) {
+	tests := []struct {
+		name               string
+		inputBody          string
+		mockSetup          func(*MockStore)
+		expectedStatusCode int
+		expectedBody       string
+	}{
+		{
+			name:      "Successful Change",
+			inputBody: `{"QueueUrl": "http://localhost/queues/my-queue", "ReceiptHandle": "valid-handle", "VisibilityTimeout": 60}`,
+			mockSetup: func(ms *MockStore) {
+				ms.On("ChangeMessageVisibility", mock.Anything, "my-queue", "valid-handle", 60).Return(nil).Once()
+			},
+			expectedStatusCode: http.StatusOK,
+			expectedBody:       "",
+		},
+		{
+			name:               "Missing QueueUrl",
+			inputBody:          `{"ReceiptHandle": "a-handle", "VisibilityTimeout": 60}`,
+			mockSetup:          func(ms *MockStore) {},
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       `{"__type":"MissingParameter", "message":"The request must contain a QueueUrl."}`,
+		},
+		{
+			name:               "Missing ReceiptHandle",
+			inputBody:          `{"QueueUrl": "http://localhost/queues/my-queue", "VisibilityTimeout": 60}`,
+			mockSetup:          func(ms *MockStore) {},
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       `{"__type":"MissingParameter", "message":"The request must contain a ReceiptHandle."}`,
+		},
+		{
+			name:               "VisibilityTimeout Too Low",
+			inputBody:          `{"QueueUrl": "http://localhost/queues/my-queue", "ReceiptHandle": "a-handle", "VisibilityTimeout": -1}`,
+			mockSetup:          func(ms *MockStore) {},
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       `{"__type":"InvalidParameterValue", "message":"Value for parameter VisibilityTimeout is invalid. Reason: Must be an integer from 0 to 43200."}`,
+		},
+		{
+			name:               "VisibilityTimeout Too High",
+			inputBody:          `{"QueueUrl": "http://localhost/queues/my-queue", "ReceiptHandle": "a-handle", "VisibilityTimeout": 43201}`,
+			mockSetup:          func(ms *MockStore) {},
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       `{"__type":"InvalidParameterValue", "message":"Value for parameter VisibilityTimeout is invalid. Reason: Must be an integer from 0 to 43200."}`,
+		},
+		{
+			name:      "Queue Does Not Exist",
+			inputBody: `{"QueueUrl": "http://localhost/queues/non-existent-queue", "ReceiptHandle": "a-handle", "VisibilityTimeout": 60}`,
+			mockSetup: func(ms *MockStore) {
+				ms.On("ChangeMessageVisibility", mock.Anything, "non-existent-queue", "a-handle", 60).Return(store.ErrQueueDoesNotExist).Once()
+			},
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       `{"__type":"QueueDoesNotExist", "message":"The specified queue does not exist."}`,
+		},
+		{
+			name:      "Invalid Receipt Handle",
+			inputBody: `{"QueueUrl": "http://localhost/queues/my-queue", "ReceiptHandle": "invalid-handle", "VisibilityTimeout": 60}`,
+			mockSetup: func(ms *MockStore) {
+				ms.On("ChangeMessageVisibility", mock.Anything, "my-queue", "invalid-handle", 60).Return(store.ErrInvalidReceiptHandle).Once()
+			},
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       `{"__type":"ReceiptHandleIsInvalid", "message":"The specified receipt handle isn't valid."}`,
+		},
+		{
+			name:      "Message Not In-flight",
+			inputBody: `{"QueueUrl": "http://localhost/queues/my-queue", "ReceiptHandle": "a-handle", "VisibilityTimeout": 60}`,
+			mockSetup: func(ms *MockStore) {
+				ms.On("ChangeMessageVisibility", mock.Anything, "my-queue", "a-handle", 60).Return(store.ErrMessageNotInflight).Once()
+			},
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       `{"__type":"MessageNotInflight", "message":"The specified message isn't in flight."}`,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mockStore := new(MockStore)
+			tc.mockSetup(mockStore)
+
+			app := &App{Store: mockStore}
+			r := chi.NewRouter()
+			app.RegisterSQSHandlers(r)
+
+			req, _ := http.NewRequest("POST", "/", bytes.NewBufferString(tc.inputBody))
+			req.Header.Set("X-Amz-Target", "AmazonSQS.ChangeMessageVisibility")
+			rr := httptest.NewRecorder()
+
+			r.ServeHTTP(rr, req)
+
+			assert.Equal(t, tc.expectedStatusCode, rr.Code)
+			if tc.expectedBody != "" {
+				require.JSONEq(t, tc.expectedBody, rr.Body.String())
 			}
 
 			mockStore.AssertExpectations(t)
