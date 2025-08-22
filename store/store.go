@@ -73,8 +73,8 @@ type Store interface {
 
 	// --- Permissions --- (Not yet implemented)
 
-	// AddPermission adds a permission to a queue for a specific principal.
-	AddPermission(ctx context.Context, queueName, label string, permissions map[string][]string) error
+	// AddPermission adds a permission statement to a queue's policy.
+	AddPermission(ctx context.Context, queueName string, statement models.Statement) error
 	// RemovePermission removes a permission from a queue.
 	RemovePermission(ctx context.Context, queueName, label string) error
 

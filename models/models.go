@@ -224,3 +224,32 @@ type DeleteMessageBatchResponse struct {
 type DeleteMessageBatchResultEntry struct {
 	Id string `json:"Id"`
 }
+
+// AddPermissionRequest maps to the input of the SQS AddPermission action.
+type AddPermissionRequest struct {
+	QueueUrl      string   `json:"QueueUrl"`
+	Label         string   `json:"Label"`
+	AWSAccountIds []string `json:"AWSAccountIds"`
+	Actions       []string `json:"Actions"`
+}
+
+// Policy represents an IAM policy document.
+type Policy struct {
+	Version   string      `json:"Version"`
+	Id        string      `json:"Id,omitempty"`
+	Statement []Statement `json:"Statement"`
+}
+
+// Statement represents a single statement within an IAM policy.
+type Statement struct {
+	Sid       string    `json:"Sid"`
+	Effect    string    `json:"Effect"`
+	Principal Principal `json:"Principal"`
+	Action    []string  `json:"Action"`
+	Resource  string    `json:"Resource"`
+}
+
+// Principal represents the principal in an IAM policy statement.
+type Principal struct {
+	AWS []string `json:"AWS"`
+}

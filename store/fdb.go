@@ -205,10 +205,42 @@ func (s *FDBStore) ListQueues(ctx context.Context, maxResults int, nextToken, qu
 	return resultQueues, newNextToken, nil
 }
 
-// GetQueueAttributes is not yet implemented.
+// GetQueueAttributes retrieves the attributes for a specified queue.
 func (s *FDBStore) GetQueueAttributes(ctx context.Context, name string) (map[string]string, error) {
-	// TODO: Implement reading the (queue_dir, "attributes") key.
-	return nil, nil
+	attributes, err := s.db.ReadTransact(func(tr fdb.ReadTransaction) (interface{}, error) {
+		exists, err := s.dir.Exists(tr, []string{name})
+		if err != nil {
+			return nil, err
+		}
+		if !exists {
+			return nil, ErrQueueDoesNotExist
+		}
+
+		queueDir, err := s.dir.Open(tr, []string{name}, nil)
+		if err != nil {
+			return nil, err
+		}
+
+		attrsBytes, err := tr.Get(queueDir.Pack(tuple.Tuple{"attributes"})).Get()
+		if err != nil {
+			return nil, err
+		}
+
+		if len(attrsBytes) == 0 {
+			return make(map[string]string), nil
+		}
+
+		var attrs map[string]string
+		if err := json.Unmarshal(attrsBytes, &attrs); err != nil {
+			return nil, err
+		}
+		return attrs, nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+	return attributes.(map[string]string), nil
 }
 
 // SetQueueAttributes is not yet implemented.
@@ -1247,9 +1279,81 @@ func (s *FDBStore) ChangeMessageVisibilityBatch(ctx context.Context, queueName s
 	return nil
 }
 
-func (s *FDBStore) AddPermission(ctx context.Context, queueName, label string, permissions map[string][]string) error {
-	// TODO: Implement in FoundationDB.
-	return nil
+func (s *FDBStore) AddPermission(ctx context.Context, queueName string, statement models.Statement) error {
+	_, err := s.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
+		exists, err := s.dir.Exists(tr, []string{queueName})
+		if err != nil {
+			return nil, err
+		}
+		if !exists {
+			return nil, ErrQueueDoesNotExist
+		}
+
+		queueDir, err := s.dir.Open(tr, []string{queueName}, nil)
+		if err != nil {
+			return nil, err
+		}
+
+		// Get all attributes
+		attributes := make(map[string]string)
+		attrsBytes, err := tr.Get(queueDir.Pack(tuple.Tuple{"attributes"})).Get()
+		if err != nil {
+			return nil, err
+		}
+		if len(attrsBytes) > 0 {
+			if err := json.Unmarshal(attrsBytes, &attributes); err != nil {
+				return nil, err
+			}
+		}
+
+		// Get the policy attribute
+		policyString, _ := attributes["Policy"]
+		var policy models.Policy
+
+		if policyString == "" {
+			// No existing policy, create a new one
+			policy = models.Policy{
+				Version:   "2012-10-17",
+				Id:        "auto-generated-policy-" + uuid.New().String(),
+				Statement: []models.Statement{},
+			}
+		} else {
+			if err := json.Unmarshal([]byte(policyString), &policy); err != nil {
+				return nil, err // Malformed policy JSON
+			}
+		}
+
+		// Remove existing statement with the same Sid (label)
+		var updatedStatements []models.Statement
+		for _, s := range policy.Statement {
+			if s.Sid != statement.Sid {
+				updatedStatements = append(updatedStatements, s)
+			}
+		}
+		policy.Statement = updatedStatements
+
+		// Add the new statement
+		policy.Statement = append(policy.Statement, statement)
+
+		// Marshal the updated policy back to a string
+		newPolicyBytes, err := json.Marshal(policy)
+		if err != nil {
+			return nil, err
+		}
+		attributes["Policy"] = string(newPolicyBytes)
+
+		// Marshal the updated attributes map
+		newAttrsBytes, err := json.Marshal(attributes)
+		if err != nil {
+			return nil, err
+		}
+
+		// Set the new attributes
+		tr.Set(queueDir.Pack(tuple.Tuple{"attributes"}), newAttrsBytes)
+
+		return nil, nil
+	})
+	return err
 }
 
 func (s *FDBStore) RemovePermission(ctx context.Context, queueName, label string) error {

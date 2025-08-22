@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"path"
 	"regexp"
 	"strconv"
@@ -107,6 +108,8 @@ func (app *App) RootSQSHandler(w http.ResponseWriter, r *http.Request) {
 		app.DeleteMessageHandler(w, r)
 	case "DeleteMessageBatch":
 		app.DeleteMessageBatchHandler(w, r)
+	case "AddPermission":
+		app.AddPermissionHandler(w, r)
 	default:
 		app.sendErrorResponse(w, "UnsupportedOperation", "Unsupported operation: "+action, http.StatusBadRequest)
 	}
@@ -119,6 +122,8 @@ func (app *App) RootSQSHandler(w http.ResponseWriter, r *http.Request) {
 // Valid values: alphanumeric characters, hyphens (-), and underscores (_).
 // For FIFO queues, the name must end with the .fifo suffix.
 var queueNameRegex = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,80}(\.fifo)?$`)
+var labelRegex = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,80}$`)
+var awsAccountIDRegex = regexp.MustCompile(`^\d{12}$`)
 
 // validateIntAttribute is a helper for checking if a string can be parsed as an integer
 // and falls within a specified min/max range. This is used for validating queue attributes.
@@ -836,7 +841,76 @@ func (app *App) ChangeMessageVisibilityBatchHandler(w http.ResponseWriter, r *ht
 	w.WriteHeader(http.StatusNotImplemented)
 }
 func (app *App) AddPermissionHandler(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(http.StatusNotImplemented)
+	var req models.AddPermissionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		app.sendErrorResponse(w, "InvalidRequest", "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if req.QueueUrl == "" {
+		app.sendErrorResponse(w, "MissingParameter", "The request must contain a QueueUrl.", http.StatusBadRequest)
+		return
+	}
+	if req.Label == "" {
+		app.sendErrorResponse(w, "MissingParameter", "The request must contain a Label.", http.StatusBadRequest)
+		return
+	}
+	if !labelRegex.MatchString(req.Label) {
+		app.sendErrorResponse(w, "InvalidParameterValue", "Invalid label: Can only include alphanumeric characters, hyphens, and underscores. 1 to 80 in length.", http.StatusBadRequest)
+		return
+	}
+	if len(req.AWSAccountIds) == 0 {
+		app.sendErrorResponse(w, "MissingParameter", "The request must contain at least one AWSAccountId.", http.StatusBadRequest)
+		return
+	}
+	if len(req.Actions) == 0 {
+		app.sendErrorResponse(w, "MissingParameter", "The request must contain at least one Action.", http.StatusBadRequest)
+		return
+	}
+
+	u, err := url.Parse(req.QueueUrl)
+	if err != nil {
+		app.sendErrorResponse(w, "InvalidAddress", "Invalid QueueUrl", http.StatusBadRequest)
+		return
+	}
+
+	// This is a simplification. In a real multi-tenant SQS, the account ID and region
+	// would be parsed from the request's host or path. For this self-contained service,
+	// we'll use placeholder values.
+	queueOwnerAWSAccountID := "123456789012" // Placeholder
+	region := "us-east-1"                   // Placeholder
+	queueName := path.Base(u.Path)
+
+	var principalARNs []string
+	for _, id := range req.AWSAccountIds {
+		if !awsAccountIDRegex.MatchString(id) {
+			app.sendErrorResponse(w, "InvalidParameterValue", "Invalid AWSAccountId: "+id, http.StatusBadRequest)
+			return
+		}
+		principalARNs = append(principalARNs, "arn:aws:iam::"+id+":root")
+	}
+
+	statement := models.Statement{
+		Sid:    req.Label,
+		Effect: "Allow",
+		Principal: models.Principal{
+			AWS: principalARNs,
+		},
+		Action:   req.Actions,
+		Resource: fmt.Sprintf("arn:aws:sqs:%s:%s:%s", region, queueOwnerAWSAccountID, queueName),
+	}
+
+	err = app.Store.AddPermission(r.Context(), queueName, statement)
+	if err != nil {
+		if errors.Is(err, store.ErrQueueDoesNotExist) {
+			app.sendErrorResponse(w, "QueueDoesNotExist", "The specified queue does not exist.", http.StatusBadRequest)
+			return
+		}
+		app.sendErrorResponse(w, "InternalFailure", "Failed to add permission", http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
 }
 func (app *App) RemovePermissionHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNotImplemented)

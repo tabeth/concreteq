@@ -808,6 +808,98 @@ func TestFDBStore_ReceiveMessage(t *testing.T) {
 	})
 }
 
+func TestFDBStore_AddPermission(t *testing.T) {
+	ctx := context.Background()
+	store, teardown := setupTestDB(t)
+	defer teardown()
+
+	t.Run("adds a permission to a queue without a policy", func(t *testing.T) {
+		queueName := "test-perms-1"
+		err := store.CreateQueue(ctx, queueName, nil, nil)
+		require.NoError(t, err)
+
+		statement := models.Statement{
+			Sid:    "AllowAlice",
+			Effect: "Allow",
+			Principal: models.Principal{
+				AWS: []string{"arn:aws:iam::111122223333:root"},
+			},
+			Action:   []string{"SendMessage"},
+			Resource: "arn:aws:sqs:us-east-1:123456789012:" + queueName,
+		}
+
+		err = store.AddPermission(ctx, queueName, statement)
+		assert.NoError(t, err)
+
+		attrs, err := store.GetQueueAttributes(ctx, queueName)
+		require.NoError(t, err)
+		policyString, ok := attrs["Policy"]
+		require.True(t, ok, "Policy attribute should exist")
+
+		var policy models.Policy
+		err = json.Unmarshal([]byte(policyString), &policy)
+		require.NoError(t, err)
+		assert.Len(t, policy.Statement, 1)
+		assert.Equal(t, "AllowAlice", policy.Statement[0].Sid)
+	})
+
+	t.Run("adds a permission to a queue with an existing policy", func(t *testing.T) {
+		queueName := "test-perms-2"
+		err := store.CreateQueue(ctx, queueName, nil, nil)
+		require.NoError(t, err)
+
+		// Add first permission
+		statement1 := models.Statement{Sid: "AllowAlice", Effect: "Allow", Principal: models.Principal{AWS: []string{"arn:aws:iam::111122223333:root"}}, Action: []string{"SendMessage"}, Resource: "*"}
+		err = store.AddPermission(ctx, queueName, statement1)
+		require.NoError(t, err)
+
+		// Add second permission
+		statement2 := models.Statement{Sid: "AllowBob", Effect: "Allow", Principal: models.Principal{AWS: []string{"arn:aws:iam::444455556666:root"}}, Action: []string{"ReceiveMessage"}, Resource: "*"}
+		err = store.AddPermission(ctx, queueName, statement2)
+		require.NoError(t, err)
+
+		attrs, err := store.GetQueueAttributes(ctx, queueName)
+		require.NoError(t, err)
+		policyString, _ := attrs["Policy"]
+		var policy models.Policy
+		json.Unmarshal([]byte(policyString), &policy)
+
+		assert.Len(t, policy.Statement, 2)
+	})
+
+	t.Run("overwrites an existing permission with the same label", func(t *testing.T) {
+		queueName := "test-perms-3"
+		err := store.CreateQueue(ctx, queueName, nil, nil)
+		require.NoError(t, err)
+
+		// Add first permission
+		statement1 := models.Statement{Sid: "AllowAlice", Effect: "Allow", Principal: models.Principal{AWS: []string{"arn:aws:iam::111122223333:root"}}, Action: []string{"SendMessage"}, Resource: "*"}
+		err = store.AddPermission(ctx, queueName, statement1)
+		require.NoError(t, err)
+
+		// Add second permission with same Sid
+		statement2 := models.Statement{Sid: "AllowAlice", Effect: "Allow", Principal: models.Principal{AWS: []string{"arn:aws:iam::444455556666:root"}}, Action: []string{"ReceiveMessage"}, Resource: "*"}
+		err = store.AddPermission(ctx, queueName, statement2)
+		require.NoError(t, err)
+
+		attrs, err := store.GetQueueAttributes(ctx, queueName)
+		require.NoError(t, err)
+		policyString, _ := attrs["Policy"]
+		var policy models.Policy
+		json.Unmarshal([]byte(policyString), &policy)
+
+		assert.Len(t, policy.Statement, 1)
+		assert.Equal(t, "ReceiveMessage", policy.Statement[0].Action[0])
+		assert.Equal(t, "arn:aws:iam::444455556666:root", policy.Statement[0].Principal.AWS[0])
+	})
+
+	t.Run("returns error for non-existent queue", func(t *testing.T) {
+		statement := models.Statement{Sid: "AllowAnyone"}
+		err := store.AddPermission(ctx, "non-existent-queue", statement)
+		assert.ErrorIs(t, err, ErrQueueDoesNotExist)
+	})
+}
+
 func TestFDBStore_PurgeQueue(t *testing.T) {
 	ctx := context.Background()
 	store, teardown := setupTestDB(t)

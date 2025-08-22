@@ -89,8 +89,9 @@ func (m *MockStore) ChangeMessageVisibility(ctx context.Context, queueName strin
 func (m *MockStore) ChangeMessageVisibilityBatch(ctx context.Context, queueName string, entries map[string]int) error {
 	return nil
 }
-func (m *MockStore) AddPermission(ctx context.Context, queueName, label string, permissions map[string][]string) error {
-	return nil
+func (m *MockStore) AddPermission(ctx context.Context, queueName string, statement models.Statement) error {
+	args := m.Called(ctx, queueName, statement)
+	return args.Error(0)
 }
 func (m *MockStore) RemovePermission(ctx context.Context, queueName, label string) error { return nil }
 func (m *MockStore) ListQueueTags(ctx context.Context, queueName string) (map[string]string, error) {
@@ -244,6 +245,112 @@ func TestCreateQueueHandler(t *testing.T) {
 				} else { // It's a plain text error message from our old http.Error calls, which we should not have
 					assert.Fail(t, "Received unexpected plain text error response", "Response body: %s", rr.Body.String())
 				}
+			}
+
+			mockStore.AssertExpectations(t)
+		})
+	}
+}
+
+func TestAddPermissionHandler(t *testing.T) {
+	tests := []struct {
+		name               string
+		inputBody          string
+		mockSetup          func(*MockStore)
+		expectedStatusCode int
+		expectedBody       string
+	}{
+		{
+			name: "Successful Add Permission",
+			inputBody: `{
+				"QueueUrl": "http://localhost:8080/queues/my-queue",
+				"Label": "TestPermission",
+				"AWSAccountIds": ["111122223333"],
+				"Actions": ["SendMessage"]
+			}`,
+			mockSetup: func(ms *MockStore) {
+				ms.On("AddPermission", mock.Anything, "my-queue", mock.AnythingOfType("models.Statement")).Return(nil)
+			},
+			expectedStatusCode: http.StatusOK,
+			expectedBody:       "",
+		},
+		{
+			name:               "Missing QueueUrl",
+			inputBody:          `{"Label": "Test", "AWSAccountIds": ["111122223333"], "Actions": ["SendMessage"]}`,
+			mockSetup:          func(ms *MockStore) {},
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       `{"__type":"MissingParameter", "message":"The request must contain a QueueUrl."}`,
+		},
+		{
+			name:               "Missing Label",
+			inputBody:          `{"QueueUrl": "http://localhost/q", "AWSAccountIds": ["111122223333"], "Actions": ["SendMessage"]}`,
+			mockSetup:          func(ms *MockStore) {},
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       `{"__type":"MissingParameter", "message":"The request must contain a Label."}`,
+		},
+		{
+			name:               "Invalid Label",
+			inputBody:          `{"QueueUrl": "http://localhost/q", "Label": "Invalid!", "AWSAccountIds": ["111122223333"], "Actions": ["SendMessage"]}`,
+			mockSetup:          func(ms *MockStore) {},
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       `{"__type":"InvalidParameterValue", "message":"Invalid label: Can only include alphanumeric characters, hyphens, and underscores. 1 to 80 in length."}`,
+		},
+		{
+			name:               "Missing AWSAccountIds",
+			inputBody:          `{"QueueUrl": "http://localhost/q", "Label": "Test", "Actions": ["SendMessage"]}`,
+			mockSetup:          func(ms *MockStore) {},
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       `{"__type":"MissingParameter", "message":"The request must contain at least one AWSAccountId."}`,
+		},
+		{
+			name:               "Invalid AWSAccountId",
+			inputBody:          `{"QueueUrl": "http://localhost/q", "Label": "Test", "AWSAccountIds": ["123"], "Actions": ["SendMessage"]}`,
+			mockSetup:          func(ms *MockStore) {},
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       `{"__type":"InvalidParameterValue", "message":"Invalid AWSAccountId: 123"}`,
+		},
+		{
+			name:               "Missing Actions",
+			inputBody:          `{"QueueUrl": "http://localhost/q", "Label": "Test", "AWSAccountIds": ["111122223333"]}`,
+			mockSetup:          func(ms *MockStore) {},
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       `{"__type":"MissingParameter", "message":"The request must contain at least one Action."}`,
+		},
+		{
+			name: "Queue Does Not Exist",
+			inputBody: `{
+				"QueueUrl": "http://localhost:8080/queues/non-existent",
+				"Label": "TestPermission",
+				"AWSAccountIds": ["111122223333"],
+				"Actions": ["SendMessage"]
+			}`,
+			mockSetup: func(ms *MockStore) {
+				ms.On("AddPermission", mock.Anything, "non-existent", mock.AnythingOfType("models.Statement")).Return(store.ErrQueueDoesNotExist)
+			},
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       `{"__type":"QueueDoesNotExist", "message":"The specified queue does not exist."}`,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mockStore := new(MockStore)
+			tc.mockSetup(mockStore)
+
+			app := &App{Store: mockStore}
+			r := chi.NewRouter()
+			app.RegisterSQSHandlers(r)
+
+			req, _ := http.NewRequest("POST", "/", bytes.NewBufferString(tc.inputBody))
+			req.Header.Set("X-Amz-Target", "AmazonSQS.AddPermission")
+			rr := httptest.NewRecorder()
+
+			r.ServeHTTP(rr, req)
+
+			assert.Equal(t, tc.expectedStatusCode, rr.Code)
+
+			if tc.expectedBody != "" {
+				require.JSONEq(t, tc.expectedBody, rr.Body.String())
 			}
 
 			mockStore.AssertExpectations(t)
