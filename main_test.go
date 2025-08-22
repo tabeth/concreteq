@@ -718,6 +718,53 @@ func TestIntegration_FifoFairness(t *testing.T) {
 	assert.Greater(t, len(groupSet), 1, "Expected to receive messages from more than one group via HTTP")
 }
 
+func TestIntegration_ChangeMessageVisibility(t *testing.T) {
+	app, teardown := setupIntegrationTest(t)
+	defer teardown()
+
+	ctx := context.Background()
+	queueName := "visibility-integ-queue"
+	queueURL := fmt.Sprintf("%s/queues/%s", app.baseURL, queueName)
+
+	// 1. Create a queue
+	err := app.store.CreateQueue(ctx, queueName, nil, nil)
+	require.NoError(t, err)
+
+	// 2. Send a message
+	sendResp, err := app.store.SendMessage(ctx, queueName, &models.SendMessageRequest{MessageBody: "visibility test"})
+	require.NoError(t, err)
+
+	// 3. Receive the message to get a receipt handle
+	recResp, err := app.store.ReceiveMessage(ctx, queueName, &models.ReceiveMessageRequest{MaxNumberOfMessages: 1, VisibilityTimeout: 5})
+	require.NoError(t, err)
+	require.Len(t, recResp.Messages, 1)
+	receiptHandle := recResp.Messages[0].ReceiptHandle
+
+	// 4. Change the visibility via HTTP request
+	newVisibilityTimeout := 2 // seconds
+	changeVisBody := fmt.Sprintf(`{"QueueUrl": "%s", "ReceiptHandle": "%s", "VisibilityTimeout": %d}`, queueURL, receiptHandle, newVisibilityTimeout)
+	req, _ := http.NewRequest("POST", app.baseURL+"/", bytes.NewBufferString(changeVisBody))
+	req.Header.Set("X-Amz-Target", "AmazonSQS.ChangeMessageVisibility")
+	httpResp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer httpResp.Body.Close()
+	assert.Equal(t, http.StatusOK, httpResp.StatusCode)
+
+	// 5. Attempt to receive the message again immediately. It should not be visible.
+	recResp2, err := app.store.ReceiveMessage(ctx, queueName, &models.ReceiveMessageRequest{MaxNumberOfMessages: 1})
+	require.NoError(t, err)
+	assert.Len(t, recResp2.Messages, 0, "message should not be visible immediately after visibility change")
+
+	// 6. Wait for the new visibility timeout to expire.
+	time.Sleep(time.Duration(newVisibilityTimeout+1) * time.Second)
+
+	// 7. Receive the message again. It should now be visible.
+	recResp3, err := app.store.ReceiveMessage(ctx, queueName, &models.ReceiveMessageRequest{MaxNumberOfMessages: 1})
+	require.NoError(t, err)
+	require.Len(t, recResp3.Messages, 1, "message should be visible again after new timeout expires")
+	assert.Equal(t, sendResp.MessageId, recResp3.Messages[0].MessageId)
+}
+
 func TestIntegration_DeleteMessageBatch(t *testing.T) {
 	app, teardown := setupIntegrationTest(t)
 	defer teardown()

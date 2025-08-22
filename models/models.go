@@ -148,6 +148,13 @@ type DeleteMessageRequest struct {
 	ReceiptHandle string `json:"ReceiptHandle"`
 }
 
+// ChangeMessageVisibilityRequest defines the parameters for the SQS ChangeMessageVisibility action.
+type ChangeMessageVisibilityRequest struct {
+	QueueUrl          string `json:"QueueUrl"`
+	ReceiptHandle     string `json:"ReceiptHandle"`
+	VisibilityTimeout int    `json:"VisibilityTimeout"`
+}
+
 // ErrorResponse defines the standard AWS JSON error response format.
 // This ensures that clients interacting with this service can parse errors in a familiar way.
 type ErrorResponse struct {

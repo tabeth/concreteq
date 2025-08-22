@@ -1288,17 +1288,95 @@ func (s *FDBStore) DeleteMessageBatch(ctx context.Context, queueName string, ent
 // --- Unimplemented Methods ---
 
 func (s *FDBStore) ChangeMessageVisibility(ctx context.Context, queueName string, receiptHandle string, visibilityTimeout int) error {
-	// TODO: Implement in FoundationDB. This would involve finding the message by
-	// receipt handle, deleting its old visibility index key, and creating a new
-	// one with the updated timeout.
-	// NOTE: When implementing this, be aware that the receipt handle for standard
-	// queues (see `receiveStandardMessages`) only contains the *original*
-	// visibility key (`vis_key`). The new visibility key created during receive
-	// is placed in a *new random shard*. The receipt handle does not contain
-	// information about this new key. A robust implementation of this function
-	// may require modifying the data stored in the receipt handle to include
-	// the new key or shard information.
-	return nil
+	_, err := s.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
+		exists, err := s.dir.Exists(tr, []string{queueName})
+		if err != nil {
+			return nil, err
+		}
+		if !exists {
+			return nil, ErrQueueDoesNotExist
+		}
+
+		queueDir, err := s.dir.Open(tr, []string{queueName}, nil)
+		if err != nil {
+			return nil, err
+		}
+
+		messagesDir := queueDir.Sub("messages")
+		inflightDir := queueDir.Sub("inflight")
+		visibleIdxDir := queueDir.Sub("visible_idx")
+
+		// 1. Look up the receipt handle to find the message it corresponds to.
+		inflightKey := inflightDir.Pack(tuple.Tuple{receiptHandle})
+		receiptBytes, err := tr.Get(inflightKey).Get()
+		if err != nil {
+			return nil, err
+		}
+		if receiptBytes == nil {
+			return nil, ErrInvalidReceiptHandle
+		}
+
+		var receiptData map[string]interface{}
+		if err := json.Unmarshal(receiptBytes, &receiptData); err != nil {
+			return nil, ErrInvalidReceiptHandle
+		}
+
+		messageID, ok := receiptData["id"].(string)
+		if !ok {
+			return nil, ErrInvalidReceiptHandle
+		}
+
+		// 2. Get the original message
+		msgBytes, err := tr.Get(messagesDir.Pack(tuple.Tuple{messageID})).Get()
+		if err != nil {
+			return nil, err
+		}
+		if msgBytes == nil {
+			// Message doesn't exist anymore, which is unexpected if the receipt handle is valid.
+			// However, we can treat this as if the message was deleted.
+			tr.Clear(inflightKey)
+			return nil, ErrInvalidReceiptHandle
+		}
+		var msg models.Message
+		if err := json.Unmarshal(msgBytes, &msg); err != nil {
+			return nil, err
+		}
+
+		// 3. Clear the old visibility timeout key.
+		// The key is stored in the receipt handle data.
+		if visKeyBytes, ok := receiptData["vis_key"].([]byte); ok {
+			tr.Clear(fdb.Key(visKeyBytes))
+		}
+
+		// 4. Update the message's visibility and write it back
+		now := time.Now().Unix()
+		newVisibilityTimeout := now + int64(visibilityTimeout)
+		msg.VisibleAfter = newVisibilityTimeout
+
+		newMsgBytes, err := json.Marshal(msg)
+		if err != nil {
+			return nil, err
+		}
+		tr.Set(messagesDir.Pack(tuple.Tuple{messageID}), newMsgBytes)
+
+		// 5. Create a new visibility index entry with the new timeout.
+		// We'll use a new random shard to avoid hot-spots.
+		newShardID := r.Intn(numShards)
+		newVisKey := visibleIdxDir.Pack(tuple.Tuple{newShardID, newVisibilityTimeout, messageID})
+		tr.Set(newVisKey, []byte{})
+
+		// 6. Update the receipt handle with the new visibility key so subsequent
+		// changes or deletions can find it.
+		receiptData["vis_key"] = newVisKey
+		newReceiptBytes, err := json.Marshal(receiptData)
+		if err != nil {
+			return nil, err
+		}
+		tr.Set(inflightKey, newReceiptBytes)
+
+		return nil, nil
+	})
+	return err
 }
 
 func (s *FDBStore) ChangeMessageVisibilityBatch(ctx context.Context, queueName string, entries map[string]int) error {
