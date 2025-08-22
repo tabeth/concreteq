@@ -814,7 +814,7 @@ func (s *FDBStore) receiveStandardMessages(tr fdb.Transaction, queueDir director
 			// For simplicity in DeleteMessage, we just store the old key.
 			receiptData := map[string]interface{}{
 				"id":      msg.ID,
-				"vis_key": kv.Key, // Store the *original* key.
+				"vis_key": newVisKey, // Store the *new* key for the current in-flight state.
 			}
 			receiptBytes, _ := json.Marshal(receiptData)
 			tr.Set(inflightDir.Pack(tuple.Tuple{receiptHandle}), receiptBytes)
@@ -1185,9 +1185,12 @@ func (s *FDBStore) DeleteMessage(ctx context.Context, queueName string, receiptH
 			if err == nil {
 				tr.Clear(fdb.Key(fifoKey))
 			}
-		} else if visKeyBytes, ok := receiptData["vis_key"].([]byte); ok {
+		} else if visKeyStr, ok := receiptData["vis_key"].(string); ok {
 			// It's a Standard message, delete from `visible_idx`.
-			tr.Clear(fdb.Key(visKeyBytes))
+			visKeyBytes, err := base64.StdEncoding.DecodeString(visKeyStr)
+			if err == nil {
+				tr.Clear(fdb.Key(visKeyBytes))
+			}
 		}
 
 		// 5. Delete the in-flight receipt handle itself.
@@ -1270,6 +1273,11 @@ func (s *FDBStore) DeleteMessageBatch(ctx context.Context, queueName string, ent
 				if err == nil {
 					tr.Clear(fdb.Key(fifoKey))
 				}
+			} else if visKeyStr, ok := receiptData["vis_key"].(string); ok {
+				visKeyBytes, err := base64.StdEncoding.DecodeString(visKeyStr)
+				if err == nil {
+					tr.Clear(fdb.Key(visKeyBytes))
+				}
 			}
 
 			successful = append(successful, models.DeleteMessageBatchResultEntry{Id: entry.Id})
@@ -1344,8 +1352,11 @@ func (s *FDBStore) ChangeMessageVisibility(ctx context.Context, queueName string
 
 		// 3. Clear the old visibility timeout key.
 		// The key is stored in the receipt handle data.
-		if visKeyBytes, ok := receiptData["vis_key"].([]byte); ok {
-			tr.Clear(fdb.Key(visKeyBytes))
+		if visKeyStr, ok := receiptData["vis_key"].(string); ok {
+			visKeyBytes, err := base64.StdEncoding.DecodeString(visKeyStr)
+			if err == nil {
+				tr.Clear(fdb.Key(visKeyBytes))
+			}
 		}
 
 		// 4. Update the message's visibility and write it back
@@ -1379,9 +1390,113 @@ func (s *FDBStore) ChangeMessageVisibility(ctx context.Context, queueName string
 	return err
 }
 
-func (s *FDBStore) ChangeMessageVisibilityBatch(ctx context.Context, queueName string, entries map[string]int) error {
-	// TODO: Implement in FoundationDB.
-	return nil
+func (s *FDBStore) ChangeMessageVisibilityBatch(ctx context.Context, queueName string, entries []models.ChangeMessageVisibilityBatchRequestEntry) (*models.ChangeMessageVisibilityBatchResponse, error) {
+	resp, err := s.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
+		exists, err := s.dir.Exists(tr, []string{queueName})
+		if err != nil {
+			return nil, err
+		}
+		if !exists {
+			return nil, ErrQueueDoesNotExist
+		}
+
+		queueDir, err := s.dir.Open(tr, []string{queueName}, nil)
+		if err != nil {
+			return nil, err
+		}
+
+		messagesDir := queueDir.Sub("messages")
+		inflightDir := queueDir.Sub("inflight")
+		visibleIdxDir := queueDir.Sub("visible_idx")
+
+		successful := []models.ChangeMessageVisibilityBatchResultEntry{}
+		failed := []models.BatchResultErrorEntry{}
+
+		for _, entry := range entries {
+			if entry.VisibilityTimeout < 0 || entry.VisibilityTimeout > 43200 {
+				failed = append(failed, models.BatchResultErrorEntry{Id: entry.Id, Code: "InvalidParameterValue", Message: "VisibilityTimeout must be between 0 and 43200.", SenderFault: true})
+				continue
+			}
+
+			receiptHandle := entry.ReceiptHandle
+			inflightKey := inflightDir.Pack(tuple.Tuple{receiptHandle})
+			receiptBytes, err := tr.Get(inflightKey).Get()
+			if err != nil {
+				return nil, err
+			}
+			if receiptBytes == nil {
+				failed = append(failed, models.BatchResultErrorEntry{Id: entry.Id, Code: "ReceiptHandleIsInvalid", Message: "The receipt handle is not valid.", SenderFault: true})
+				continue
+			}
+
+			var receiptData map[string]interface{}
+			if err := json.Unmarshal(receiptBytes, &receiptData); err != nil {
+				failed = append(failed, models.BatchResultErrorEntry{Id: entry.Id, Code: "InvalidReceiptHandle", Message: "The receipt handle is corrupt.", SenderFault: true})
+				continue
+			}
+
+			messageID, ok := receiptData["id"].(string)
+			if !ok {
+				failed = append(failed, models.BatchResultErrorEntry{Id: entry.Id, Code: "InvalidReceiptHandle", Message: "The receipt handle is corrupt.", SenderFault: true})
+				continue
+			}
+
+			msgBytes, err := tr.Get(messagesDir.Pack(tuple.Tuple{messageID})).Get()
+			if err != nil {
+				return nil, err
+			}
+			if msgBytes == nil {
+				tr.Clear(inflightKey)
+				failed = append(failed, models.BatchResultErrorEntry{Id: entry.Id, Code: "ReceiptHandleIsInvalid", Message: "The message for this receipt handle has been deleted.", SenderFault: true})
+				continue
+			}
+			var msg models.Message
+			if err := json.Unmarshal(msgBytes, &msg); err != nil {
+				failed = append(failed, models.BatchResultErrorEntry{Id: entry.Id, Code: "InternalError", Message: "Failed to unmarshal message.", SenderFault: false})
+				continue
+			}
+
+			if visKeyStr, ok := receiptData["vis_key"].(string); ok {
+				visKeyBytes, err := base64.StdEncoding.DecodeString(visKeyStr)
+				if err == nil {
+					tr.Clear(fdb.Key(visKeyBytes))
+				}
+			}
+
+			now := time.Now().Unix()
+			newVisibilityTimeout := now + int64(entry.VisibilityTimeout)
+			msg.VisibleAfter = newVisibilityTimeout
+
+			newMsgBytes, err := json.Marshal(msg)
+			if err != nil {
+				failed = append(failed, models.BatchResultErrorEntry{Id: entry.Id, Code: "InternalError", Message: "Failed to marshal message.", SenderFault: false})
+				continue
+			}
+			tr.Set(messagesDir.Pack(tuple.Tuple{messageID}), newMsgBytes)
+
+			newShardID := r.Intn(numShards)
+			newVisKey := visibleIdxDir.Pack(tuple.Tuple{newShardID, newVisibilityTimeout, messageID})
+			tr.Set(newVisKey, []byte{})
+
+			receiptData["vis_key"] = newVisKey
+			newReceiptBytes, err := json.Marshal(receiptData)
+			if err != nil {
+				failed = append(failed, models.BatchResultErrorEntry{Id: entry.Id, Code: "InternalError", Message: "Failed to marshal receipt.", SenderFault: false})
+				continue
+			}
+			tr.Set(inflightKey, newReceiptBytes)
+
+			successful = append(successful, models.ChangeMessageVisibilityBatchResultEntry{Id: entry.Id})
+		}
+
+		return &models.ChangeMessageVisibilityBatchResponse{Successful: successful, Failed: failed}, nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	return resp.(*models.ChangeMessageVisibilityBatchResponse), nil
 }
 
 func (s *FDBStore) AddPermission(ctx context.Context, queueName, label string, permissions map[string][]string) error {

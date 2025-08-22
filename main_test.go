@@ -765,6 +765,74 @@ func TestIntegration_ChangeMessageVisibility(t *testing.T) {
 	assert.Equal(t, sendResp.MessageId, recResp3.Messages[0].MessageId)
 }
 
+func TestIntegration_ChangeMessageVisibilityBatch(t *testing.T) {
+	app, teardown := setupIntegrationTest(t)
+	defer teardown()
+
+	ctx := context.Background()
+	queueName := "change-vis-batch-integ-queue"
+	queueURL := fmt.Sprintf("%s/queues/%s", app.baseURL, queueName)
+
+	// 1. Create a queue
+	err := app.store.CreateQueue(ctx, queueName, nil, nil)
+	require.NoError(t, err)
+
+	// 2. Send 3 messages
+	_, err = app.store.SendMessage(ctx, queueName, &models.SendMessageRequest{MessageBody: "msg1"})
+	require.NoError(t, err)
+	_, err = app.store.SendMessage(ctx, queueName, &models.SendMessageRequest{MessageBody: "msg2"})
+	require.NoError(t, err)
+	_, err = app.store.SendMessage(ctx, queueName, &models.SendMessageRequest{MessageBody: "msg3"})
+	require.NoError(t, err)
+
+	// 3. Receive the messages to get receipt handles
+	recResp, err := app.store.ReceiveMessage(ctx, queueName, &models.ReceiveMessageRequest{MaxNumberOfMessages: 3, VisibilityTimeout: 10})
+	require.NoError(t, err)
+	require.Len(t, recResp.Messages, 3)
+
+	// 4. Construct and send the batch change request
+	changeReq := models.ChangeMessageVisibilityBatchRequest{
+		QueueUrl: queueURL,
+		Entries: []models.ChangeMessageVisibilityBatchRequestEntry{
+			{Id: "ok_1", ReceiptHandle: recResp.Messages[0].ReceiptHandle, VisibilityTimeout: 20},
+			{Id: "ok_2", ReceiptHandle: recResp.Messages[1].ReceiptHandle, VisibilityTimeout: 30},
+			{Id: "bad_handle", ReceiptHandle: "non-existent-handle", VisibilityTimeout: 25},
+		},
+	}
+	bodyBytes, _ := json.Marshal(changeReq)
+	req, _ := http.NewRequest("POST", app.baseURL+"/", bytes.NewBuffer(bodyBytes))
+	req.Header.Set("X-Amz-Target", "AmazonSQS.ChangeMessageVisibilityBatch")
+
+	httpResp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer httpResp.Body.Close()
+
+	// 5. Assert the response
+	assert.Equal(t, http.StatusOK, httpResp.StatusCode)
+	var changeResp models.ChangeMessageVisibilityBatchResponse
+	err = json.NewDecoder(httpResp.Body).Decode(&changeResp)
+	require.NoError(t, err)
+
+	assert.Len(t, changeResp.Successful, 2)
+	assert.Len(t, changeResp.Failed, 1)
+	assert.Equal(t, "bad_handle", changeResp.Failed[0].Id)
+	assert.Equal(t, "ReceiptHandleIsInvalid", changeResp.Failed[0].Code)
+
+	// 6. Verify visibility in DB
+	// Message 1 and 2 should not be visible yet, as their visibility has been extended.
+	// Message 3 should also not be visible yet, as its original 10s timeout has not expired.
+	recResp2, err := app.store.ReceiveMessage(ctx, queueName, &models.ReceiveMessageRequest{MaxNumberOfMessages: 5})
+	require.NoError(t, err)
+	assert.Len(t, recResp2.Messages, 0, "No messages should be visible immediately after visibility change")
+
+	// Wait for original timeout to expire, but not new ones
+	time.Sleep(11 * time.Second)
+	recResp3, err := app.store.ReceiveMessage(ctx, queueName, &models.ReceiveMessageRequest{MaxNumberOfMessages: 5})
+	require.NoError(t, err)
+	assert.Len(t, recResp3.Messages, 1, "Only msg3 should be visible after original timeout")
+	assert.Equal(t, recResp.Messages[2].MessageId, recResp3.Messages[0].MessageId)
+}
+
 func TestIntegration_DeleteMessageBatch(t *testing.T) {
 	app, teardown := setupIntegrationTest(t)
 	defer teardown()

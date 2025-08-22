@@ -1039,3 +1039,75 @@ func TestFDBStore_SendMessage(t *testing.T) {
 		assert.ErrorIs(t, err, ErrQueueDoesNotExist)
 	})
 }
+
+func TestFDBStore_ChangeMessageVisibilityBatch(t *testing.T) {
+	ctx := context.Background()
+	store, teardown := setupTestDB(t)
+	defer teardown()
+
+	queueName := "test-change-vis-batch"
+	err := store.CreateQueue(ctx, queueName, nil, nil)
+	require.NoError(t, err)
+
+	// 1. Send 3 messages
+	_, err = store.SendMessage(ctx, queueName, &models.SendMessageRequest{MessageBody: "msg1"})
+	require.NoError(t, err)
+	_, err = store.SendMessage(ctx, queueName, &models.SendMessageRequest{MessageBody: "msg2"})
+	require.NoError(t, err)
+	_, err = store.SendMessage(ctx, queueName, &models.SendMessageRequest{MessageBody: "msg3"})
+	require.NoError(t, err)
+
+	// 2. Receive the 3 messages to get receipt handles
+	receiveResp, err := store.ReceiveMessage(ctx, queueName, &models.ReceiveMessageRequest{MaxNumberOfMessages: 3})
+	require.NoError(t, err)
+	require.Len(t, receiveResp.Messages, 3)
+
+	// 3. Prepare a batch change request
+	entries := []models.ChangeMessageVisibilityBatchRequestEntry{
+		{Id: "success_1", ReceiptHandle: receiveResp.Messages[0].ReceiptHandle, VisibilityTimeout: 100},
+		{Id: "success_2", ReceiptHandle: receiveResp.Messages[1].ReceiptHandle, VisibilityTimeout: 200},
+		{Id: "invalid_handle", ReceiptHandle: "this-handle-is-not-real", VisibilityTimeout: 50},
+		{Id: "invalid_timeout", ReceiptHandle: receiveResp.Messages[2].ReceiptHandle, VisibilityTimeout: 99999}, // > 12 hours
+	}
+
+	startTime := time.Now().Unix()
+
+	// 4. Execute the batch change
+	changeResp, err := store.ChangeMessageVisibilityBatch(ctx, queueName, entries)
+	require.NoError(t, err)
+	require.NotNil(t, changeResp)
+
+	// 5. Assert the results
+	assert.Len(t, changeResp.Successful, 2, "Expected 2 successful changes")
+	assert.Len(t, changeResp.Failed, 2, "Expected 2 failed changes")
+
+	// Check successful IDs
+	successIDs := make(map[string]bool)
+	for _, s := range changeResp.Successful {
+		successIDs[s.Id] = true
+	}
+	assert.True(t, successIDs["success_1"])
+	assert.True(t, successIDs["success_2"])
+
+	// Check failed IDs and reasons
+	failedCodes := make(map[string]string)
+	for _, f := range changeResp.Failed {
+		failedCodes[f.Id] = f.Code
+	}
+	assert.Equal(t, "ReceiptHandleIsInvalid", failedCodes["invalid_handle"])
+	assert.Equal(t, "InvalidParameterValue", failedCodes["invalid_timeout"])
+
+	// 6. Verify the changes in the database for the successful messages
+	msg1, err := getMessageFromDB(store, queueName, receiveResp.Messages[0].MessageId)
+	require.NoError(t, err)
+	assert.InDelta(t, startTime+100, msg1.VisibleAfter, 2, "msg1 visibility timeout should be updated")
+
+	msg2, err := getMessageFromDB(store, queueName, receiveResp.Messages[1].MessageId)
+	require.NoError(t, err)
+	assert.InDelta(t, startTime+200, msg2.VisibleAfter, 2, "msg2 visibility timeout should be updated")
+
+	// 7. Verify the message that had a failed visibility change is NOT updated
+	msg3, err := getMessageFromDB(store, queueName, receiveResp.Messages[2].MessageId)
+	require.NoError(t, err)
+	assert.NotEqual(t, startTime+50, msg3.VisibleAfter, "msg3 visibility timeout should not be updated")
+}

@@ -87,8 +87,12 @@ func (m *MockStore) ChangeMessageVisibility(ctx context.Context, queueName strin
 	args := m.Called(ctx, queueName, receiptHandle, visibilityTimeout)
 	return args.Error(0)
 }
-func (m *MockStore) ChangeMessageVisibilityBatch(ctx context.Context, queueName string, entries map[string]int) error {
-	return nil
+func (m *MockStore) ChangeMessageVisibilityBatch(ctx context.Context, queueName string, entries []models.ChangeMessageVisibilityBatchRequestEntry) (*models.ChangeMessageVisibilityBatchResponse, error) {
+	args := m.Called(ctx, queueName, entries)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*models.ChangeMessageVisibilityBatchResponse), args.Error(1)
 }
 func (m *MockStore) AddPermission(ctx context.Context, queueName, label string, permissions map[string][]string) error {
 	return nil
@@ -245,6 +249,98 @@ func TestCreateQueueHandler(t *testing.T) {
 				} else { // It's a plain text error message from our old http.Error calls, which we should not have
 					assert.Fail(t, "Received unexpected plain text error response", "Response body: %s", rr.Body.String())
 				}
+			}
+
+			mockStore.AssertExpectations(t)
+		})
+	}
+}
+
+func TestChangeMessageVisibilityBatchHandler(t *testing.T) {
+	tests := []struct {
+		name               string
+		inputBody          string
+		mockSetup          func(*MockStore)
+		expectedStatusCode int
+		expectedBody       string
+	}{
+		{
+			name: "Successful Batch Change",
+			inputBody: `{
+                "QueueUrl": "http://localhost:8080/queues/my-queue",
+                "Entries": [
+                    {"Id": "msg1", "ReceiptHandle": "handle1", "VisibilityTimeout": 10},
+                    {"Id": "msg2", "ReceiptHandle": "handle2", "VisibilityTimeout": 20}
+                ]
+            }`,
+			mockSetup: func(ms *MockStore) {
+				ms.On("ChangeMessageVisibilityBatch", mock.Anything, "my-queue", mock.AnythingOfType("[]models.ChangeMessageVisibilityBatchRequestEntry")).Return(&models.ChangeMessageVisibilityBatchResponse{
+					Successful: []models.ChangeMessageVisibilityBatchResultEntry{
+						{Id: "msg1"},
+						{Id: "msg2"},
+					},
+					Failed: []models.BatchResultErrorEntry{},
+				}, nil)
+			},
+			expectedStatusCode: http.StatusOK,
+			expectedBody:       `{"Successful":[{"Id":"msg1"},{"Id":"msg2"}],"Failed":[]}`,
+		},
+		{
+			name:      "Partial Failure",
+			inputBody: `{"QueueUrl": "http://localhost/queues/q", "Entries": [{"Id": "1", "ReceiptHandle": "h1", "VisibilityTimeout": 30}]}`,
+			mockSetup: func(ms *MockStore) {
+				ms.On("ChangeMessageVisibilityBatch", mock.Anything, "q", mock.Anything).Return(&models.ChangeMessageVisibilityBatchResponse{
+					Successful: []models.ChangeMessageVisibilityBatchResultEntry{},
+					Failed:     []models.BatchResultErrorEntry{{Id: "fail_id", Code: "ReceiptHandleIsInvalid", Message: "The receipt handle is not valid.", SenderFault: true}},
+				}, nil)
+			},
+			expectedStatusCode: http.StatusOK,
+			expectedBody:       `{"Successful":[],"Failed":[{"Id":"fail_id","Code":"ReceiptHandleIsInvalid","Message":"The receipt handle is not valid.","SenderFault":true}]}`,
+		},
+		{
+			name:               "Too Many Entries",
+			inputBody:          `{"QueueUrl": "http://localhost/queues/q", "Entries": [` + strings.Repeat(`{"Id":"_","ReceiptHandle":"_","VisibilityTimeout":1},`, 10) + `{"Id":"_","ReceiptHandle":"_","VisibilityTimeout":1}]}`,
+			mockSetup:          func(ms *MockStore) {},
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       `{"__type":"TooManyEntriesInBatchRequest", "message":"The batch request contains more entries than permissible."}`,
+		},
+		{
+			name:               "Duplicate Entry Ids",
+			inputBody:          `{"QueueUrl": "http://localhost/queues/q", "Entries": [{"Id": "1", "ReceiptHandle": "h1", "VisibilityTimeout": 1}, {"Id": "1", "ReceiptHandle": "h2", "VisibilityTimeout": 1}]}`,
+			mockSetup:          func(ms *MockStore) {},
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       `{"__type":"BatchEntryIdsNotDistinct", "message":"Two or more batch entries in the request have the same Id."}`,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mockStore := new(MockStore)
+			tc.mockSetup(mockStore)
+
+			app := &App{Store: mockStore}
+			r := chi.NewRouter()
+			// This test uses the main SQS handler, so we need to register it.
+			app.RegisterSQSHandlers(r)
+
+			var payload struct {
+				QueueUrl string `json:"QueueUrl"`
+			}
+			json.Unmarshal([]byte(tc.inputBody), &payload)
+
+			requestURL := "/"
+			// For this specific handler, the queue name is extracted from the payload's QueueUrl
+			// and the action is determined by the X-Amz-Target header.
+			req, _ := http.NewRequest("POST", requestURL, bytes.NewBufferString(tc.inputBody))
+			req.Header.Set("X-Amz-Target", "AmazonSQS.ChangeMessageVisibilityBatch") // This should be dispatched by RootSQSHandler
+			rr := httptest.NewRecorder()
+
+			r.ServeHTTP(rr, req)
+
+			assert.Equal(t, tc.expectedStatusCode, rr.Code, "status code mismatch")
+
+			if tc.expectedBody != "" {
+				require.JSONEq(t, tc.expectedBody, rr.Body.String(), "response body mismatch")
 			}
 
 			mockStore.AssertExpectations(t)
