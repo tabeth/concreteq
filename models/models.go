@@ -231,3 +231,27 @@ type DeleteMessageBatchResponse struct {
 type DeleteMessageBatchResultEntry struct {
 	Id string `json:"Id"`
 }
+
+// ChangeMessageVisibilityBatchRequest defines the parameters for the SQS ChangeMessageVisibilityBatch action.
+type ChangeMessageVisibilityBatchRequest struct {
+	QueueUrl string                                   `json:"QueueUrl"`
+	Entries  []ChangeMessageVisibilityBatchRequestEntry `json:"Entries"`
+}
+
+// ChangeMessageVisibilityBatchRequestEntry defines a single message for which the visibility timeout is to be changed.
+type ChangeMessageVisibilityBatchRequestEntry struct {
+	Id                string `json:"Id"`
+	ReceiptHandle     string `json:"ReceiptHandle"`
+	VisibilityTimeout int    `json:"VisibilityTimeout"`
+}
+
+// ChangeMessageVisibilityBatchResponse defines the structure for the SQS ChangeMessageVisibilityBatch action's output.
+type ChangeMessageVisibilityBatchResponse struct {
+	Successful []ChangeMessageVisibilityBatchResultEntry `json:"Successful"`
+	Failed     []BatchResultErrorEntry                   `json:"Failed"`
+}
+
+// ChangeMessageVisibilityBatchResultEntry contains the ID of a successfully changed message in a batch.
+type ChangeMessageVisibilityBatchResultEntry struct {
+	Id string `json:"Id"`
+}
