@@ -41,7 +41,11 @@ func (m *MockStore) ListQueues(ctx context.Context, maxResults int, nextToken, q
 	return queues, args.String(1), args.Error(2)
 }
 func (m *MockStore) GetQueueAttributes(ctx context.Context, name string) (map[string]string, error) {
-	return nil, nil
+	args := m.Called(ctx, name)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(map[string]string), args.Error(1)
 }
 func (m *MockStore) SetQueueAttributes(ctx context.Context, name string, attributes map[string]string) error {
 	return nil
@@ -247,6 +251,99 @@ func TestCreateQueueHandler(t *testing.T) {
 				}
 			}
 
+			mockStore.AssertExpectations(t)
+		})
+	}
+}
+
+func TestGetQueueAttributesHandler(t *testing.T) {
+	tests := []struct {
+		name               string
+		inputBody          string
+		mockSetup          func(*MockStore)
+		expectedStatusCode int
+		expectedBody       string
+	}{
+		{
+			name:      "Successful - All Attributes",
+			inputBody: `{"QueueUrl": "http://localhost/queues/my-queue", "AttributeNames": ["All"]}`,
+			mockSetup: func(ms *MockStore) {
+				ms.On("GetQueueAttributes", mock.Anything, "my-queue").Return(map[string]string{
+					"VisibilityTimeout": "100",
+				}, nil)
+			},
+			expectedStatusCode: http.StatusOK,
+			expectedBody: `{
+				"Attributes": {
+					"VisibilityTimeout": "100",
+					"QueueArn": "arn:aws:sqs:us-east-1:123456789012:my-queue",
+					"ReceiveMessageWaitTimeSeconds": "0"
+				}
+			}`,
+		},
+		{
+			name:      "Successful - Specific Attributes",
+			inputBody: `{"QueueUrl": "http://localhost/queues/my-queue", "AttributeNames": ["VisibilityTimeout", "QueueArn"]}`,
+			mockSetup: func(ms *MockStore) {
+				ms.On("GetQueueAttributes", mock.Anything, "my-queue").Return(map[string]string{
+					"VisibilityTimeout":      "100",
+					"MessageRetentionPeriod": "120",
+				}, nil)
+			},
+			expectedStatusCode: http.StatusOK,
+			expectedBody: `{
+				"Attributes": {
+					"VisibilityTimeout": "100",
+					"QueueArn": "arn:aws:sqs:us-east-1:123456789012:my-queue"
+				}
+			}`,
+		},
+		{
+			name:               "Queue Does Not Exist",
+			inputBody:          `{"QueueUrl": "http://localhost/queues/non-existent", "AttributeNames": ["All"]}`,
+			mockSetup: func(ms *MockStore) {
+				ms.On("GetQueueAttributes", mock.Anything, "non-existent").Return(nil, store.ErrQueueDoesNotExist)
+			},
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       `{"__type":"QueueDoesNotExist", "message":"The specified queue does not exist."}`,
+		},
+		{
+			name:      "Invalid Attribute Name",
+			inputBody: `{"QueueUrl": "http://localhost/queues/my-queue", "AttributeNames": ["NonExistentAttribute"]}`,
+			mockSetup: func(ms *MockStore) {
+				ms.On("GetQueueAttributes", mock.Anything, "my-queue").Return(map[string]string{}, nil)
+			},
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       `{"__type":"InvalidAttributeName", "message":"The specified attribute NonExistentAttribute does not exist."}`,
+		},
+		{
+			name:               "Missing QueueUrl",
+			inputBody:          `{"AttributeNames": ["All"]}`,
+			mockSetup:          func(ms *MockStore) {},
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       `{"__type":"MissingParameter", "message":"The request must contain a QueueUrl."}`,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mockStore := new(MockStore)
+			tc.mockSetup(mockStore)
+
+			app := &App{Store: mockStore}
+			r := chi.NewRouter()
+			app.RegisterSQSHandlers(r)
+
+			req, _ := http.NewRequest("POST", "/", bytes.NewBufferString(tc.inputBody))
+			req.Header.Set("X-Amz-Target", "AmazonSQS.GetQueueAttributes")
+			rr := httptest.NewRecorder()
+
+			r.ServeHTTP(rr, req)
+
+			assert.Equal(t, tc.expectedStatusCode, rr.Code)
+			if tc.expectedBody != "" {
+				require.JSONEq(t, tc.expectedBody, rr.Body.String())
+			}
 			mockStore.AssertExpectations(t)
 		})
 	}

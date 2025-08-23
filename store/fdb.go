@@ -221,10 +221,51 @@ func (s *FDBStore) ListQueues(ctx context.Context, maxResults int, nextToken, qu
 	return resultQueues, newNextToken, nil
 }
 
-// GetQueueAttributes is not yet implemented.
+// GetQueueAttributes retrieves the attributes for a specified queue from FoundationDB.
 func (s *FDBStore) GetQueueAttributes(ctx context.Context, name string) (map[string]string, error) {
-	// TODO: Implement reading the (queue_dir, "attributes") key.
-	return nil, nil
+	// A ReadTransact is used because we are only reading data. This is more efficient
+	// than a full read-write transaction.
+	attributes, err := s.db.ReadTransact(func(tr fdb.ReadTransaction) (interface{}, error) {
+		// Check if the queue's directory exists. If not, the queue does not exist.
+		exists, err := s.dir.Exists(tr, []string{name})
+		if err != nil {
+			return nil, err
+		}
+		if !exists {
+			return nil, ErrQueueDoesNotExist
+		}
+
+		// Open the directory for the specified queue.
+		queueDir, err := s.dir.Open(tr, []string{name}, nil)
+		if err != nil {
+			return nil, err
+		}
+
+		// The attributes are stored as a JSON blob in the "attributes" key
+		// within the queue's directory.
+		attrsBytes, err := tr.Get(queueDir.Pack(tuple.Tuple{"attributes"})).Get()
+		if err != nil {
+			return nil, err
+		}
+
+		// If the key doesn't exist or is empty, there are no attributes.
+		if len(attrsBytes) == 0 {
+			return make(map[string]string), nil
+		}
+
+		// Unmarshal the JSON data into a map to be returned.
+		var attrs map[string]string
+		if err := json.Unmarshal(attrsBytes, &attrs); err != nil {
+			// If the data is corrupt, return an error.
+			return nil, err
+		}
+		return attrs, nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+	return attributes.(map[string]string), nil
 }
 
 // SetQueueAttributes is not yet implemented.
