@@ -321,6 +321,88 @@ func TestIntegration_CreateQueue(t *testing.T) {
 	}
 }
 
+func TestIntegration_GetQueueAttributes(t *testing.T) {
+	app, teardown := setupIntegrationTest(t)
+	defer teardown()
+
+	client := http.DefaultClient
+	ctx := context.Background()
+
+	// 1. Setup: Create a queue with specific attributes
+	queueName := "test-get-attrs-queue"
+	attributes := map[string]string{
+		"VisibilityTimeout":      "123",
+		"MessageRetentionPeriod": "456",
+	}
+	err := app.store.CreateQueue(ctx, queueName, attributes, nil)
+	require.NoError(t, err)
+
+	t.Run("Get All Attributes", func(t *testing.T) {
+		body := fmt.Sprintf(`{"QueueUrl": "%s/queues/%s", "AttributeNames": ["All"]}`, app.baseURL, queueName)
+		req, _ := http.NewRequest("POST", app.baseURL, strings.NewReader(body))
+		req.Header.Set("X-Amz-Target", "AmazonSQS.GetQueueAttributes")
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, err := client.Do(req)
+		require.NoError(t, err)
+		defer resp.Body.Close()
+
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+		var respBody models.GetQueueAttributesResponse
+		err = json.NewDecoder(resp.Body).Decode(&respBody)
+		require.NoError(t, err)
+
+		expectedAttrs := map[string]string{
+			"VisibilityTimeout":             "123",
+			"MessageRetentionPeriod":        "456",
+			"QueueArn":                      fmt.Sprintf("arn:aws:sqs:us-east-1:123456789012:%s", queueName),
+			"ReceiveMessageWaitTimeSeconds": "0", // Default value
+		}
+		assert.Equal(t, expectedAttrs, respBody.Attributes)
+	})
+
+	t.Run("Get Specific Attributes", func(t *testing.T) {
+		body := fmt.Sprintf(`{"QueueUrl": "%s/queues/%s", "AttributeNames": ["VisibilityTimeout", "QueueArn"]}`, app.baseURL, queueName)
+		req, _ := http.NewRequest("POST", app.baseURL, strings.NewReader(body))
+		req.Header.Set("X-Amz-Target", "AmazonSQS.GetQueueAttributes")
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, err := client.Do(req)
+		require.NoError(t, err)
+		defer resp.Body.Close()
+
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+		var respBody models.GetQueueAttributesResponse
+		err = json.NewDecoder(resp.Body).Decode(&respBody)
+		require.NoError(t, err)
+
+		expectedAttrs := map[string]string{
+			"VisibilityTimeout": "123",
+			"QueueArn":          fmt.Sprintf("arn:aws:sqs:us-east-1:123456789012:%s", queueName),
+		}
+		assert.Equal(t, expectedAttrs, respBody.Attributes)
+	})
+
+	t.Run("Queue Not Found", func(t *testing.T) {
+		body := `{"QueueUrl": "http://localhost/queues/non-existent-queue", "AttributeNames": ["All"]}`
+		req, _ := http.NewRequest("POST", app.baseURL, strings.NewReader(body))
+		req.Header.Set("X-Amz-Target", "AmazonSQS.GetQueueAttributes")
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, err := client.Do(req)
+		require.NoError(t, err)
+		defer resp.Body.Close()
+
+		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+		var errBody models.ErrorResponse
+		err = json.NewDecoder(resp.Body).Decode(&errBody)
+		require.NoError(t, err)
+		assert.Equal(t, "QueueDoesNotExist", errBody.Type)
+	})
+}
+
 func TestIntegration_ListDeletePurgeQueues(t *testing.T) {
 	app, teardown := setupIntegrationTest(t)
 	defer teardown()
