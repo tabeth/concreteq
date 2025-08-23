@@ -9,6 +9,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"sort"
 	"strconv"
 	"strings"
@@ -1455,17 +1456,371 @@ func (s *FDBStore) ListDeadLetterSourceQueues(ctx context.Context, queueURL stri
 	return nil, nil
 }
 
-func (s *FDBStore) StartMessageMoveTask(ctx context.Context, sourceArn, destinationArn string) (string, error) {
-	// TODO: Implement in FoundationDB.
-	return "", nil
+func (s *FDBStore) StartMessageMoveTask(ctx context.Context, sourceArn, destinationArn string, maxMessagesPerSecond *int) (string, error) {
+	taskHandle := uuid.New().String()
+
+	_, err := s.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
+		// 1. Check if source queue exists
+		sourceQueueDir, err := s.dir.Open(tr, []string{sourceArn}, nil)
+		if err != nil {
+			if fdbErr, ok := err.(fdb.Error); ok && fdbErr.Code == 2000 { // Directory does not exist
+				return nil, ErrQueueDoesNotExist
+			}
+			return nil, err
+		}
+
+		// 2. Check if a task is already running for this source queue
+		activeTaskKey := sourceQueueDir.Pack(tuple.Tuple{"active_move_task"})
+		activeTaskHandle, err := tr.Get(activeTaskKey).Get()
+		if err != nil {
+			return nil, err
+		}
+		if len(activeTaskHandle) > 0 {
+			return nil, ErrMessageMoveInProgress
+		}
+
+		// 3. Create and store the task
+		task := models.MessageMoveTask{
+			TaskHandle:                 taskHandle,
+			SourceArn:                  sourceArn,
+			DestinationArn:             destinationArn,
+			MaxNumberOfMessagesPerSecond: maxMessagesPerSecond,
+			Status:                     "RUNNING",
+			StartedTimestamp:           time.Now().Unix(),
+		}
+
+		tasksDir, err := s.dir.CreateOrOpen(tr, []string{"message_move_tasks"}, nil)
+		if err != nil {
+			return nil, err
+		}
+
+		taskBytes, err := json.Marshal(task)
+		if err != nil {
+			return nil, err
+		}
+		tr.Set(tasksDir.Pack(tuple.Tuple{taskHandle}), taskBytes)
+
+		// 4. Mark the task as active on the source queue
+		tr.Set(activeTaskKey, []byte(taskHandle))
+
+		return nil, nil
+	})
+
+	if err != nil {
+		return "", err
+	}
+
+	// 5. Spawn the background worker
+	go s.runMessageMoveTask(taskHandle, sourceArn, destinationArn, maxMessagesPerSecond)
+
+	return taskHandle, nil
 }
 
-func (s *FDBStore) CancelMessageMoveTask(ctx context.Context, taskHandle string) error {
-	// TODO: Implement in FoundationDB.
-	return nil
+// runMessageMoveTask is the background worker that performs the message movement.
+func (s *FDBStore) runMessageMoveTask(taskHandle, sourceArn, destinationArn string, maxMessagesPerSecond *int) {
+	ctx := context.Background()
+
+	// Initial setup: Get the approximate number of messages to move.
+	// This is an estimate, as messages can still be added to the DLQ after the task starts.
+	var approxMessagesToMove int64
+	_, err := s.db.ReadTransact(func(tr fdb.ReadTransaction) (interface{}, error) {
+		sourceQueueDir, err := s.dir.Open(tr, []string{sourceArn}, nil)
+		if err != nil {
+			return nil, err
+		}
+		// A simple way to estimate is to count keys in the visibility index.
+		// This is not perfectly accurate but is a reasonable approximation.
+		visIdxDir := sourceQueueDir.Sub("visible_idx")
+		pr, _ := fdb.PrefixRange(visIdxDir.Pack(tuple.Tuple{}))
+		rangeResult := tr.GetRange(pr, fdb.RangeOptions{})
+		kvs, err := rangeResult.GetSliceWithError()
+		if err != nil {
+			return nil, err
+		}
+		approxMessagesToMove = int64(len(kvs))
+		return nil, nil
+	})
+	if err != nil {
+		s.updateTaskStatus(taskHandle, "FAILED", "Could not estimate number of messages to move.", 0)
+		return
+	}
+
+	s.updateTaskCounts(taskHandle, 0, approxMessagesToMove)
+
+	// Determine the rate limit
+	rate := time.Second
+	if maxMessagesPerSecond != nil && *maxMessagesPerSecond > 0 {
+		rate = time.Second / time.Duration(*maxMessagesPerSecond)
+	}
+	ticker := time.NewTicker(rate)
+	defer ticker.Stop()
+
+	var totalMoved int64 = 0
+
+	for {
+		// Before each batch, check if the task has been cancelled.
+		if s.isTaskCancelled(taskHandle) {
+			s.updateTaskStatus(taskHandle, "CANCELLED", "Task was cancelled by user.", totalMoved)
+			return
+		}
+
+		select {
+		case <-ticker.C:
+			movedCount, err := s.moveMessageBatch(ctx, sourceArn, destinationArn)
+			if err != nil {
+				s.updateTaskStatus(taskHandle, "FAILED", err.Error(), totalMoved)
+				return
+			}
+			if movedCount == 0 {
+				// No more messages to move
+				s.updateTaskStatus(taskHandle, "COMPLETED", "", totalMoved)
+				return
+			}
+			totalMoved += movedCount
+			s.updateTaskCounts(taskHandle, totalMoved, approxMessagesToMove)
+		}
+	}
 }
 
-func (s *FDBStore) ListMessageMoveTasks(ctx context.Context, sourceArn string) ([]string, error) {
-	// TODO: Implement in FoundationDB.
-	return nil, nil
+// moveMessageBatch moves a single batch of messages from source to destination.
+// Returns the number of messages moved, or 0 if the source queue was empty.
+func (s *FDBStore) moveMessageBatch(ctx context.Context, sourceArn, destinationArn string) (int64, error) {
+	// 1. Receive messages from the source queue
+	receiveReq := &models.ReceiveMessageRequest{
+		MaxNumberOfMessages: 10, // SQS max batch size
+		VisibilityTimeout:   60, // Hide for 60 seconds while we process
+	}
+	receiveResp, err := s.ReceiveMessage(ctx, sourceArn, receiveReq)
+	if err != nil {
+		return 0, err
+	}
+	if len(receiveResp.Messages) == 0 {
+		return 0, nil // No more messages
+	}
+
+	// 2. Prepare to send them to the destination
+	sendEntries := make([]models.SendMessageBatchRequestEntry, len(receiveResp.Messages))
+	deleteEntries := make([]models.DeleteMessageBatchRequestEntry, len(receiveResp.Messages))
+	for i, msg := range receiveResp.Messages {
+		sendEntries[i] = models.SendMessageBatchRequestEntry{
+			Id:                msg.MessageId,
+			MessageBody:       msg.Body,
+			MessageAttributes: msg.MessageAttributes,
+		}
+		deleteEntries[i] = models.DeleteMessageBatchRequestEntry{
+			Id:            msg.MessageId,
+			ReceiptHandle: msg.ReceiptHandle,
+		}
+	}
+
+	// 3. Send to destination
+	sendReq := &models.SendMessageBatchRequest{
+		Entries: sendEntries,
+	}
+	sendResp, err := s.SendMessageBatch(ctx, destinationArn, sendReq)
+	if err != nil {
+		return 0, err
+	}
+	if len(sendResp.Failed) > 0 {
+		return 0, errors.New("failed to send one or more messages to destination")
+	}
+
+	// 4. Delete from source
+	_, err = s.DeleteMessageBatch(ctx, sourceArn, deleteEntries)
+	if err != nil {
+		return 0, err
+	}
+
+	return int64(len(receiveResp.Messages)), nil
+}
+
+// updateTaskCounts updates the message counts for a task.
+func (s *FDBStore) updateTaskCounts(taskHandle string, moved, toMove int64) {
+	s.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
+		tasksDir, err := s.dir.Open(tr, []string{"message_move_tasks"}, nil)
+		if err != nil { return nil, err }
+		taskKey := tasksDir.Pack(tuple.Tuple{taskHandle})
+		taskBytes, err := tr.Get(taskKey).Get()
+		if err != nil || taskBytes == nil { return nil, err }
+
+		var task models.MessageMoveTask
+		if err := json.Unmarshal(taskBytes, &task); err != nil { return nil, err }
+
+		task.ApproximateNumberOfMessagesMoved = moved
+		task.ApproximateNumberOfMessagesToMove = toMove
+
+		newTaskBytes, err := json.Marshal(task)
+		if err != nil { return nil, err }
+		tr.Set(taskKey, newTaskBytes)
+		return nil, nil
+	})
+}
+
+// isTaskCancelled checks if a task has been marked as CANCELLED.
+func (s *FDBStore) isTaskCancelled(taskHandle string) bool {
+	res, err := s.db.ReadTransact(func(tr fdb.ReadTransaction) (interface{}, error) {
+		tasksDir, err := s.dir.Open(tr, []string{"message_move_tasks"}, nil)
+		if err != nil { return false, err }
+		taskKey := tasksDir.Pack(tuple.Tuple{taskHandle})
+		taskBytes, err := tr.Get(taskKey).Get()
+		if err != nil || taskBytes == nil { return false, err }
+
+		var task models.MessageMoveTask
+		if err := json.Unmarshal(taskBytes, &task); err != nil { return false, err }
+		return task.Status == "CANCELLED", nil
+	})
+	if err != nil {
+		return false
+	}
+	return res.(bool)
+}
+
+
+// updateTaskStatus updates the final status of a message move task in the database.
+func (s *FDBStore) updateTaskStatus(taskHandle, status, failureReason string, finalMovedCount int64) {
+	s.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
+		tasksDir, err := s.dir.Open(tr, []string{"message_move_tasks"}, nil)
+		if err != nil {
+			return nil, err
+		}
+
+		taskKey := tasksDir.Pack(tuple.Tuple{taskHandle})
+		taskBytes, err := tr.Get(taskKey).Get()
+		if err != nil || taskBytes == nil {
+			return nil, err // Task not found
+		}
+
+		var task models.MessageMoveTask
+		if err := json.Unmarshal(taskBytes, &task); err != nil {
+			return nil, err
+		}
+
+		task.Status = status
+		task.FinishedTimestamp = time.Now().Unix()
+		task.FailureReason = failureReason
+		task.ApproximateNumberOfMessagesMoved = finalMovedCount
+		if status == "COMPLETED" {
+			task.ApproximateNumberOfMessagesToMove = finalMovedCount
+		}
+
+
+		newTaskBytes, err := json.Marshal(task)
+		if err != nil {
+			return nil, err
+		}
+		tr.Set(taskKey, newTaskBytes)
+
+		// If the task is finished (completed, failed, cancelled), remove the active lock
+		if status == "COMPLETED" || status == "FAILED" || status == "CANCELLED" {
+			sourceQueueDir, err := s.dir.Open(tr, []string{task.SourceArn}, nil)
+			if err == nil {
+				tr.Clear(sourceQueueDir.Pack(tuple.Tuple{"active_move_task"}))
+			}
+		}
+
+		return nil, nil
+	})
+}
+
+
+func (s *FDBStore) CancelMessageMoveTask(ctx context.Context, taskHandle string) (int64, error) {
+	movedCount, err := s.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
+		tasksDir, err := s.dir.Open(tr, []string{"message_move_tasks"}, nil)
+		if err != nil {
+			return int64(0), err
+		}
+
+		taskKey := tasksDir.Pack(tuple.Tuple{taskHandle})
+		taskBytes, err := tr.Get(taskKey).Get()
+		if err != nil {
+			return int64(0), err
+		}
+		if taskBytes == nil {
+			return int64(0), nil
+		}
+
+		var task models.MessageMoveTask
+		if err := json.Unmarshal(taskBytes, &task); err != nil {
+			return int64(0), err
+		}
+
+		if task.Status != "RUNNING" {
+			return task.ApproximateNumberOfMessagesMoved, nil
+		}
+
+		task.Status = "CANCELLED"
+		task.FinishedTimestamp = time.Now().Unix()
+
+		newTaskBytes, err := json.Marshal(task)
+		if err != nil {
+			return int64(0), err
+		}
+		tr.Set(taskKey, newTaskBytes)
+
+		sourceQueueDir, err := s.dir.Open(tr, []string{task.SourceArn}, nil)
+		if err == nil {
+			tr.Clear(sourceQueueDir.Pack(tuple.Tuple{"active_move_task"}))
+		}
+
+		return task.ApproximateNumberOfMessagesMoved, nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	return movedCount.(int64), err
+}
+
+func (s *FDBStore) ListMessageMoveTasks(ctx context.Context, sourceArn string, maxResults int) ([]*models.MessageMoveTask, error) {
+	tasks, err := s.db.ReadTransact(func(tr fdb.ReadTransaction) (interface{}, error) {
+		tasksDir, err := s.dir.Open(tr, []string{"message_move_tasks"}, nil)
+		if err != nil {
+			if fdbErr, ok := err.(fdb.Error); ok && fdbErr.Code == 2000 { // Directory does not exist
+				return []*models.MessageMoveTask{}, nil
+			}
+			return nil, err
+		}
+
+		prefix, err := fdb.PrefixRange(tasksDir.Pack(tuple.Tuple{}))
+		if err != nil {
+			return nil, err
+		}
+		// Note: This is inefficient as it scans all tasks and then filters.
+		// A real implementation would need a secondary index on SourceArn.
+		// It also doesn't implement pagination or ordering by timestamp.
+		iter := tr.GetRange(prefix, fdb.RangeOptions{}).Iterator()
+		var results []*models.MessageMoveTask
+
+		for iter.Advance() {
+			kv := iter.MustGet()
+			var task models.MessageMoveTask
+			if err := json.Unmarshal(kv.Value, &task); err != nil {
+				continue // Skip malformed tasks
+			}
+			if task.SourceArn == sourceArn {
+				results = append(results, &task)
+			}
+		}
+
+		// Sort by StartedTimestamp descending to get the most recent tasks.
+		sort.Slice(results, func(i, j int) bool {
+			return results[i].StartedTimestamp > results[j].StartedTimestamp
+		})
+
+		if maxResults == 0 {
+			maxResults = 1 // Default to 1
+		}
+		if maxResults > 10 {
+			maxResults = 10 // Upper limit is 10
+		}
+		if len(results) > maxResults {
+			results = results[:maxResults]
+		}
+
+		return results, nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+	return tasks.([]*models.MessageMoveTask), nil
 }

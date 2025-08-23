@@ -33,6 +33,10 @@ var (
 	// ErrMessageNotInflight is returned when trying to change the visibility of a message
 	// that is not currently in-flight.
 	ErrMessageNotInflight = errors.New("message not in flight")
+
+	// ErrMessageMoveInProgress is returned when a message move request is made for a queue
+	// that already has a message move in progress.
+	ErrMessageMoveInProgress = errors.New("message move in progress")
 )
 
 // Store is the central interface for all data persistence operations.
@@ -99,9 +103,9 @@ type Store interface {
 	// --- Message Move Tasks --- (Not yet implemented)
 
 	// StartMessageMoveTask starts a task to move messages from a source queue to a destination queue.
-	StartMessageMoveTask(ctx context.Context, sourceArn, destinationArn string) (string, error)
+	StartMessageMoveTask(ctx context.Context, sourceArn, destinationArn string, maxMessagesPerSecond *int) (string, error)
 	// CancelMessageMoveTask cancels a message move task.
-	CancelMessageMoveTask(ctx context.Context, taskHandle string) error
+	CancelMessageMoveTask(ctx context.Context, taskHandle string) (int64, error)
 	// ListMessageMoveTasks lists the message move tasks for a specific source queue.
-	ListMessageMoveTasks(ctx context.Context, sourceArn string) ([]string, error)
+	ListMessageMoveTasks(ctx context.Context, sourceArn string, maxResults int) ([]*models.MessageMoveTask, error)
 }

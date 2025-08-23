@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 
+	"time"
+
 	"github.com/tabeth/concreteq/models"
 	"github.com/tabeth/concreteq/store"
 
@@ -110,12 +112,20 @@ func (m *MockStore) UntagQueue(ctx context.Context, queueName string, tagKeys []
 func (m *MockStore) ListDeadLetterSourceQueues(ctx context.Context, queueURL string) ([]string, error) {
 	return nil, nil
 }
-func (m *MockStore) StartMessageMoveTask(ctx context.Context, sourceArn, destinationArn string) (string, error) {
-	return "", nil
+func (m *MockStore) StartMessageMoveTask(ctx context.Context, sourceArn, destinationArn string, maxMessagesPerSecond *int) (string, error) {
+	args := m.Called(ctx, sourceArn, destinationArn, maxMessagesPerSecond)
+	return args.String(0), args.Error(1)
 }
-func (m *MockStore) CancelMessageMoveTask(ctx context.Context, taskHandle string) error { return nil }
-func (m *MockStore) ListMessageMoveTasks(ctx context.Context, sourceArn string) ([]string, error) {
-	return nil, nil
+func (m *MockStore) CancelMessageMoveTask(ctx context.Context, taskHandle string) (int64, error) {
+	args := m.Called(ctx, taskHandle)
+	return int64(args.Int(0)), args.Error(1)
+}
+func (m *MockStore) ListMessageMoveTasks(ctx context.Context, sourceArn string, maxResults int) ([]*models.MessageMoveTask, error) {
+	args := m.Called(ctx, sourceArn, maxResults)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*models.MessageMoveTask), args.Error(1)
 }
 
 func TestCreateQueueHandler(t *testing.T) {
@@ -251,6 +261,146 @@ func TestCreateQueueHandler(t *testing.T) {
 				}
 			}
 
+			mockStore.AssertExpectations(t)
+		})
+	}
+}
+
+func TestCancelMessageMoveTaskHandler(t *testing.T) {
+	mockStore := new(MockStore)
+	app := &App{Store: mockStore}
+	r := chi.NewRouter()
+	app.RegisterSQSHandlers(r)
+
+	mockStore.On("CancelMessageMoveTask", mock.Anything, "test-task-handle").Return(123, nil)
+
+	body := `{"TaskHandle": "test-task-handle"}`
+	req, _ := http.NewRequest("POST", "/", strings.NewReader(body))
+	req.Header.Set("X-Amz-Target", "AmazonSQS.CancelMessageMoveTask")
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+
+	assert.Equal(t, http.StatusOK, rr.Code)
+	var resp models.CancelMessageMoveTaskResponse
+	err := json.NewDecoder(rr.Body).Decode(&resp)
+	require.NoError(t, err)
+	assert.Equal(t, int64(123), resp.ApproximateNumberOfMessagesMoved)
+	mockStore.AssertExpectations(t)
+}
+
+func TestListMessageMoveTasksHandler(t *testing.T) {
+	mockStore := new(MockStore)
+	app := &App{Store: mockStore}
+	r := chi.NewRouter()
+	app.RegisterSQSHandlers(r)
+
+	taskHandle := "task1"
+	sourceArn := "my-dlq"
+	destArn := "my-queue"
+	status := "COMPLETED"
+	started := time.Now().Unix()
+	tasks := []*models.MessageMoveTask{
+		{TaskHandle: taskHandle, SourceArn: sourceArn, DestinationArn: destArn, Status: status, StartedTimestamp: started},
+	}
+	mockStore.On("ListMessageMoveTasks", mock.Anything, "my-dlq", 10).Return(tasks, nil)
+
+	body := `{"SourceArn": "my-dlq", "MaxResults": 10}`
+	req, _ := http.NewRequest("POST", "/", strings.NewReader(body))
+	req.Header.Set("X-Amz-Target", "AmazonSQS.ListMessageMoveTasks")
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+
+	assert.Equal(t, http.StatusOK, rr.Code)
+	var resp models.ListMessageMoveTasksResponse
+	err := json.NewDecoder(rr.Body).Decode(&resp)
+	require.NoError(t, err)
+	require.Len(t, resp.Results, 1)
+	assert.Equal(t, taskHandle, *resp.Results[0].TaskHandle)
+	assert.Equal(t, sourceArn, *resp.Results[0].SourceArn)
+	assert.Equal(t, status, *resp.Results[0].Status)
+	mockStore.AssertExpectations(t)
+}
+
+func TestStartMessageMoveTaskHandler(t *testing.T) {
+	tests := []struct {
+		name               string
+		inputBody          string
+		mockSetup          func(*MockStore)
+		expectedStatusCode int
+		expectedBody       string
+	}{
+		{
+			name:      "Successful Start",
+			inputBody: `{"SourceArn": "my-dlq", "DestinationArn": "my-queue"}`,
+			mockSetup: func(ms *MockStore) {
+				ms.On("StartMessageMoveTask", mock.Anything, "my-dlq", "my-queue", (*int)(nil)).Return("test-task-handle", nil)
+			},
+			expectedStatusCode: http.StatusOK,
+			expectedBody:       `{"TaskHandle": "test-task-handle"}`,
+		},
+		{
+			name:      "Successful Start with Rate Limit",
+			inputBody: `{"SourceArn": "my-dlq", "DestinationArn": "my-queue", "MaxNumberOfMessagesPerSecond": 100}`,
+			mockSetup: func(ms *MockStore) {
+				rate := 100
+				ms.On("StartMessageMoveTask", mock.Anything, "my-dlq", "my-queue", &rate).Return("test-task-handle-2", nil)
+			},
+			expectedStatusCode: http.StatusOK,
+			expectedBody:       `{"TaskHandle": "test-task-handle-2"}`,
+		},
+		{
+			name:               "Missing SourceArn",
+			inputBody:          `{"DestinationArn": "my-queue"}`,
+			mockSetup:          func(ms *MockStore) {},
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       `{"__type":"MissingParameter", "message":"The request must contain a SourceArn."}`,
+		},
+		{
+			name:      "Source Queue Does Not Exist",
+			inputBody: `{"SourceArn": "non-existent", "DestinationArn": "my-queue"}`,
+			mockSetup: func(ms *MockStore) {
+				ms.On("StartMessageMoveTask", mock.Anything, "non-existent", "my-queue", (*int)(nil)).Return("", store.ErrQueueDoesNotExist)
+			},
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       `{"__type":"ResourceNotFoundException", "message":"The specified queue does not exist."}`,
+		},
+		{
+			name:      "Task Already In Progress",
+			inputBody: `{"SourceArn": "busy-queue", "DestinationArn": "my-queue"}`,
+			mockSetup: func(ms *MockStore) {
+				ms.On("StartMessageMoveTask", mock.Anything, "busy-queue", "my-queue", (*int)(nil)).Return("", store.ErrMessageMoveInProgress)
+			},
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       `{"__type":"UnsupportedOperation", "message":"There is already an active message move task for this queue."}`,
+		},
+		{
+			name:               "Invalid Rate Limit",
+			inputBody:          `{"SourceArn": "my-dlq", "DestinationArn": "my-queue", "MaxNumberOfMessagesPerSecond": 999}`,
+			mockSetup:          func(ms *MockStore) {},
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       `{"__type":"InvalidParameterValue", "message":"MaxNumberOfMessagesPerSecond must be between 1 and 500."}`,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mockStore := new(MockStore)
+			tc.mockSetup(mockStore)
+
+			app := &App{Store: mockStore}
+			r := chi.NewRouter()
+			app.RegisterSQSHandlers(r)
+
+			req, _ := http.NewRequest("POST", "/", bytes.NewBufferString(tc.inputBody))
+			req.Header.Set("X-Amz-Target", "AmazonSQS.StartMessageMoveTask")
+			rr := httptest.NewRecorder()
+
+			r.ServeHTTP(rr, req)
+
+			assert.Equal(t, tc.expectedStatusCode, rr.Code)
+			if tc.expectedBody != "" {
+				require.JSONEq(t, tc.expectedBody, rr.Body.String())
+			}
 			mockStore.AssertExpectations(t)
 		})
 	}

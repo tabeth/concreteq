@@ -67,9 +67,6 @@ func (app *App) RegisterSQSHandlers(r *chi.Mux) {
 	r.Post("/queues/{queueName}/tags", app.TagQueueHandler)
 	r.Delete("/queues/{queueName}/tags", app.UntagQueueHandler)
 	r.Get("/dead-letter-source-queues", app.ListDeadLetterSourceQueuesHandler)
-	r.Post("/message-move-tasks", app.StartMessageMoveTaskHandler)
-	r.Post("/message-move-tasks/{taskHandle}/cancel", app.CancelMessageMoveTaskHandler)
-	r.Get("/message-move-tasks", app.ListMessageMoveTasksHandler)
 }
 
 // RootSQSHandler acts as a dispatcher for the primary SQS RPC-style endpoint.
@@ -110,6 +107,12 @@ func (app *App) RootSQSHandler(w http.ResponseWriter, r *http.Request) {
 		app.ChangeMessageVisibilityHandler(w, r)
 	case "GetQueueAttributes":
 		app.GetQueueAttributesHandler(w, r)
+	case "StartMessageMoveTask":
+		app.StartMessageMoveTaskHandler(w, r)
+	case "CancelMessageMoveTask":
+		app.CancelMessageMoveTaskHandler(w, r)
+	case "ListMessageMoveTasks":
+		app.ListMessageMoveTasksHandler(w, r)
 	default:
 		app.sendErrorResponse(w, "UnsupportedOperation", "Unsupported operation: "+action, http.StatusBadRequest)
 	}
@@ -967,11 +970,119 @@ func (app *App) ListDeadLetterSourceQueuesHandler(w http.ResponseWriter, r *http
 	w.WriteHeader(http.StatusNotImplemented)
 }
 func (app *App) StartMessageMoveTaskHandler(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(http.StatusNotImplemented)
+	var req models.StartMessageMoveTaskRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		app.sendErrorResponse(w, "InvalidRequest", "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if req.SourceArn == "" {
+		app.sendErrorResponse(w, "MissingParameter", "The request must contain a SourceArn.", http.StatusBadRequest)
+		return
+	}
+
+	if req.MaxNumberOfMessagesPerSecond != nil {
+		if *req.MaxNumberOfMessagesPerSecond < 1 || *req.MaxNumberOfMessagesPerSecond > 500 {
+			app.sendErrorResponse(w, "InvalidParameterValue", "MaxNumberOfMessagesPerSecond must be between 1 and 500.", http.StatusBadRequest)
+			return
+		}
+	}
+
+	sourceQueueName := req.SourceArn
+	destinationQueueName := req.DestinationArn
+
+	if destinationQueueName == "" {
+		app.sendErrorResponse(w, "UnsupportedOperation", "Automatic redrive to source queue is not yet supported. Please specify a DestinationArn.", http.StatusBadRequest)
+		return
+	}
+
+	taskHandle, err := app.Store.StartMessageMoveTask(r.Context(), sourceQueueName, destinationQueueName, req.MaxNumberOfMessagesPerSecond)
+	if err != nil {
+		if errors.Is(err, store.ErrQueueDoesNotExist) {
+			app.sendErrorResponse(w, "ResourceNotFoundException", "The specified queue does not exist.", http.StatusBadRequest)
+			return
+		}
+		if errors.Is(err, store.ErrMessageMoveInProgress) {
+			app.sendErrorResponse(w, "UnsupportedOperation", "There is already an active message move task for this queue.", http.StatusBadRequest)
+			return
+		}
+		app.sendErrorResponse(w, "InternalFailure", "Failed to start message move task", http.StatusInternalServerError)
+		return
+	}
+
+	resp := models.StartMessageMoveTaskResponse{
+		TaskHandle: taskHandle,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(resp)
 }
+
 func (app *App) CancelMessageMoveTaskHandler(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(http.StatusNotImplemented)
+	var req models.CancelMessageMoveTaskRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		app.sendErrorResponse(w, "InvalidRequest", "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if req.TaskHandle == "" {
+		app.sendErrorResponse(w, "MissingParameter", "The request must contain a TaskHandle.", http.StatusBadRequest)
+		return
+	}
+
+	movedCount, err := app.Store.CancelMessageMoveTask(r.Context(), req.TaskHandle)
+	if err != nil {
+		app.sendErrorResponse(w, "InternalFailure", "Failed to cancel message move task", http.StatusInternalServerError)
+		return
+	}
+
+	resp := models.CancelMessageMoveTaskResponse{
+		ApproximateNumberOfMessagesMoved: movedCount,
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(resp)
 }
+
 func (app *App) ListMessageMoveTasksHandler(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(http.StatusNotImplemented)
+	var req models.ListMessageMoveTasksRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		app.sendErrorResponse(w, "InvalidRequest", "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if req.SourceArn == "" {
+		app.sendErrorResponse(w, "MissingParameter", "The request must contain a SourceArn.", http.StatusBadRequest)
+		return
+	}
+
+	tasks, err := app.Store.ListMessageMoveTasks(r.Context(), req.SourceArn, req.MaxResults)
+	if err != nil {
+		app.sendErrorResponse(w, "InternalFailure", "Failed to list message move tasks", http.StatusInternalServerError)
+		return
+	}
+
+	results := make([]models.ListMessageMoveTasksResultEntry, len(tasks))
+	for i, task := range tasks {
+		results[i] = models.ListMessageMoveTasksResultEntry{
+			ApproximateNumberOfMessagesMoved: task.ApproximateNumberOfMessagesMoved,
+			ApproximateNumberOfMessagesToMove: &task.ApproximateNumberOfMessagesToMove,
+			DestinationArn:                  &task.DestinationArn,
+			FailureReason:                   &task.FailureReason,
+			MaxNumberOfMessagesPerSecond:    task.MaxNumberOfMessagesPerSecond,
+			SourceArn:                       &task.SourceArn,
+			StartedTimestamp:                &task.StartedTimestamp,
+			Status:                          &task.Status,
+			TaskHandle:                      &task.TaskHandle,
+		}
+	}
+
+	resp := models.ListMessageMoveTasksResponse{
+		Results: results,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(resp)
 }

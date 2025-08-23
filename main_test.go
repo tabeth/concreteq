@@ -563,6 +563,82 @@ func TestIntegration_ListDeletePurgeQueues(t *testing.T) {
 	})
 }
 
+func TestIntegration_MessageMoveTask(t *testing.T) {
+	app, teardown := setupIntegrationTest(t)
+	defer teardown()
+
+	ctx := context.Background()
+	sourceQueueName := "move-task-dlq"
+	destQueueName := "move-task-main"
+
+	// 1. Create source and destination queues
+	err := app.store.CreateQueue(ctx, sourceQueueName, nil, nil)
+	require.NoError(t, err)
+	err = app.store.CreateQueue(ctx, destQueueName, nil, nil)
+	require.NoError(t, err)
+
+	// 2. Send 3 messages to the source queue
+	for i := 0; i < 3; i++ {
+		_, err := app.store.SendMessage(ctx, sourceQueueName, &models.SendMessageRequest{MessageBody: fmt.Sprintf("move-me-%d", i)})
+		require.NoError(t, err)
+	}
+
+	// 3. Start the message move task via HTTP API
+	startReqBody := fmt.Sprintf(`{"SourceArn": "%s", "DestinationArn": "%s"}`, sourceQueueName, destQueueName)
+	req, _ := http.NewRequest("POST", app.baseURL+"/", strings.NewReader(startReqBody))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Amz-Target", "AmazonSQS.StartMessageMoveTask")
+
+	startResp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer startResp.Body.Close()
+	assert.Equal(t, http.StatusOK, startResp.StatusCode)
+
+	var startRespBody models.StartMessageMoveTaskResponse
+	err = json.NewDecoder(startResp.Body).Decode(&startRespBody)
+	require.NoError(t, err)
+	assert.NotEmpty(t, startRespBody.TaskHandle)
+
+	// 4. Poll for completion
+	var task *models.ListMessageMoveTasksResultEntry
+	for i := 0; i < 10; i++ {
+		listReqBody := fmt.Sprintf(`{"SourceArn": "%s", "MaxResults": 1}`, sourceQueueName)
+		listReq, _ := http.NewRequest("POST", app.baseURL+"/", strings.NewReader(listReqBody))
+		listReq.Header.Set("Content-Type", "application/json")
+		listReq.Header.Set("X-Amz-Target", "AmazonSQS.ListMessageMoveTasks")
+
+		listResp, err := http.DefaultClient.Do(listReq)
+		require.NoError(t, err)
+
+		var listBody models.ListMessageMoveTasksResponse
+		err = json.NewDecoder(listResp.Body).Decode(&listBody)
+		require.NoError(t, err)
+		listResp.Body.Close()
+
+		if len(listBody.Results) > 0 {
+			task = &listBody.Results[0]
+			if *task.Status == "COMPLETED" {
+				break
+			}
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+
+	require.NotNil(t, task, "task did not appear in list")
+	assert.Equal(t, "COMPLETED", *task.Status, "task did not complete in time")
+
+	// 5. Verify messages were moved
+	// Source queue should be empty
+	srcRecResp, err := app.store.ReceiveMessage(ctx, sourceQueueName, &models.ReceiveMessageRequest{MaxNumberOfMessages: 10})
+	require.NoError(t, err)
+	assert.Len(t, srcRecResp.Messages, 0, "source queue should be empty")
+
+	// Destination queue should have messages
+	destRecResp, err := app.store.ReceiveMessage(ctx, destQueueName, &models.ReceiveMessageRequest{MaxNumberOfMessages: 10})
+	require.NoError(t, err)
+	assert.Len(t, destRecResp.Messages, 3, "destination queue should have the moved messages")
+}
+
 func TestIntegration_SendMessageBatch(t *testing.T) {
 	app, teardown := setupIntegrationTest(t)
 	defer teardown()

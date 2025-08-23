@@ -808,6 +808,117 @@ func TestFDBStore_ReceiveMessage(t *testing.T) {
 	})
 }
 
+func TestFDBStore_MessageMoveTasks(t *testing.T) {
+	ctx := context.Background()
+	store, teardown := setupTestDB(t)
+	defer teardown()
+
+	sourceQueue := "test-dlq"
+	destQueue := "test-main-queue"
+
+	err := store.CreateQueue(ctx, sourceQueue, nil, nil)
+	require.NoError(t, err)
+	err = store.CreateQueue(ctx, destQueue, nil, nil)
+	require.NoError(t, err)
+
+	// Send 5 messages to the source queue
+	for i := 0; i < 5; i++ {
+		_, err := store.SendMessage(ctx, sourceQueue, &models.SendMessageRequest{MessageBody: fmt.Sprintf("msg-%d", i)})
+		require.NoError(t, err)
+	}
+
+	t.Run("Start and complete a message move task", func(t *testing.T) {
+		rate := 10 // 10 messages per second
+		taskHandle, err := store.StartMessageMoveTask(ctx, sourceQueue, destQueue, &rate)
+		require.NoError(t, err)
+		assert.NotEmpty(t, taskHandle)
+
+		// Check that a task is marked as active
+		_, err = store.db.ReadTransact(func(tr fdb.ReadTransaction) (interface{}, error) {
+			sourceDir, err := store.dir.Open(tr, []string{sourceQueue}, nil)
+			require.NoError(t, err)
+			activeTask, err := tr.Get(sourceDir.Pack(tuple.Tuple{"active_move_task"})).Get()
+			require.NoError(t, err)
+			assert.Equal(t, taskHandle, string(activeTask))
+			return nil, nil
+		})
+		require.NoError(t, err)
+
+		// Wait for the task to complete (should be fast)
+		time.Sleep(2 * time.Second)
+
+		// Verify task status is COMPLETED
+		tasks, err := store.ListMessageMoveTasks(ctx, sourceQueue, 1)
+		require.NoError(t, err)
+		require.Len(t, tasks, 1)
+		assert.Equal(t, "COMPLETED", tasks[0].Status)
+
+		// Verify source queue is empty
+		srcResp, err := store.ReceiveMessage(ctx, sourceQueue, &models.ReceiveMessageRequest{MaxNumberOfMessages: 10})
+		require.NoError(t, err)
+		assert.Len(t, srcResp.Messages, 0)
+
+		// Verify destination queue has the messages
+		destResp, err := store.ReceiveMessage(ctx, destQueue, &models.ReceiveMessageRequest{MaxNumberOfMessages: 10})
+		require.NoError(t, err)
+		assert.Len(t, destResp.Messages, 5)
+	})
+
+	t.Run("Attempt to start a task on a busy queue", func(t *testing.T) {
+		// First, start a task that will run for a bit
+		slowRate := 1
+		_, err := store.StartMessageMoveTask(ctx, destQueue, sourceQueue, &slowRate) // Moving them back
+		require.NoError(t, err)
+
+		// Try to start another task immediately
+		_, err = store.StartMessageMoveTask(ctx, destQueue, sourceQueue, nil)
+		assert.ErrorIs(t, err, ErrMessageMoveInProgress)
+
+		// Wait for the slow task to finish to clean up
+		time.Sleep(6 * time.Second)
+	})
+
+	t.Run("Cancel a message move task", func(t *testing.T) {
+		// Send some messages to the source queue again
+		for i := 0; i < 5; i++ {
+			_, err := store.SendMessage(ctx, sourceQueue, &models.SendMessageRequest{MessageBody: fmt.Sprintf("msg-cancel-%d", i)})
+			require.NoError(t, err)
+		}
+
+		slowRate := 1
+		taskHandle, err := store.StartMessageMoveTask(ctx, sourceQueue, destQueue, &slowRate)
+		require.NoError(t, err)
+
+		// Cancel it immediately
+		_, err = store.CancelMessageMoveTask(ctx, taskHandle)
+		require.NoError(t, err)
+
+		// Verify status is CANCELLED
+		tasks, err := store.ListMessageMoveTasks(ctx, sourceQueue, 10)
+		require.NoError(t, err)
+		var cancelledTask *models.MessageMoveTask
+		for _, task := range tasks {
+			if task.TaskHandle == taskHandle {
+				cancelledTask = task
+				break
+			}
+		}
+		require.NotNil(t, cancelledTask)
+		assert.Equal(t, "CANCELLED", cancelledTask.Status)
+
+		// Verify the active task lock is gone
+		_, err = store.db.ReadTransact(func(tr fdb.ReadTransaction) (interface{}, error) {
+			sourceDir, err := store.dir.Open(tr, []string{sourceQueue}, nil)
+			require.NoError(t, err)
+			activeTask, err := tr.Get(sourceDir.Pack(tuple.Tuple{"active_move_task"})).Get()
+			require.NoError(t, err)
+			assert.Empty(t, activeTask)
+			return nil, nil
+		})
+		require.NoError(t, err)
+	})
+}
+
 func TestFDBStore_PurgeQueue(t *testing.T) {
 	ctx := context.Background()
 	store, teardown := setupTestDB(t)
