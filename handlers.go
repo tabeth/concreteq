@@ -108,6 +108,8 @@ func (app *App) RootSQSHandler(w http.ResponseWriter, r *http.Request) {
 		app.DeleteMessageBatchHandler(w, r)
 	case "ChangeMessageVisibility":
 		app.ChangeMessageVisibilityHandler(w, r)
+	case "GetQueueAttributes":
+		app.GetQueueAttributesHandler(w, r)
 	default:
 		app.sendErrorResponse(w, "UnsupportedOperation", "Unsupported operation: "+action, http.StatusBadRequest)
 	}
@@ -341,9 +343,76 @@ func (app *App) ListQueuesHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(resp)
 }
 
-// GetQueueAttributesHandler is a placeholder for a not-yet-implemented feature.
+// GetQueueAttributesHandler handles requests to retrieve attributes for a specified queue.
+// It validates the request, fetches all attributes from the storage layer, and then
+// filters them based on the list of attribute names provided by the client.
 func (app *App) GetQueueAttributesHandler(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(http.StatusNotImplemented)
+	var req models.GetQueueAttributesRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		app.sendErrorResponse(w, "InvalidRequest", "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if req.QueueUrl == "" {
+		app.sendErrorResponse(w, "MissingParameter", "The request must contain a QueueUrl.", http.StatusBadRequest)
+		return
+	}
+	queueName := path.Base(req.QueueUrl)
+
+	// Fetch all attributes for the queue from the storage layer first.
+	allAttributes, err := app.Store.GetQueueAttributes(r.Context(), queueName)
+	if err != nil {
+		if errors.Is(err, store.ErrQueueDoesNotExist) {
+			app.sendErrorResponse(w, "QueueDoesNotExist", "The specified queue does not exist.", http.StatusBadRequest)
+			return
+		}
+		app.sendErrorResponse(w, "InternalFailure", "Failed to get queue attributes", http.StatusInternalServerError)
+		return
+	}
+
+	// SQS-specific attributes that are not stored directly but are derived or have default values.
+	// This ensures consistency with the SQS API.
+	allAttributes["QueueArn"] = fmt.Sprintf("arn:aws:sqs:us-east-1:123456789012:%s", queueName)
+	if _, ok := allAttributes["VisibilityTimeout"]; !ok {
+		allAttributes["VisibilityTimeout"] = "30" // Default SQS value
+	}
+	if _, ok := allAttributes["ReceiveMessageWaitTimeSeconds"]; !ok {
+		allAttributes["ReceiveMessageWaitTimeSeconds"] = "0" // Default SQS value
+	}
+	// Additional attributes can be defaulted here as needed.
+
+	// Now, filter the attributes based on the client's request.
+	responseAttributes := make(map[string]string)
+	wantsAll := false
+	for _, name := range req.AttributeNames {
+		if name == "All" {
+			wantsAll = true
+			break
+		}
+	}
+
+	if wantsAll {
+		responseAttributes = allAttributes
+	} else {
+		for _, name := range req.AttributeNames {
+			if val, ok := allAttributes[name]; ok {
+				responseAttributes[name] = val
+			} else {
+				// According to SQS docs, requesting a non-existent attribute is an error.
+				// However, some implementations are more lenient. We will be strict.
+				// Note: A real SQS implementation would also need to validate the attribute name itself.
+				app.sendErrorResponse(w, "InvalidAttributeName", "The specified attribute "+name+" does not exist.", http.StatusBadRequest)
+				return
+			}
+		}
+	}
+
+	resp := models.GetQueueAttributesResponse{
+		Attributes: responseAttributes,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
 }
 
 // SetQueueAttributesHandler is a placeholder for a not-yet-implemented feature.

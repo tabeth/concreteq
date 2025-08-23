@@ -1039,3 +1039,39 @@ func TestFDBStore_SendMessage(t *testing.T) {
 		assert.ErrorIs(t, err, ErrQueueDoesNotExist)
 	})
 }
+
+func TestFDBStore_GetQueueAttributes(t *testing.T) {
+	ctx := context.Background()
+	store, teardown := setupTestDB(t)
+	defer teardown()
+
+	t.Run("gets attributes for an existing queue", func(t *testing.T) {
+		queueName := "test-queue-with-attrs"
+		attributes := map[string]string{
+			"VisibilityTimeout":      "120",
+			"MessageRetentionPeriod": "86400",
+		}
+		err := store.CreateQueue(ctx, queueName, attributes, nil)
+		require.NoError(t, err)
+
+		storedAttrs, err := store.GetQueueAttributes(ctx, queueName)
+		assert.NoError(t, err)
+		assert.Equal(t, attributes, storedAttrs)
+	})
+
+	t.Run("returns empty map for queue with no attributes", func(t *testing.T) {
+		queueName := "test-queue-no-attrs"
+		err := store.CreateQueue(ctx, queueName, nil, nil)
+		require.NoError(t, err)
+
+		storedAttrs, err := store.GetQueueAttributes(ctx, queueName)
+		assert.NoError(t, err)
+		assert.NotNil(t, storedAttrs)
+		assert.Empty(t, storedAttrs)
+	})
+
+	t.Run("returns error for non-existent queue", func(t *testing.T) {
+		_, err := store.GetQueueAttributes(ctx, "non-existent-queue-for-attrs")
+		assert.ErrorIs(t, err, ErrQueueDoesNotExist)
+	})
+}
