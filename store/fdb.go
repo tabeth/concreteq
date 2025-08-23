@@ -221,10 +221,45 @@ func (s *FDBStore) ListQueues(ctx context.Context, maxResults int, nextToken, qu
 	return resultQueues, newNextToken, nil
 }
 
-// GetQueueAttributes is not yet implemented.
+// GetQueueAttributes retrieves all attributes for a given queue.
 func (s *FDBStore) GetQueueAttributes(ctx context.Context, name string) (map[string]string, error) {
-	// TODO: Implement reading the (queue_dir, "attributes") key.
-	return nil, nil
+	attributes, err := s.db.ReadTransact(func(tr fdb.ReadTransaction) (interface{}, error) {
+		// Check if the queue exists.
+		exists, err := s.dir.Exists(tr, []string{name})
+		if err != nil {
+			return nil, err
+		}
+		if !exists {
+			return nil, ErrQueueDoesNotExist
+		}
+
+		queueDir, err := s.dir.Open(tr, []string{name}, nil)
+		if err != nil {
+			return nil, err
+		}
+
+		// Read the attributes JSON blob.
+		attributesKey := queueDir.Pack(tuple.Tuple{"attributes"})
+		attrsBytes, err := tr.Get(attributesKey).Get()
+		if err != nil {
+			return nil, err
+		}
+
+		// Unmarshal into a map. If no attributes are set, this will be an empty map.
+		attrsMap := make(map[string]string)
+		if len(attrsBytes) > 0 {
+			if err := json.Unmarshal(attrsBytes, &attrsMap); err != nil {
+				return nil, err // Data corruption
+			}
+		}
+
+		return attrsMap, nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+	return attributes.(map[string]string), nil
 }
 
 // SetQueueAttributes updates the attributes for a given queue.

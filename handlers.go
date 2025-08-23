@@ -154,12 +154,10 @@ func validateAttributes(attributes map[string]string) error {
 		case "VisibilityTimeout":
 			err = validateIntAttribute(val, 0, 43200)
 		case "Policy":
-			// Basic validation: check if it's a valid JSON.
 			if !json.Valid([]byte(val)) {
 				err = errors.New("must be a valid JSON object")
 			}
 		case "RedrivePolicy":
-			// RedrivePolicy is a JSON-encoded string, so it requires unmarshaling to validate.
 			var policy struct {
 				DeadLetterTargetArn string `json:"deadLetterTargetArn"`
 				MaxReceiveCount     string `json:"maxReceiveCount"`
@@ -184,7 +182,6 @@ func validateAttributes(attributes map[string]string) error {
 			} else {
 				switch policy.RedrivePermission {
 				case "allowAll", "denyAll":
-					// valid
 				case "byQueue":
 					if len(policy.SourceQueueArns) == 0 {
 						err = errors.New("sourceQueueArns is required when redrivePermission is byQueue")
@@ -259,11 +256,11 @@ func (app *App) CreateQueueHandler(w http.ResponseWriter, r *http.Request) {
 	// Ensure that FIFO-specific attributes are only used with FIFO queues.
 	if !isFifo {
 		if _, exists := req.Attributes["DeduplicationScope"]; exists {
-			app.sendErrorResponse(w, "InvalidParameterValue", "DeduplicationScope is only valid for FIFO queues", http.StatusBadRequest)
+			app.sendErrorResponse(w, "InvalidAttributeName", "DeduplicationScope is only valid for FIFO queues", http.StatusBadRequest)
 			return
 		}
 		if _, exists := req.Attributes["FifoThroughputLimit"]; exists {
-			app.sendErrorResponse(w, "InvalidParameterValue", "FifoThroughputLimit is only valid for FIFO queues", http.StatusBadRequest)
+			app.sendErrorResponse(w, "InvalidAttributeName", "FifoThroughputLimit is only valid for FIFO queues", http.StatusBadRequest)
 			return
 		}
 	}
@@ -393,29 +390,49 @@ func (app *App) SetQueueAttributesHandler(w http.ResponseWriter, r *http.Request
 	}
 	queueName := path.Base(req.QueueUrl)
 
-	// Validate the attributes before attempting to set them.
-	// Note: A full implementation might require fetching the queue's current state
-	// to validate attribute changes (e.g., you can't change FifoQueue attribute after creation).
-	if err := validateAttributes(req.Attributes); err != nil {
-		// The error from validateAttributes is specific enough to be returned to the client.
-		app.sendErrorResponse(w, "InvalidAttributeName", err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	// Delegate the actual attribute update to the storage layer.
-	err := app.Store.SetQueueAttributes(r.Context(), queueName, req.Attributes)
+	existingAttrs, err := app.Store.GetQueueAttributes(r.Context(), queueName)
 	if err != nil {
-		// Handle specific, known errors from the storage layer.
 		if errors.Is(err, store.ErrQueueDoesNotExist) {
 			app.sendErrorResponse(w, "QueueDoesNotExist", "The specified queue does not exist.", http.StatusBadRequest)
 			return
 		}
-		// For all other errors, return a generic internal failure.
+		app.sendErrorResponse(w, "InternalFailure", "Failed to get queue attributes", http.StatusInternalServerError)
+		return
+	}
+
+	isFifo := existingAttrs["FifoQueue"] == "true"
+
+	if _, ok := req.Attributes["FifoQueue"]; ok {
+		app.sendErrorResponse(w, "InvalidAttributeName", "cannot change FifoQueue attribute after creation", http.StatusBadRequest)
+		return
+	}
+
+	if !isFifo {
+		if _, exists := req.Attributes["DeduplicationScope"]; exists {
+			app.sendErrorResponse(w, "InvalidAttributeName", "DeduplicationScope is only valid for FIFO queues", http.StatusBadRequest)
+			return
+		}
+		if _, exists := req.Attributes["FifoThroughputLimit"]; exists {
+			app.sendErrorResponse(w, "InvalidAttributeName", "FifoThroughputLimit is only valid for FIFO queues", http.StatusBadRequest)
+			return
+		}
+		if _, exists := req.Attributes["ContentBasedDeduplication"]; exists {
+			app.sendErrorResponse(w, "InvalidAttributeName", "ContentBasedDeduplication is only valid for FIFO queues", http.StatusBadRequest)
+			return
+		}
+	}
+
+	if err := validateAttributes(req.Attributes); err != nil {
+		app.sendErrorResponse(w, "InvalidAttributeName", err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	err = app.Store.SetQueueAttributes(r.Context(), queueName, req.Attributes)
+	if err != nil {
 		app.sendErrorResponse(w, "InternalFailure", "Failed to set queue attributes", http.StatusInternalServerError)
 		return
 	}
 
-	// A successful SetQueueAttributes call returns a 200 OK with an empty body.
 	w.WriteHeader(http.StatusOK)
 }
 

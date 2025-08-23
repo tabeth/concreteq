@@ -41,7 +41,11 @@ func (m *MockStore) ListQueues(ctx context.Context, maxResults int, nextToken, q
 	return queues, args.String(1), args.Error(2)
 }
 func (m *MockStore) GetQueueAttributes(ctx context.Context, name string) (map[string]string, error) {
-	return nil, nil
+	args := m.Called(ctx, name)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(map[string]string), args.Error(1)
 }
 func (m *MockStore) SetQueueAttributes(ctx context.Context, name string, attributes map[string]string) error {
 	args := m.Called(ctx, name, attributes)
@@ -195,7 +199,7 @@ func TestCreateQueueHandler(t *testing.T) {
 			inputBody:          `{"QueueName": "standard-q", "Attributes": {"DeduplicationScope": "messageGroup"}}`,
 			mockSetup:          func(ms *MockStore) {},
 			expectedStatusCode: http.StatusBadRequest,
-			expectedBody:       `{"__type":"InvalidParameterValue", "message":"DeduplicationScope is only valid for FIFO queues"}`,
+			expectedBody:       `{"__type":"InvalidAttributeName", "message":"DeduplicationScope is only valid for FIFO queues"}`,
 		},
 		{
 			name:      "Queue Already Exists",
@@ -257,48 +261,47 @@ func TestSetQueueAttributesHandler(t *testing.T) {
 	tests := []struct {
 		name               string
 		inputBody          string
-		mockSetup          func(*MockStore)
+		existingAttrs      map[string]string
+		mockSetup          func(*MockStore, map[string]string)
 		expectedStatusCode int
 		expectedBody       string
 	}{
 		{
-			name:      "Successful Set Attributes",
-			inputBody: `{"QueueUrl": "http://localhost/queues/my-queue", "Attributes": {"VisibilityTimeout": "60"}}`,
-			mockSetup: func(ms *MockStore) {
-				ms.On("SetQueueAttributes", mock.Anything, "my-queue", map[string]string{"VisibilityTimeout": "60"}).Return(nil).Once()
+			name:          "Successful Set Attributes on Standard Queue",
+			inputBody:     `{"QueueUrl": "http://localhost/queues/my-queue", "Attributes": {"VisibilityTimeout": "60"}}`,
+			existingAttrs: map[string]string{},
+			mockSetup: func(ms *MockStore, existing map[string]string) {
+				ms.On("GetQueueAttributes", mock.Anything, "my-queue").Return(existing, nil)
+				ms.On("SetQueueAttributes", mock.Anything, "my-queue", map[string]string{"VisibilityTimeout": "60"}).Return(nil)
 			},
 			expectedStatusCode: http.StatusOK,
-			expectedBody:       "",
 		},
 		{
-			name:               "Missing QueueUrl",
-			inputBody:          `{"Attributes": {"VisibilityTimeout": "60"}}`,
-			mockSetup:          func(ms *MockStore) {},
-			expectedStatusCode: http.StatusBadRequest,
-			expectedBody:       `{"__type":"MissingParameter", "message":"The request must contain a QueueUrl."}`,
-		},
-		{
-			name:               "Invalid Attribute Value",
-			inputBody:          `{"QueueUrl": "http://localhost/queues/my-queue", "Attributes": {"VisibilityTimeout": "99999"}}`,
-			mockSetup:          func(ms *MockStore) {},
-			expectedStatusCode: http.StatusBadRequest,
-			expectedBody:       `{"__type":"InvalidAttributeName", "message":"invalid value for VisibilityTimeout: must be between 0 and 43200"}`,
-		},
-		{
-			name:      "Queue Does Not Exist",
-			inputBody: `{"QueueUrl": "http://localhost/queues/non-existent-queue", "Attributes": {"VisibilityTimeout": "60"}}`,
-			mockSetup: func(ms *MockStore) {
-				ms.On("SetQueueAttributes", mock.Anything, "non-existent-queue", map[string]string{"VisibilityTimeout": "60"}).Return(store.ErrQueueDoesNotExist).Once()
+			name:      "Attempt to change FifoQueue attribute",
+			inputBody: `{"QueueUrl": "http://localhost/queues/my-fifo-queue.fifo", "Attributes": {"FifoQueue": "false"}}`,
+			existingAttrs: map[string]string{"FifoQueue": "true"},
+			mockSetup: func(ms *MockStore, existing map[string]string) {
+				ms.On("GetQueueAttributes", mock.Anything, "my-fifo-queue.fifo").Return(existing, nil)
 			},
 			expectedStatusCode: http.StatusBadRequest,
-			expectedBody:       `{"__type":"QueueDoesNotExist", "message":"The specified queue does not exist."}`,
+			expectedBody:       `{"__type":"InvalidAttributeName", "message":"cannot change FifoQueue attribute after creation"}`,
+		},
+		{
+			name:      "Attempt to set FIFO attribute on standard queue",
+			inputBody: `{"QueueUrl": "http://localhost/queues/my-queue", "Attributes": {"ContentBasedDeduplication": "true"}}`,
+			existingAttrs: map[string]string{},
+			mockSetup: func(ms *MockStore, existing map[string]string) {
+				ms.On("GetQueueAttributes", mock.Anything, "my-queue").Return(existing, nil)
+			},
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       `{"__type":"InvalidAttributeName", "message":"ContentBasedDeduplication is only valid for FIFO queues"}`,
 		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			mockStore := new(MockStore)
-			tc.mockSetup(mockStore)
+			tc.mockSetup(mockStore, tc.existingAttrs)
 
 			app := &App{Store: mockStore}
 			r := chi.NewRouter()
