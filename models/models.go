@@ -33,6 +33,17 @@ type ListQueuesResponse struct {
 	NextToken string   `json:"NextToken,omitempty"`
 }
 
+// GetQueueAttributesRequest defines the parameters for the SQS GetQueueAttributes action.
+type GetQueueAttributesRequest struct {
+	QueueUrl       string   `json:"QueueUrl"`
+	AttributeNames []string `json:"AttributeNames"`
+}
+
+// GetQueueAttributesResponse defines the structure for the SQS GetQueueAttributes action's output.
+type GetQueueAttributesResponse struct {
+	Attributes map[string]string `json:"Attributes"`
+}
+
 // MessageAttributeValue represents the value of a custom message attribute in SQS.
 // It can hold string, binary, or lists of these types.
 type MessageAttributeValue struct {
