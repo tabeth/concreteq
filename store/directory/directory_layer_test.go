@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
+	"github.com/apple/foundationdb/bindings/go/src/fdb/subspace"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tabeth/concreteq/store/directory"
@@ -157,4 +158,86 @@ func TestDirectory_Pagination_Reverse(t *testing.T) {
 	// Test error case
 	_, err = root.List(db, []string{}, directory.ListOptions{After: "a", Before: "b"})
 	assert.Error(t, err)
+}
+
+func newIsolatedDirectoryLayer(t *testing.T) directory.Directory {
+	t.Helper()
+	prefix := []byte(fmt.Sprintf("isolated_test_%d", time.Now().UnixNano()))
+	nodeSS := subspace.FromBytes(append(prefix, []byte("_nodes")...))
+	contentSS := subspace.FromBytes(append(prefix, []byte("_content")...))
+	return directory.NewDirectoryLayer(nodeSS, contentSS, true)
+}
+
+func TestDirectoryLayer_Errors(t *testing.T) {
+	db, err := fdb.OpenDefault()
+	require.NoError(t, err)
+
+	dl := newIsolatedDirectoryLayer(t)
+
+	// Test incompatible layer
+	_, err = dl.Create(db, []string{"layer_test"}, []byte("layer1"))
+	require.NoError(t, err)
+	_, err = dl.Open(db, []string{"layer_test"}, []byte("layer2"))
+	assert.Error(t, err)
+
+	// Test move destination is subdir
+	_, err = dl.Move(db, []string{"a"}, []string{"a", "b"})
+	assert.Error(t, err)
+
+	// Test createOrOpen with allowCreate=false and directory does not exist
+	_, err = dl.Open(db, []string{"non_existent"}, nil)
+	assert.Error(t, err)
+
+	// Test createOrOpen with allowOpen=false and directory exists
+	_, err = dl.Create(db, []string{"dir_exists"}, nil)
+	require.NoError(t, err)
+	_, err = dl.Create(db, []string{"dir_exists"}, nil)
+	assert.Error(t, err)
+
+	// Test Move with source not existing
+	_, err = dl.Move(db, []string{"non_existent_src"}, []string{"dst"})
+	assert.Error(t, err)
+
+	// Test Move with destination existing
+	_, err = dl.Create(db, []string{"src_exists"}, nil)
+	require.NoError(t, err)
+	_, err = dl.Create(db, []string{"dst_exists"}, nil)
+	require.NoError(t, err)
+	_, err = dl.Move(db, []string{"src_exists"}, []string{"dst_exists"})
+	assert.Error(t, err)
+
+	// Test Move with parent of destination not existing
+	_, err = dl.Move(db, []string{"src_exists"}, []string{"non_existent_parent", "dst"})
+	assert.Error(t, err)
+
+	// Test List on a directory that does not exist
+	_, err = dl.List(db, []string{"non_existent_list"}, directory.ListOptions{})
+	assert.Error(t, err)
+}
+
+
+func TestDirectoryLayer_MoveRemovePartitions(t *testing.T) {
+	db, err := fdb.OpenDefault()
+	require.NoError(t, err)
+
+	// Create a clean directory layer for the test
+	prefix := []byte(fmt.Sprintf("move_remove_partitions_%d", time.Now().UnixNano()))
+	nodeSS := subspace.FromBytes(append(prefix, []byte("_nodes")...))
+	contentSS := subspace.FromBytes(append(prefix, []byte("_content")...))
+	dl := directory.NewDirectoryLayer(nodeSS, contentSS, true)
+
+	// Create two partitions
+	p1, err := dl.CreatePrefix(db, []string{"p1"}, []byte("partition"), []byte("prefix1"))
+	require.NoError(t, err)
+	_, err = dl.CreatePrefix(db, []string{"p2"}, []byte("partition"), []byte("prefix2"))
+	require.NoError(t, err)
+
+	// Try to move between partitions (should fail)
+	_, err = p1.MoveTo(db, []string{"p2", "moved"})
+	assert.Error(t, err)
+
+	// Remove a partition
+	removed, err := dl.Remove(db, []string{"p1"})
+	require.NoError(t, err)
+	assert.True(t, removed)
 }

@@ -847,6 +847,28 @@ func TestIntegration_ChangeMessageVisibility(t *testing.T) {
 	assert.Equal(t, sendResp.MessageId, recResp3.Messages[0].MessageId)
 }
 
+func TestMain(t *testing.T) {
+	// Redirect log output to avoid polluting test output
+	oldFlags := log.Flags()
+	log.SetFlags(0)
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	defer func() {
+		log.SetFlags(oldFlags)
+		log.SetOutput(nil)
+	}()
+
+	// Run main in a goroutine so we can test it
+	go main()
+
+	// Give the server a moment to start
+	time.Sleep(500 * time.Millisecond)
+
+	// Check if the server is listening
+	// We expect a "Starting server" log message
+	assert.Contains(t, buf.String(), "Starting server on")
+}
+
 func TestIntegration_DeleteMessageBatch(t *testing.T) {
 	app, teardown := setupIntegrationTest(t)
 	defer teardown()

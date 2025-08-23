@@ -19,6 +19,153 @@ import (
 	"github.com/tabeth/concreteq/models"
 )
 
+func TestFDBStore_NewFDBStore(t *testing.T) {
+	store, err := NewFDBStore()
+	require.NoError(t, err)
+	assert.NotNil(t, store)
+	assert.NotNil(t, store.GetDB())
+}
+
+func TestFDBStore_Unimplemented(t *testing.T) {
+	ctx := context.Background()
+	store, teardown := setupTestDB(t)
+	defer teardown()
+
+	assert.NoError(t, store.SetQueueAttributes(ctx, "q", nil))
+	_, err := store.GetQueueURL(ctx, "q")
+	assert.NoError(t, err)
+	assert.NoError(t, store.ChangeMessageVisibilityBatch(ctx, "q", nil))
+	assert.NoError(t, store.AddPermission(ctx, "q", "l", nil))
+	assert.NoError(t, store.RemovePermission(ctx, "q", "l"))
+	_, err = store.ListQueueTags(ctx, "q")
+	assert.NoError(t, err)
+	assert.NoError(t, store.TagQueue(ctx, "q", nil))
+	assert.NoError(t, store.UntagQueue(ctx, "q", nil))
+	_, err = store.ListDeadLetterSourceQueues(ctx, "q")
+	assert.NoError(t, err)
+	_, err = store.StartMessageMoveTask(ctx, "s", "d")
+	assert.NoError(t, err)
+	assert.NoError(t, store.CancelMessageMoveTask(ctx, "t"))
+	_, err = store.ListMessageMoveTasks(ctx, "s")
+	assert.NoError(t, err)
+}
+
+func TestHashSystemAttributes(t *testing.T) {
+	sv := "value"
+	attrs := map[string]models.MessageSystemAttributeValue{
+		"attr1": {DataType: "String", StringValue: &sv},
+		"attr2": {DataType: "Binary", BinaryValue: []byte("value2")},
+	}
+	hash := hashSystemAttributes(attrs)
+	assert.NotEmpty(t, hash)
+}
+
+func TestFDBStore_ChangeMessageVisibility(t *testing.T) {
+	ctx := context.Background()
+	store, teardown := setupTestDB(t)
+	defer teardown()
+
+	queueName := "test-change-visibility"
+	err := store.CreateQueue(ctx, queueName, nil, nil)
+	require.NoError(t, err)
+
+	// Send a message
+	_, err = store.SendMessage(ctx, queueName, &models.SendMessageRequest{MessageBody: "msg-to-change"})
+	require.NoError(t, err)
+
+	// Receive the message
+	resp, err := store.ReceiveMessage(ctx, queueName, &models.ReceiveMessageRequest{MaxNumberOfMessages: 1})
+	require.NoError(t, err)
+	require.Len(t, resp.Messages, 1)
+	receiptHandle := resp.Messages[0].ReceiptHandle
+
+	// Change visibility
+	err = store.ChangeMessageVisibility(ctx, queueName, receiptHandle, 1)
+	require.NoError(t, err)
+
+	// Try to receive again, should get nothing
+	resp2, err := store.ReceiveMessage(ctx, queueName, &models.ReceiveMessageRequest{MaxNumberOfMessages: 1})
+	require.NoError(t, err)
+	assert.Len(t, resp2.Messages, 0)
+
+	// Wait for new visibility timeout to expire
+	time.Sleep(1200 * time.Millisecond)
+
+	// Receive again, should get the message
+	resp3, err := store.ReceiveMessage(ctx, queueName, &models.ReceiveMessageRequest{MaxNumberOfMessages: 1})
+	require.NoError(t, err)
+	assert.Len(t, resp3.Messages, 1)
+}
+
+func TestFDBStore_DeleteMessageBatch_InvalidReceipt(t *testing.T) {
+	ctx := context.Background()
+	store, teardown := setupTestDB(t)
+	defer teardown()
+
+	queueName := "test-delete-batch-invalid-receipt"
+	err := store.CreateQueue(ctx, queueName, nil, nil)
+	require.NoError(t, err)
+
+	// Manually insert a malformed receipt handle
+	_, err = store.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
+		qDir, _ := store.dir.Open(tr, []string{queueName}, nil)
+		tr.Set(qDir.Sub("inflight").Pack(tuple.Tuple{"bad-handle"}), []byte("not-json"))
+		return nil, nil
+	})
+	require.NoError(t, err)
+
+	entries := []models.DeleteMessageBatchRequestEntry{
+		{Id: "1", ReceiptHandle: "bad-handle"},
+	}
+	resp, err := store.DeleteMessageBatch(ctx, queueName, entries)
+	require.NoError(t, err)
+	assert.Len(t, resp.Failed, 1)
+	assert.Equal(t, "InvalidReceiptHandle", resp.Failed[0].Code)
+}
+
+func TestFDBStore_ChangeMessageVisibility_NotInflight(t *testing.T) {
+	ctx := context.Background()
+	store, teardown := setupTestDB(t)
+	defer teardown()
+
+	queueName := "test-change-visibility-not-inflight"
+	err := store.CreateQueue(ctx, queueName, nil, nil)
+	require.NoError(t, err)
+
+	err = store.ChangeMessageVisibility(ctx, queueName, "not-a-real-handle", 60)
+	assert.ErrorIs(t, err, ErrInvalidReceiptHandle)
+}
+
+func TestFDBStore_DeleteMessageBatch_MessageNotFound(t *testing.T) {
+	ctx := context.Background()
+	store, teardown := setupTestDB(t)
+	defer teardown()
+
+	queueName := "test-delete-batch-msg-not-found"
+	err := store.CreateQueue(ctx, queueName, nil, nil)
+	require.NoError(t, err)
+
+	// Send and receive a message
+	_, err = store.SendMessage(ctx, queueName, &models.SendMessageRequest{MessageBody: "msg1"})
+	require.NoError(t, err)
+	resp, err := store.ReceiveMessage(ctx, queueName, &models.ReceiveMessageRequest{MaxNumberOfMessages: 1})
+	require.NoError(t, err)
+	require.Len(t, resp.Messages, 1)
+	receiptHandle := resp.Messages[0].ReceiptHandle
+
+	// Delete the message
+	err = store.DeleteMessage(ctx, queueName, receiptHandle)
+	require.NoError(t, err)
+
+	// Try to delete it again in a batch
+	entries := []models.DeleteMessageBatchRequestEntry{
+		{Id: "1", ReceiptHandle: receiptHandle},
+	}
+	delResp, err := store.DeleteMessageBatch(ctx, queueName, entries)
+	require.NoError(t, err)
+	assert.Len(t, delResp.Successful, 1)
+}
+
 // NOTE: These tests require a running FoundationDB instance.
 // They are integration tests, not unit tests.
 
