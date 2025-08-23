@@ -489,6 +489,10 @@ func isValidMessageAttributeName(name string) bool {
 		return false
 	}
 	// The name can contain alphanumeric characters and the underscore (_), hyphen (-), and period (.).
+	// The `.` character is allowed, but not at the beginning or end, and not in sequence.
+	if strings.HasPrefix(name, ".") || strings.HasSuffix(name, ".") || strings.Contains(name, "..") {
+		return false
+	}
 	match, _ := regexp.MatchString(`^[a-zA-Z0-9_.-]+$`, name)
 	return match
 }
@@ -613,6 +617,10 @@ func (app *App) SendMessageHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for name, attr := range req.MessageAttributes {
+		if !isValidMessageAttributeName(name) {
+			app.sendErrorResponse(w, "InvalidParameterValue", "Message attribute name '"+name+"' is invalid.", http.StatusBadRequest)
+			return
+		}
 		if len(name) == 0 {
 			app.sendErrorResponse(w, "InvalidParameterValue", "Message attribute name cannot be empty.", http.StatusBadRequest)
 			return
@@ -874,6 +882,10 @@ func (app *App) DeleteMessageBatchHandler(w http.ResponseWriter, r *http.Request
 	// Ensure entry IDs are distinct within the batch.
 	ids := make(map[string]struct{})
 	for _, entry := range req.Entries {
+		if entry.Id == "" {
+			app.sendErrorResponse(w, "InvalidBatchEntryId", "The Id of a batch entry in a batch request doesn't abide by the specification.", http.StatusBadRequest)
+			return
+		}
 		if _, exists := ids[entry.Id]; exists {
 			app.sendErrorResponse(w, "BatchEntryIdsNotDistinct", "Two or more batch entries in the request have the same Id.", http.StatusBadRequest)
 			return
