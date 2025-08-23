@@ -718,6 +718,43 @@ func TestIntegration_FifoFairness(t *testing.T) {
 	assert.Greater(t, len(groupSet), 1, "Expected to receive messages from more than one group via HTTP")
 }
 
+func TestIntegration_SetQueueAttributes(t *testing.T) {
+	app, teardown := setupIntegrationTest(t)
+	defer teardown()
+
+	ctx := context.Background()
+	queueName := "set-attributes-integ-queue"
+	queueURL := fmt.Sprintf("%s/queues/%s", app.baseURL, queueName)
+
+	// 1. Create a queue
+	err := app.store.CreateQueue(ctx, queueName, nil, nil)
+	require.NoError(t, err)
+
+	// 2. Set a new attribute via HTTP
+	newVisibilityTimeout := "123"
+	setAttrsBody := fmt.Sprintf(`{"QueueUrl": "%s", "Attributes": {"VisibilityTimeout": "%s"}}`, queueURL, newVisibilityTimeout)
+	req, _ := http.NewRequest("POST", app.baseURL+"/", bytes.NewBufferString(setAttrsBody))
+	req.Header.Set("X-Amz-Target", "AmazonSQS.SetQueueAttributes")
+	httpResp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer httpResp.Body.Close()
+	assert.Equal(t, http.StatusOK, httpResp.StatusCode)
+
+	// 3. Verify the attribute was updated in the database
+	_, err = app.store.GetDB().ReadTransact(func(rtr fdb.ReadTransaction) (interface{}, error) {
+		queueDir, err := directory.Open(rtr, []string{"concreteq", queueName}, nil)
+		require.NoError(t, err)
+		attrsBytes, err := rtr.Get(queueDir.Pack(tuple.Tuple{"attributes"})).Get()
+		require.NoError(t, err)
+		var storedAttrs map[string]string
+		err = json.Unmarshal(attrsBytes, &storedAttrs)
+		require.NoError(t, err)
+		assert.Equal(t, newVisibilityTimeout, storedAttrs["VisibilityTimeout"])
+		return nil, nil
+	})
+	require.NoError(t, err)
+}
+
 func TestIntegration_ChangeMessageVisibility(t *testing.T) {
 	app, teardown := setupIntegrationTest(t)
 	defer teardown()

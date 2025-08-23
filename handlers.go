@@ -108,6 +108,8 @@ func (app *App) RootSQSHandler(w http.ResponseWriter, r *http.Request) {
 		app.DeleteMessageBatchHandler(w, r)
 	case "ChangeMessageVisibility":
 		app.ChangeMessageVisibilityHandler(w, r)
+	case "SetQueueAttributes":
+		app.SetQueueAttributesHandler(w, r)
 	default:
 		app.sendErrorResponse(w, "UnsupportedOperation", "Unsupported operation: "+action, http.StatusBadRequest)
 	}
@@ -144,16 +146,17 @@ func validateAttributes(attributes map[string]string) error {
 		case "DelaySeconds":
 			err = validateIntAttribute(val, 0, 900)
 		case "MaximumMessageSize":
-			err = validateIntAttribute(val, 1024, 262144)
+			err = validateIntAttribute(val, 1024, 1048576)
 		case "MessageRetentionPeriod":
 			err = validateIntAttribute(val, 60, 1209600)
 		case "ReceiveMessageWaitTimeSeconds":
 			err = validateIntAttribute(val, 0, 20)
 		case "VisibilityTimeout":
 			err = validateIntAttribute(val, 0, 43200)
-		case "FifoQueue", "ContentBasedDeduplication":
-			if val != "true" && val != "false" {
-				err = fmt.Errorf("must be 'true' or 'false'")
+		case "Policy":
+			// Basic validation: check if it's a valid JSON.
+			if !json.Valid([]byte(val)) {
+				err = errors.New("must be a valid JSON object")
 			}
 		case "RedrivePolicy":
 			// RedrivePolicy is a JSON-encoded string, so it requires unmarshaling to validate.
@@ -170,6 +173,35 @@ func validateAttributes(attributes map[string]string) error {
 				if count, convErr := strconv.Atoi(policy.MaxReceiveCount); convErr != nil || count < 1 || count > 1000 {
 					err = errors.New("maxReceiveCount must be an integer between 1 and 1000")
 				}
+			}
+		case "RedriveAllowPolicy":
+			var policy struct {
+				RedrivePermission string   `json:"redrivePermission"`
+				SourceQueueArns   []string `json:"sourceQueueArns"`
+			}
+			if jsonErr := json.Unmarshal([]byte(val), &policy); jsonErr != nil {
+				err = errors.New("must be a valid JSON object")
+			} else {
+				switch policy.RedrivePermission {
+				case "allowAll", "denyAll":
+					// valid
+				case "byQueue":
+					if len(policy.SourceQueueArns) == 0 {
+						err = errors.New("sourceQueueArns is required when redrivePermission is byQueue")
+					}
+				default:
+					err = fmt.Errorf("invalid redrivePermission: must be allowAll, denyAll, or byQueue")
+				}
+			}
+		case "KmsMasterKeyId":
+			if val == "" {
+				err = errors.New("cannot be empty")
+			}
+		case "KmsDataKeyReusePeriodSeconds":
+			err = validateIntAttribute(val, 60, 86400)
+		case "SqsManagedSseEnabled", "FifoQueue", "ContentBasedDeduplication":
+			if val != "true" && val != "false" {
+				err = fmt.Errorf("must be 'true' or 'false'")
 			}
 		case "DeduplicationScope":
 			if val != "messageGroup" && val != "queue" {
@@ -346,9 +378,45 @@ func (app *App) GetQueueAttributesHandler(w http.ResponseWriter, r *http.Request
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
-// SetQueueAttributesHandler is a placeholder for a not-yet-implemented feature.
+// SetQueueAttributesHandler handles requests to set attributes for a queue.
+// It validates the provided attributes and then calls the storage layer to persist them.
 func (app *App) SetQueueAttributesHandler(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(http.StatusNotImplemented)
+	var req models.SetQueueAttributesRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		app.sendErrorResponse(w, "InvalidRequest", "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if req.QueueUrl == "" {
+		app.sendErrorResponse(w, "MissingParameter", "The request must contain a QueueUrl.", http.StatusBadRequest)
+		return
+	}
+	queueName := path.Base(req.QueueUrl)
+
+	// Validate the attributes before attempting to set them.
+	// Note: A full implementation might require fetching the queue's current state
+	// to validate attribute changes (e.g., you can't change FifoQueue attribute after creation).
+	if err := validateAttributes(req.Attributes); err != nil {
+		// The error from validateAttributes is specific enough to be returned to the client.
+		app.sendErrorResponse(w, "InvalidAttributeName", err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// Delegate the actual attribute update to the storage layer.
+	err := app.Store.SetQueueAttributes(r.Context(), queueName, req.Attributes)
+	if err != nil {
+		// Handle specific, known errors from the storage layer.
+		if errors.Is(err, store.ErrQueueDoesNotExist) {
+			app.sendErrorResponse(w, "QueueDoesNotExist", "The specified queue does not exist.", http.StatusBadRequest)
+			return
+		}
+		// For all other errors, return a generic internal failure.
+		app.sendErrorResponse(w, "InternalFailure", "Failed to set queue attributes", http.StatusInternalServerError)
+		return
+	}
+
+	// A successful SetQueueAttributes call returns a 200 OK with an empty body.
+	w.WriteHeader(http.StatusOK)
 }
 
 // GetQueueUrlHandler is a placeholder for a not-yet-implemented feature.

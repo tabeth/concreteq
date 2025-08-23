@@ -227,10 +227,59 @@ func (s *FDBStore) GetQueueAttributes(ctx context.Context, name string) (map[str
 	return nil, nil
 }
 
-// SetQueueAttributes is not yet implemented.
+// SetQueueAttributes updates the attributes for a given queue.
+// It reads the existing attributes, merges the new ones, and writes the result back.
+// This operation is performed atomically within a single transaction.
 func (s *FDBStore) SetQueueAttributes(ctx context.Context, name string, attributes map[string]string) error {
-	// TODO: Implement updating the (queue_dir, "attributes") key.
-	return nil
+	_, err := s.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
+		// First, check if the queue exists to provide a clear error message.
+		exists, err := s.dir.Exists(tr, []string{name})
+		if err != nil {
+			return nil, err
+		}
+		if !exists {
+			return nil, ErrQueueDoesNotExist
+		}
+
+		// Open the queue's directory.
+		queueDir, err := s.dir.Open(tr, []string{name}, nil)
+		if err != nil {
+			return nil, err // Should not happen if Exists check passed, but good practice.
+		}
+
+		// Read the existing attributes JSON blob.
+		attributesKey := queueDir.Pack(tuple.Tuple{"attributes"})
+		existingAttrsBytes, err := tr.Get(attributesKey).Get()
+		if err != nil {
+			return nil, err
+		}
+
+		// Unmarshal the existing attributes into a map.
+		existingAttrs := make(map[string]string)
+		if len(existingAttrsBytes) > 0 {
+			if err := json.Unmarshal(existingAttrsBytes, &existingAttrs); err != nil {
+				// If data is corrupt, return an error.
+				return nil, err
+			}
+		}
+
+		// Merge the new attributes into the existing map, overwriting any existing keys.
+		for k, v := range attributes {
+			existingAttrs[k] = v
+		}
+
+		// Marshal the newly merged map back into JSON.
+		newAttrsBytes, err := json.Marshal(existingAttrs)
+		if err != nil {
+			return nil, err
+		}
+
+		// Set the new value in the transaction.
+		tr.Set(attributesKey, newAttrsBytes)
+
+		return nil, nil
+	})
+	return err
 }
 
 // GetQueueURL is not yet implemented. The URL is constructed in the handler layer.

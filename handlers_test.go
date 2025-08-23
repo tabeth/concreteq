@@ -44,7 +44,8 @@ func (m *MockStore) GetQueueAttributes(ctx context.Context, name string) (map[st
 	return nil, nil
 }
 func (m *MockStore) SetQueueAttributes(ctx context.Context, name string, attributes map[string]string) error {
-	return nil
+	args := m.Called(ctx, name, attributes)
+	return args.Error(0)
 }
 func (m *MockStore) GetQueueURL(ctx context.Context, name string) (string, error) { return "", nil }
 func (m *MockStore) PurgeQueue(ctx context.Context, name string) error {
@@ -245,6 +246,75 @@ func TestCreateQueueHandler(t *testing.T) {
 				} else { // It's a plain text error message from our old http.Error calls, which we should not have
 					assert.Fail(t, "Received unexpected plain text error response", "Response body: %s", rr.Body.String())
 				}
+			}
+
+			mockStore.AssertExpectations(t)
+		})
+	}
+}
+
+func TestSetQueueAttributesHandler(t *testing.T) {
+	tests := []struct {
+		name               string
+		inputBody          string
+		mockSetup          func(*MockStore)
+		expectedStatusCode int
+		expectedBody       string
+	}{
+		{
+			name:      "Successful Set Attributes",
+			inputBody: `{"QueueUrl": "http://localhost/queues/my-queue", "Attributes": {"VisibilityTimeout": "60"}}`,
+			mockSetup: func(ms *MockStore) {
+				ms.On("SetQueueAttributes", mock.Anything, "my-queue", map[string]string{"VisibilityTimeout": "60"}).Return(nil).Once()
+			},
+			expectedStatusCode: http.StatusOK,
+			expectedBody:       "",
+		},
+		{
+			name:               "Missing QueueUrl",
+			inputBody:          `{"Attributes": {"VisibilityTimeout": "60"}}`,
+			mockSetup:          func(ms *MockStore) {},
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       `{"__type":"MissingParameter", "message":"The request must contain a QueueUrl."}`,
+		},
+		{
+			name:               "Invalid Attribute Value",
+			inputBody:          `{"QueueUrl": "http://localhost/queues/my-queue", "Attributes": {"VisibilityTimeout": "99999"}}`,
+			mockSetup:          func(ms *MockStore) {},
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       `{"__type":"InvalidAttributeName", "message":"invalid value for VisibilityTimeout: must be between 0 and 43200"}`,
+		},
+		{
+			name:      "Queue Does Not Exist",
+			inputBody: `{"QueueUrl": "http://localhost/queues/non-existent-queue", "Attributes": {"VisibilityTimeout": "60"}}`,
+			mockSetup: func(ms *MockStore) {
+				ms.On("SetQueueAttributes", mock.Anything, "non-existent-queue", map[string]string{"VisibilityTimeout": "60"}).Return(store.ErrQueueDoesNotExist).Once()
+			},
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       `{"__type":"QueueDoesNotExist", "message":"The specified queue does not exist."}`,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mockStore := new(MockStore)
+			tc.mockSetup(mockStore)
+
+			app := &App{Store: mockStore}
+			r := chi.NewRouter()
+			app.RegisterSQSHandlers(r)
+
+			req, _ := http.NewRequest("POST", "/", bytes.NewBufferString(tc.inputBody))
+			req.Header.Set("X-Amz-Target", "AmazonSQS.SetQueueAttributes")
+			rr := httptest.NewRecorder()
+
+			r.ServeHTTP(rr, req)
+
+			assert.Equal(t, tc.expectedStatusCode, rr.Code)
+			if tc.expectedBody != "" {
+				require.JSONEq(t, tc.expectedBody, rr.Body.String())
+			} else {
+				assert.Empty(t, rr.Body.String())
 			}
 
 			mockStore.AssertExpectations(t)

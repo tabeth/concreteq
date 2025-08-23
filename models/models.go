@@ -155,6 +155,12 @@ type ChangeMessageVisibilityRequest struct {
 	VisibilityTimeout int    `json:"VisibilityTimeout"`
 }
 
+// SetQueueAttributesRequest defines the parameters for the SQS SetQueueAttributes action.
+type SetQueueAttributesRequest struct {
+	QueueUrl   string            `json:"QueueUrl"`
+	Attributes map[string]string `json:"Attributes"`
+}
+
 // ErrorResponse defines the standard AWS JSON error response format.
 // This ensures that clients interacting with this service can parse errors in a familiar way.
 type ErrorResponse struct {
