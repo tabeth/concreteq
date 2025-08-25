@@ -482,12 +482,6 @@ func isValidMessageAttributeName(name string) bool {
 	if strings.HasPrefix(strings.ToLower(name), "aws.") || strings.HasPrefix(strings.ToLower(name), "amazon.") {
 		return false
 	}
-	if strings.HasPrefix(name, ".") || strings.HasSuffix(name, ".") {
-		return false
-	}
-	if strings.Contains(name, "..") {
-		return false
-	}
 	// The name can contain alphanumeric characters and the underscore (_), hyphen (-), and period (.).
 	// The `.` character is allowed, but not at the beginning or end, and not in sequence.
 	if strings.HasPrefix(name, ".") || strings.HasSuffix(name, ".") || strings.Contains(name, "..") {
@@ -509,6 +503,77 @@ func isValidSqsChars(s string) bool {
 		}
 	}
 	return true
+}
+
+func (app *App) validateSendMessageRequest(req *models.SendMessageRequest, queueName string) error {
+	if req.QueueUrl == "" {
+		return errors.New("MissingParameter: The request must contain a QueueUrl.")
+	}
+
+	if len(req.MessageBody) < 1 || len(req.MessageBody) > 256*1024 { // 1 char to 256 KiB
+		return errors.New("InvalidParameterValue: The message body must be between 1 and 262144 bytes long.")
+	}
+
+	if req.DelaySeconds != nil {
+		if *req.DelaySeconds < 0 || *req.DelaySeconds > 900 {
+			return errors.New("InvalidParameterValue: Value for parameter DelaySeconds is invalid. Reason: Must be an integer from 0 to 900.")
+		}
+		if strings.HasSuffix(queueName, ".fifo") {
+			return errors.New("InvalidParameterValue: The request include parameter that is not valid for this queue type. Reason: DelaySeconds is not supported for FIFO queues.")
+		}
+	}
+
+	isFifo := strings.HasSuffix(queueName, ".fifo")
+
+	if req.MessageDeduplicationId != nil {
+		if !isFifo {
+			return errors.New("InvalidParameterValue: MessageDeduplicationId is supported only for FIFO queues.")
+		}
+		if len(*req.MessageDeduplicationId) > 128 {
+			return errors.New("InvalidParameterValue: MessageDeduplicationId can be up to 128 characters long.")
+		}
+		if !isValidSqsChars(*req.MessageDeduplicationId) {
+			return errors.New("InvalidParameterValue: MessageDeduplicationId can only contain alphanumeric characters and punctuation.")
+		}
+	}
+
+	if isFifo {
+		if req.MessageGroupId == nil {
+			return errors.New("MissingParameter: The request must contain a MessageGroupId.")
+		}
+		if len(*req.MessageGroupId) > 128 {
+			return errors.New("InvalidParameterValue: MessageGroupId can be up to 128 characters long.")
+		}
+		if !isValidSqsChars(*req.MessageGroupId) {
+			return errors.New("InvalidParameterValue: MessageGroupId can only contain alphanumeric characters and punctuation.")
+		}
+	}
+
+	if len(req.MessageAttributes) > 10 {
+		return errors.New("InvalidParameterValue: Number of message attributes cannot exceed 10.")
+	}
+	for name, attr := range req.MessageAttributes {
+		if !isValidMessageAttributeName(name) {
+			return errors.New("InvalidParameterValue: Message attribute name '" + name + "' is invalid.")
+		}
+		if len(name) == 0 {
+			return errors.New("InvalidParameterValue: Message attribute name cannot be empty.")
+		}
+		if attr.DataType == "" {
+			return errors.New("InvalidParameterValue: DataType of message attribute '" + name + "' is required.")
+		}
+	}
+
+	for name, attr := range req.MessageSystemAttributes {
+		if name != "AWSTraceHeader" {
+			return errors.New("InvalidParameterValue: '" + name + "' is not a valid message system attribute.")
+		}
+		if attr.DataType != "String" {
+			return errors.New("InvalidParameterValue: DataType of AWSTraceHeader must be String.")
+		}
+	}
+
+	return nil
 }
 
 // SendMessageHandler handles requests to send a single message to a queue.
@@ -553,94 +618,11 @@ func (app *App) SendMessageHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	// Note: A full implementation would also handle MessageAttributes and MessageSystemAttributes here.
 
-	// --- Comprehensive SQS Validation ---
-	if req.QueueUrl == "" {
-		app.sendErrorResponse(w, "MissingParameter", "The request must contain a QueueUrl.", http.StatusBadRequest)
-		return
-	}
 	queueName := path.Base(req.QueueUrl)
-
-	if len(req.MessageBody) < 1 || len(req.MessageBody) > 256*1024 { // 1 char to 256 KiB
-		app.sendErrorResponse(w, "InvalidParameterValue", "The message body must be between 1 and 262144 bytes long.", http.StatusBadRequest)
+	if err := app.validateSendMessageRequest(&req, queueName); err != nil {
+		parts := strings.SplitN(err.Error(), ": ", 2)
+		app.sendErrorResponse(w, parts[0], parts[1], http.StatusBadRequest)
 		return
-	}
-
-	// DelaySeconds is not allowed for FIFO queues.
-	if req.DelaySeconds != nil {
-		if *req.DelaySeconds < 0 || *req.DelaySeconds > 900 {
-			app.sendErrorResponse(w, "InvalidParameterValue", "Value for parameter DelaySeconds is invalid. Reason: Must be an integer from 0 to 900.", http.StatusBadRequest)
-			return
-		}
-		if strings.HasSuffix(queueName, ".fifo") {
-			app.sendErrorResponse(w, "InvalidParameterValue", "The request include parameter that is not valid for this queue type. Reason: DelaySeconds is not supported for FIFO queues.", http.StatusBadRequest)
-			return
-		}
-	}
-
-	isFifo := strings.HasSuffix(queueName, ".fifo")
-
-	// MessageDeduplicationId is only allowed for FIFO queues.
-	if req.MessageDeduplicationId != nil {
-		if !isFifo {
-			app.sendErrorResponse(w, "InvalidParameterValue", "MessageDeduplicationId is supported only for FIFO queues.", http.StatusBadRequest)
-			return
-		}
-		if len(*req.MessageDeduplicationId) > 128 {
-			app.sendErrorResponse(w, "InvalidParameterValue", "MessageDeduplicationId can be up to 128 characters long.", http.StatusBadRequest)
-			return
-		}
-		if !isValidSqsChars(*req.MessageDeduplicationId) {
-			app.sendErrorResponse(w, "InvalidParameterValue", "MessageDeduplicationId can only contain alphanumeric characters and punctuation.", http.StatusBadRequest)
-			return
-		}
-	}
-
-	// MessageGroupId is required for FIFO queues.
-	if req.MessageGroupId != nil {
-		if len(*req.MessageGroupId) > 128 {
-			app.sendErrorResponse(w, "InvalidParameterValue", "MessageGroupId can be up to 128 characters long.", http.StatusBadRequest)
-			return
-		}
-		if !isValidSqsChars(*req.MessageGroupId) {
-			app.sendErrorResponse(w, "InvalidParameterValue", "MessageGroupId can only contain alphanumeric characters and punctuation.", http.StatusBadRequest)
-			return
-		}
-	}
-	if isFifo && req.MessageGroupId == nil {
-		app.sendErrorResponse(w, "MissingParameter", "The request must contain a MessageGroupId.", http.StatusBadRequest)
-		return
-	}
-
-	// Validate message attributes.
-	if len(req.MessageAttributes) > 10 {
-		app.sendErrorResponse(w, "InvalidParameterValue", "Number of message attributes cannot exceed 10.", http.StatusBadRequest)
-		return
-	}
-	for name, attr := range req.MessageAttributes {
-		if !isValidMessageAttributeName(name) {
-			app.sendErrorResponse(w, "InvalidParameterValue", "Message attribute name '"+name+"' is invalid.", http.StatusBadRequest)
-			return
-		}
-		if len(name) == 0 {
-			app.sendErrorResponse(w, "InvalidParameterValue", "Message attribute name cannot be empty.", http.StatusBadRequest)
-			return
-		}
-		if attr.DataType == "" {
-			app.sendErrorResponse(w, "InvalidParameterValue", "DataType of message attribute '"+name+"' is required.", http.StatusBadRequest)
-			return
-		}
-	}
-
-	// Validate system attributes.
-	for name, attr := range req.MessageSystemAttributes {
-		if name != "AWSTraceHeader" {
-			app.sendErrorResponse(w, "InvalidParameterValue", "'"+name+"' is not a valid message system attribute.", http.StatusBadRequest)
-			return
-		}
-		if attr.DataType != "String" {
-			app.sendErrorResponse(w, "InvalidParameterValue", "DataType of AWSTraceHeader must be String.", http.StatusBadRequest)
-			return
-		}
 	}
 
 	// After validation, delegate to the storage layer.
