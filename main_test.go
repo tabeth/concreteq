@@ -847,6 +847,92 @@ func TestIntegration_ChangeMessageVisibility(t *testing.T) {
 	assert.Equal(t, sendResp.MessageId, recResp3.Messages[0].MessageId)
 }
 
+func TestIntegration_ReceiveMessage_Validation(t *testing.T) {
+	app, teardown := setupIntegrationTest(t)
+	defer teardown()
+
+	client := http.DefaultClient
+	ctx := context.Background()
+
+	queueName := "test-receive-validation"
+	err := app.store.CreateQueue(ctx, queueName, nil, nil)
+	require.NoError(t, err)
+
+	t.Run("Invalid ReceiveRequestAttemptId", func(t *testing.T) {
+		body := fmt.Sprintf(`{"QueueUrl": "%s/queues/%s", "ReceiveRequestAttemptId": "invalid id"}`, app.baseURL, queueName)
+		req, _ := http.NewRequest("POST", app.baseURL, strings.NewReader(body))
+		req.Header.Set("X-Amz-Target", "AmazonSQS.ReceiveMessage")
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, err := client.Do(req)
+		require.NoError(t, err)
+		defer resp.Body.Close()
+
+		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	})
+
+	t.Run("Too long ReceiveRequestAttemptId", func(t *testing.T) {
+		body := fmt.Sprintf(`{"QueueUrl": "%s/queues/%s", "ReceiveRequestAttemptId": "`+strings.Repeat("a", 129)+`"}`, app.baseURL, queueName)
+		req, _ := http.NewRequest("POST", app.baseURL, strings.NewReader(body))
+		req.Header.Set("X-Amz-Target", "AmazonSQS.ReceiveMessage")
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, err := client.Do(req)
+		require.NoError(t, err)
+		defer resp.Body.Close()
+
+		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	})
+
+	t.Run("Invalid MessageSystemAttributeNames", func(t *testing.T) {
+		body := fmt.Sprintf(`{"QueueUrl": "%s/queues/%s", "MessageSystemAttributeNames": ["Invalid"]}`, app.baseURL, queueName)
+		req, _ := http.NewRequest("POST", app.baseURL, strings.NewReader(body))
+		req.Header.Set("X-Amz-Target", "AmazonSQS.ReceiveMessage")
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, err := client.Do(req)
+		require.NoError(t, err)
+		defer resp.Body.Close()
+
+		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	})
+
+	t.Run("Invalid MessageAttributeNames", func(t *testing.T) {
+		body := fmt.Sprintf(`{"QueueUrl": "%s/queues/%s", "MessageAttributeNames": ["!@#"]}`, app.baseURL, queueName)
+		req, _ := http.NewRequest("POST", app.baseURL, strings.NewReader(body))
+		req.Header.Set("X-Amz-Target", "AmazonSQS.ReceiveMessage")
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, err := client.Do(req)
+		require.NoError(t, err)
+		defer resp.Body.Close()
+
+		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	})
+}
+
+func TestMain(t *testing.T) {
+	// Redirect log output to avoid polluting test output
+	oldFlags := log.Flags()
+	log.SetFlags(0)
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	defer func() {
+		log.SetFlags(oldFlags)
+		log.SetOutput(nil)
+	}()
+
+	// Run main in a goroutine so we can test it
+	go main()
+
+	// Give the server a moment to start
+	time.Sleep(500 * time.Millisecond)
+
+	// Check if the server is listening
+	// We expect a "Starting server" log message
+	assert.Contains(t, buf.String(), "Starting server on")
+}
+
 func TestIntegration_DeleteMessageBatch(t *testing.T) {
 	app, teardown := setupIntegrationTest(t)
 	defer teardown()
