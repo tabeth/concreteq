@@ -616,15 +616,7 @@ func (app *App) SendMessageHandler(w http.ResponseWriter, r *http.Request) {
 	if groupID, ok := data["MessageGroupId"].(string); ok {
 		req.MessageGroupId = &groupID
 	}
-	if attrs, ok := data["MessageAttributes"].(map[string]interface{}); ok {
-		// A bit of a hack: re-marshal and unmarshal to convert map[string]interface{} to the specific struct type.
-		jsonStr, _ := json.Marshal(attrs)
-		json.Unmarshal(jsonStr, &req.MessageAttributes)
-	}
-	if attrs, ok := data["MessageSystemAttributes"].(map[string]interface{}); ok {
-		jsonStr, _ := json.Marshal(attrs)
-		json.Unmarshal(jsonStr, &req.MessageSystemAttributes)
-	}
+	// Note: A full implementation would also handle MessageAttributes and MessageSystemAttributes here.
 
 	queueName := path.Base(req.QueueUrl)
 	if err := app.validateSendMessageRequest(&req, queueName); err != nil {
