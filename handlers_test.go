@@ -822,6 +822,43 @@ func TestDeleteMessageBatchHandler(t *testing.T) {
 			expectedStatusCode: http.StatusBadRequest,
 			expectedBody:       `{"__type":"BatchEntryIdsNotDistinct", "message":"Two or more batch entries in the request have the same Id."}`,
 		},
+		{
+			name:               "Invalid JSON",
+			inputBody:          `{]`,
+			mockSetup:          func(ms *MockStore) {},
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       `{"__type":"InvalidRequest", "message":"Invalid request body"}`,
+		},
+		{
+			name:               "Missing QueueUrl",
+			inputBody:          `{"Entries":[]}`,
+			mockSetup:          func(ms *MockStore) {},
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       `{"__type":"MissingParameter", "message":"The request must contain a QueueUrl."}`,
+		},
+		{
+			name:               "Empty Entries",
+			inputBody:          `{"QueueUrl": "q", "Entries":[]}`,
+			mockSetup:          func(ms *MockStore) {},
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       `{"__type":"EmptyBatchRequest", "message":"The batch request doesn't contain any entries."}`,
+		},
+		{
+			name:               "Empty Id in Entry",
+			inputBody:          `{"QueueUrl": "q", "Entries":[{"Id": "", "ReceiptHandle": "rh"}]}`,
+			mockSetup:          func(ms *MockStore) {},
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       `{"__type":"InvalidBatchEntryId", "message":"The Id of a batch entry in a batch request doesn't abide by the specification."}`,
+		},
+		{
+			name:      "Store Internal Error",
+			inputBody: `{"QueueUrl": "q", "Entries":[{"Id": "1", "ReceiptHandle": "rh"}]}`,
+			mockSetup: func(ms *MockStore) {
+				ms.On("DeleteMessageBatch", mock.Anything, "q", mock.Anything).Return(nil, errors.New("internal error"))
+			},
+			expectedStatusCode: http.StatusInternalServerError,
+			expectedBody:       `{"__type":"InternalFailure", "message":"Failed to delete message batch"}`,
+		},
 	}
 
 	for _, tc := range tests {
