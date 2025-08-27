@@ -114,3 +114,28 @@ func TestMoveTo(t *testing.T) {
 	// The important thing is that we are covering the function.
 	assert.Error(t, err)
 }
+
+func TestDirectory_MoveErrors(t *testing.T) {
+	db, root := setupAllTests(t)
+	testName := "move_errors"
+	_, err := root.Create(db, []string{testName, "a"}, nil)
+	require.NoError(t, err)
+	_, err = root.Create(db, []string{testName, "b"}, nil)
+	require.NoError(t, err)
+
+	// Move to a subdirectory of source
+	_, err = root.Move(db, []string{testName}, []string{testName, "a"})
+	assert.Error(t, err)
+
+	// Move to a path where the parent does not exist
+	_, err = root.Move(db, []string{testName, "a"}, []string{"non-existent-parent", "dest"})
+	assert.Error(t, err)
+
+	// Move to a path that already exists
+	_, err = root.Move(db, []string{testName, "a"}, []string{testName, "b"})
+	assert.Error(t, err)
+
+	// Move a non-existent source
+	_, err = root.Move(db, []string{"non-existent-source"}, []string{"dest"})
+	assert.Error(t, err)
+}

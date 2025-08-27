@@ -933,6 +933,34 @@ func TestMain(t *testing.T) {
 	assert.Contains(t, buf.String(), "Starting server on")
 }
 
+func TestMain_ListenAndServeError(t *testing.T) {
+	// Redirect log output to avoid polluting test output and os.Exit
+	oldFlags := log.Flags()
+	log.SetFlags(0)
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	defer func() {
+		log.SetFlags(oldFlags)
+		log.SetOutput(nil)
+	}()
+
+	// Occupy the port that the server will try to listen on
+	l, err := net.Listen("tcp", ":8080")
+	if err != nil {
+		t.Skip("could not listen on port 8080, skipping test")
+	}
+	defer l.Close()
+
+	// Run main in a goroutine
+	go main()
+
+	// Give the server a moment to fail
+	time.Sleep(500 * time.Millisecond)
+
+	// Check if the server failed to start
+	assert.Contains(t, buf.String(), "Failed to start server")
+}
+
 func TestIntegration_DeleteMessageBatch(t *testing.T) {
 	app, teardown := setupIntegrationTest(t)
 	defer teardown()
@@ -1324,7 +1352,7 @@ func TestIntegration_Messaging(t *testing.T) {
 			require.NoError(t, err)
 
 			// First receive
-			recBody1 := fmt.Sprintf(`{"QueueUrl": "%s/queues/%s", "VisibilityTimeout": 1}`, app.baseURL, stdQueueName)
+			recBody1 := fmt.Sprintf(`{"QueueUrl": "%s/queues/%s", "VisibilityTimeout": 2}`, app.baseURL, stdQueueName)
 			req1, _ := http.NewRequest("POST", app.baseURL+"/", bytes.NewBufferString(recBody1))
 			req1.Header.Set("X-Amz-Target", "AmazonSQS.ReceiveMessage")
 			resp1, err := http.DefaultClient.Do(req1)
@@ -1351,7 +1379,7 @@ func TestIntegration_Messaging(t *testing.T) {
 			assert.Len(t, recResp2.Messages, 0, "should not receive message during visibility timeout")
 
 			// Wait for visibility timeout to expire
-			time.Sleep(1100 * time.Millisecond)
+			time.Sleep(2100 * time.Millisecond)
 
 			// Try to receive again, should get the message
 			req3, _ := http.NewRequest("POST", app.baseURL+"/", bytes.NewBufferString(recBody2)) // Can reuse recBody2
