@@ -31,13 +31,21 @@ func TestFDBStore_Unimplemented(t *testing.T) {
 	store, teardown := setupTestDB(t)
 	defer teardown()
 
-	assert.NoError(t, store.SetQueueAttributes(ctx, "q", nil))
-	_, err := store.GetQueueURL(ctx, "q")
+	var err error
+
+	err = store.CreateQueue(ctx, "q", nil, nil)
+	require.NoError(t, err)
+
+	err = store.SetQueueAttributes(ctx, "q", nil)
+	assert.NoError(t, err)
+	_, err = store.GetQueueURL(ctx, "q")
 	assert.NoError(t, err)
 	_, err = store.ChangeMessageVisibilityBatch(ctx, "q", nil)
 	assert.NoError(t, err)
-	assert.NoError(t, store.AddPermission(ctx, "q", "l", nil))
-	assert.NoError(t, store.RemovePermission(ctx, "q", "l"))
+	err = store.AddPermission(ctx, "q", "l", nil)
+	assert.NoError(t, err)
+	err = store.RemovePermission(ctx, "q", "l")
+	assert.NoError(t, err)
 	_, err = store.ListQueueTags(ctx, "q")
 	assert.NoError(t, err)
 	assert.NoError(t, store.TagQueue(ctx, "q", nil))

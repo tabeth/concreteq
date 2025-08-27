@@ -44,40 +44,6 @@ type GetQueueAttributesResponse struct {
 	Attributes map[string]string `json:"Attributes"`
 }
 
-type SetQueueAttributesRequest struct {
-	QueueUrl   string            `json:"QueueUrl"`
-	Attributes map[string]string `json:"Attributes"`
-}
-
-type GetQueueUrlRequest struct {
-	QueueName              string `json:"QueueName"`
-	QueueOwnerAWSAccountId string `json:"QueueOwnerAWSAccountId,omitempty"`
-}
-
-type GetQueueUrlResponse struct {
-	QueueUrl string `json:"QueueUrl"`
-}
-
-type ChangeMessageVisibilityBatchRequestEntry struct {
-	Id                string `json:"Id"`
-	ReceiptHandle     string `json:"ReceiptHandle"`
-	VisibilityTimeout int    `json:"VisibilityTimeout"`
-}
-
-type ChangeMessageVisibilityBatchRequest struct {
-	QueueUrl string                                     `json:"QueueUrl"`
-	Entries  []ChangeMessageVisibilityBatchRequestEntry `json:"Entries"`
-}
-
-type ChangeMessageVisibilityBatchResponse struct {
-	Successful []ChangeMessageVisibilityBatchResultEntry `json:"Successful"`
-	Failed     []BatchResultErrorEntry                   `json:"Failed"`
-}
-
-type ChangeMessageVisibilityBatchResultEntry struct {
-	Id string `json:"Id"`
-}
-
 // MessageAttributeValue represents the value of a custom message attribute in SQS.
 // It can hold string, binary, or lists of these types.
 type MessageAttributeValue struct {
@@ -275,4 +241,37 @@ type DeleteMessageBatchResponse struct {
 // DeleteMessageBatchResultEntry contains the ID of a successfully deleted message in a batch.
 type DeleteMessageBatchResultEntry struct {
 	Id string `json:"Id"`
+}
+
+type ChangeMessageVisibilityBatchRequest struct {
+	QueueUrl string                                     `json:"QueueUrl"`
+	Entries  []ChangeMessageVisibilityBatchRequestEntry `json:"Entries"`
+}
+
+type ChangeMessageVisibilityBatchRequestEntry struct {
+	Id                string `json:"Id"`
+	ReceiptHandle     string `json:"ReceiptHandle"`
+	VisibilityTimeout int    `json:"VisibilityTimeout"`
+}
+
+type ChangeMessageVisibilityBatchResponse struct {
+	Successful []ChangeMessageVisibilityBatchResultEntry `json:"Successful"`
+	Failed     []BatchResultErrorEntry                   `json:"Failed"`
+}
+
+type ChangeMessageVisibilityBatchResultEntry struct {
+	Id string `json:"Id"`
+}
+
+type GetQueueUrlRequest struct {
+	QueueName string `json:"QueueName"`
+}
+
+type GetQueueUrlResponse struct {
+	QueueUrl string `json:"QueueUrl"`
+}
+
+type SetQueueAttributesRequest struct {
+	QueueUrl   string            `json:"QueueUrl"`
+	Attributes map[string]string `json:"Attributes"`
 }

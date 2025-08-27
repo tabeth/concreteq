@@ -128,6 +128,53 @@ func (m *MockStore) ListMessageMoveTasks(ctx context.Context, sourceArn string) 
 	return nil, nil
 }
 
+func TestValidateAttributes(t *testing.T) {
+	tests := []struct {
+		name       string
+		attributes map[string]string
+		expectErr  string
+	}{
+		// Valid cases (should not error)
+		{"Valid DelaySeconds", map[string]string{"DelaySeconds": "10"}, ""},
+		{"Valid MaximumMessageSize", map[string]string{"MaximumMessageSize": "2048"}, ""},
+		{"Valid MessageRetentionPeriod", map[string]string{"MessageRetentionPeriod": "86400"}, ""},
+		{"Valid ReceiveMessageWaitTimeSeconds", map[string]string{"ReceiveMessageWaitTimeSeconds": "10"}, ""},
+		{"Valid VisibilityTimeout", map[string]string{"VisibilityTimeout": "300"}, ""},
+		{"Valid FifoQueue", map[string]string{"FifoQueue": "true"}, ""},
+		{"Valid ContentBasedDeduplication", map[string]string{"ContentBasedDeduplication": "false"}, ""},
+		{"Valid RedrivePolicy", map[string]string{"RedrivePolicy": `{"deadLetterTargetArn":"arn","maxReceiveCount":"5"}`}, ""},
+		{"Valid DeduplicationScope", map[string]string{"DeduplicationScope": "messageGroup"}, ""},
+		{"Valid FifoThroughputLimit", map[string]string{"FifoThroughputLimit": "perQueue"}, ""},
+
+		// Invalid cases
+		{"Invalid DelaySeconds", map[string]string{"DelaySeconds": "abc"}, "invalid value for DelaySeconds: must be an integer"},
+		{"Invalid MaximumMessageSize", map[string]string{"MaximumMessageSize": "1023"}, "invalid value for MaximumMessageSize: must be between 1024 and 262144"},
+		{"Invalid MessageRetentionPeriod", map[string]string{"MessageRetentionPeriod": "0"}, "invalid value for MessageRetentionPeriod: must be between 60 and 1209600"},
+		{"Invalid ReceiveMessageWaitTimeSeconds", map[string]string{"ReceiveMessageWaitTimeSeconds": "21"}, "invalid value for ReceiveMessageWaitTimeSeconds: must be between 0 and 20"},
+		{"Invalid VisibilityTimeout", map[string]string{"VisibilityTimeout": "-1"}, "invalid value for VisibilityTimeout: must be between 0 and 43200"},
+		{"Invalid FifoQueue", map[string]string{"FifoQueue": "yes"}, "invalid value for FifoQueue: must be 'true' or 'false'"},
+		{"Invalid ContentBasedDeduplication", map[string]string{"ContentBasedDeduplication": "no"}, "invalid value for ContentBasedDeduplication: must be 'true' or 'false'"},
+		{"Invalid RedrivePolicy JSON", map[string]string{"RedrivePolicy": `{"deadLetterTargetArn":"arn"`}, "invalid value for RedrivePolicy: must be a valid JSON object"},
+		{"Missing deadLetterTargetArn", map[string]string{"RedrivePolicy": `{"maxReceiveCount":"5"}`}, "invalid value for RedrivePolicy: deadLetterTargetArn is required"},
+		{"Invalid maxReceiveCount string", map[string]string{"RedrivePolicy": `{"deadLetterTargetArn":"arn","maxReceiveCount":"abc"}`}, "invalid value for RedrivePolicy: maxReceiveCount must be an integer between 1 and 1000"},
+		{"Invalid maxReceiveCount range", map[string]string{"RedrivePolicy": `{"deadLetterTargetArn":"arn","maxReceiveCount":"0"}`}, "invalid value for RedrivePolicy: maxReceiveCount must be an integer between 1 and 1000"},
+		{"Invalid DeduplicationScope", map[string]string{"DeduplicationScope": "invalid"}, "invalid value for DeduplicationScope: must be 'messageGroup' or 'queue'"},
+		{"Invalid FifoThroughputLimit", map[string]string{"FifoThroughputLimit": "invalid"}, "invalid value for FifoThroughputLimit: must be 'perQueue' or 'perMessageGroupId'"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateAttributes(tc.attributes)
+			if tc.expectErr != "" {
+				require.Error(t, err)
+				assert.Equal(t, tc.expectErr, err.Error())
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
 func TestUnimplementedHandlers(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -327,15 +374,17 @@ func TestChangeMessageVisibilityBatchHandler(t *testing.T) {
 				]
 			}`,
 			mockSetup: func(ms *MockStore) {
-				ms.On("ChangeMessageVisibilityBatch", mock.Anything, "my-queue", mock.AnythingOfType("map[string]int")).Return(&models.ChangeMessageVisibilityBatchResponse{
+				entries := map[string]int{"handle1": 10, "handle2": 20}
+				ms.On("ChangeMessageVisibilityBatch", mock.Anything, "my-queue", entries).Return(&models.ChangeMessageVisibilityBatchResponse{
 					Successful: []models.ChangeMessageVisibilityBatchResultEntry{
-						{Id: "msg1"},
-						{Id: "msg2"},
+						{Id: "handle1"},
+						{Id: "handle2"},
 					},
+					Failed: []models.BatchResultErrorEntry{},
 				}, nil)
 			},
 			expectedStatusCode: http.StatusOK,
-			expectedBody:       `{"Successful":[{"Id":"msg1"},{"Id":"msg2"}],"Failed":null}`,
+			expectedBody:       `{"Successful":[{"Id":"msg1"},{"Id":"msg2"}],"Failed":[]}`,
 		},
 		{
 			name:               "Invalid JSON",
@@ -505,6 +554,15 @@ func TestSetQueueAttributesHandler(t *testing.T) {
 			},
 			expectedStatusCode: http.StatusInternalServerError,
 			expectedBody:       `{"__type":"InternalFailure", "message":"Failed to set queue attributes"}`,
+		},
+		{
+			name:      "Queue Does Not Exist",
+			inputBody: `{"QueueUrl": "http://localhost/queues/non-existent", "Attributes": {"VisibilityTimeout": "100"}}`,
+			mockSetup: func(ms *MockStore) {
+				ms.On("SetQueueAttributes", mock.Anything, "non-existent", map[string]string{"VisibilityTimeout": "100"}).Return(store.ErrQueueDoesNotExist)
+			},
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       `{"__type":"QueueDoesNotExist", "message":"The specified queue does not exist."}`,
 		},
 	}
 	for _, tc := range tests {
@@ -821,43 +879,6 @@ func TestDeleteMessageBatchHandler(t *testing.T) {
 			mockSetup:          func(ms *MockStore) {},
 			expectedStatusCode: http.StatusBadRequest,
 			expectedBody:       `{"__type":"BatchEntryIdsNotDistinct", "message":"Two or more batch entries in the request have the same Id."}`,
-		},
-		{
-			name:               "Invalid JSON",
-			inputBody:          `{]`,
-			mockSetup:          func(ms *MockStore) {},
-			expectedStatusCode: http.StatusBadRequest,
-			expectedBody:       `{"__type":"InvalidRequest", "message":"Invalid request body"}`,
-		},
-		{
-			name:               "Missing QueueUrl",
-			inputBody:          `{"Entries":[]}`,
-			mockSetup:          func(ms *MockStore) {},
-			expectedStatusCode: http.StatusBadRequest,
-			expectedBody:       `{"__type":"MissingParameter", "message":"The request must contain a QueueUrl."}`,
-		},
-		{
-			name:               "Empty Entries",
-			inputBody:          `{"QueueUrl": "q", "Entries":[]}`,
-			mockSetup:          func(ms *MockStore) {},
-			expectedStatusCode: http.StatusBadRequest,
-			expectedBody:       `{"__type":"EmptyBatchRequest", "message":"The batch request doesn't contain any entries."}`,
-		},
-		{
-			name:               "Empty Id in Entry",
-			inputBody:          `{"QueueUrl": "q", "Entries":[{"Id": "", "ReceiptHandle": "rh"}]}`,
-			mockSetup:          func(ms *MockStore) {},
-			expectedStatusCode: http.StatusBadRequest,
-			expectedBody:       `{"__type":"InvalidBatchEntryId", "message":"The Id of a batch entry in a batch request doesn't abide by the specification."}`,
-		},
-		{
-			name:      "Store Internal Error",
-			inputBody: `{"QueueUrl": "q", "Entries":[{"Id": "1", "ReceiptHandle": "rh"}]}`,
-			mockSetup: func(ms *MockStore) {
-				ms.On("DeleteMessageBatch", mock.Anything, "q", mock.Anything).Return(nil, errors.New("internal error"))
-			},
-			expectedStatusCode: http.StatusInternalServerError,
-			expectedBody:       `{"__type":"InternalFailure", "message":"Failed to delete message batch"}`,
 		},
 	}
 

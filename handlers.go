@@ -1000,6 +1000,7 @@ func (app *App) ChangeMessageVisibilityBatchHandler(w http.ResponseWriter, r *ht
 		app.sendErrorResponse(w, "InvalidRequest", "Invalid request body", http.StatusBadRequest)
 		return
 	}
+
 	if req.QueueUrl == "" {
 		app.sendErrorResponse(w, "MissingParameter", "The request must contain a QueueUrl.", http.StatusBadRequest)
 		return
@@ -1014,12 +1015,12 @@ func (app *App) ChangeMessageVisibilityBatchHandler(w http.ResponseWriter, r *ht
 	}
 
 	queueName := path.Base(req.QueueUrl)
-	entries := make(map[string]int)
+	entriesMap := make(map[string]int, len(req.Entries))
 	for _, entry := range req.Entries {
-		entries[entry.ReceiptHandle] = entry.VisibilityTimeout
+		entriesMap[entry.ReceiptHandle] = entry.VisibilityTimeout
 	}
 
-	resp, err := app.Store.ChangeMessageVisibilityBatch(r.Context(), queueName, entries)
+	resp, err := app.Store.ChangeMessageVisibilityBatch(r.Context(), queueName, entriesMap)
 	if err != nil {
 		if errors.Is(err, store.ErrQueueDoesNotExist) {
 			app.sendErrorResponse(w, "QueueDoesNotExist", "The specified queue does not exist.", http.StatusBadRequest)
@@ -1029,8 +1030,50 @@ func (app *App) ChangeMessageVisibilityBatchHandler(w http.ResponseWriter, r *ht
 		return
 	}
 
+	// The store layer returns a response where the `Id` of each entry is the receipt handle.
+	// We need to map this back to the original Id provided in the request.
+	idToReceiptHandle := make(map[string]string)
+	for _, entry := range req.Entries {
+		idToReceiptHandle[entry.Id] = entry.ReceiptHandle
+	}
+
+	finalResp := &models.ChangeMessageVisibilityBatchResponse{
+		Successful: make([]models.ChangeMessageVisibilityBatchResultEntry, 0),
+		Failed:     make([]models.BatchResultErrorEntry, 0),
+	}
+
+	// This mapping is a bit convoluted. We iterate through the original request entries
+	// to ensure the final response uses the correct Ids.
+	for _, reqEntry := range req.Entries {
+		found := false
+		// Check if the entry succeeded
+		for _, success := range resp.Successful {
+			if success.Id == reqEntry.ReceiptHandle {
+				finalResp.Successful = append(finalResp.Successful, models.ChangeMessageVisibilityBatchResultEntry{Id: reqEntry.Id})
+				found = true
+				break
+			}
+		}
+		if found {
+			continue
+		}
+
+		// Check if the entry failed
+		for _, failure := range resp.Failed {
+			if failure.Id == reqEntry.ReceiptHandle {
+				finalResp.Failed = append(finalResp.Failed, models.BatchResultErrorEntry{
+					Id:          reqEntry.Id,
+					Code:        failure.Code,
+					Message:     failure.Message,
+					SenderFault: failure.SenderFault,
+				})
+				break
+			}
+		}
+	}
+
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	json.NewEncoder(w).Encode(finalResp)
 }
 func (app *App) AddPermissionHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNotImplemented)

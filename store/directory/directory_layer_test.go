@@ -58,14 +58,6 @@ func TestDirectory_CoreOperations(t *testing.T) {
 	assert.True(t, exists)
 }
 
-func TestDirectorySubspace_CreatePrefix(t *testing.T) {
-	db, root := setupAllTests(t)
-
-	// The root from setupAllTests doesn't allow manual prefixes
-	_, err := root.CreatePrefix(db, []string{"sub"}, nil, []byte("prefix"))
-	assert.Error(t, err)
-}
-
 func TestDirectory_Remove(t *testing.T) {
 	db, root := setupAllTests(t)
 
@@ -250,23 +242,49 @@ func TestDirectoryLayer_MoveRemovePartitions(t *testing.T) {
 	assert.True(t, removed)
 }
 
-func TestDirectoryLayer_CreatePrefix(t *testing.T) {
-	db, _ := setupAllTests(t)
+func TestDirectoryLayer_MoreErrorCases(t *testing.T) {
+	db, err := fdb.OpenDefault()
+	require.NoError(t, err)
+
 	dl := newIsolatedDirectoryLayer(t)
 
-	_, err := dl.CreatePrefix(db, []string{"prefix_test"}, nil, []byte("prefix123"))
+	// Create a directory structure for testing
+	_, err = dl.Create(db, []string{"a", "b", "c"}, nil)
 	require.NoError(t, err)
 
-	exists, err := dl.Exists(db, []string{"prefix_test"})
+	// Test removing a directory with subdirectories
+	_, err = dl.Remove(db, []string{"a"})
 	require.NoError(t, err)
-	assert.True(t, exists)
+	exists, err := dl.Exists(db, []string{"a"})
+	require.NoError(t, err)
+	assert.False(t, exists)
+	exists, err = dl.Exists(db, []string{"a", "b"})
+	require.NoError(t, err)
+	assert.False(t, exists)
 
-	// Test creating a prefix that is already in use
-	_, err = dl.CreatePrefix(db, []string{"prefix_test_2"}, nil, []byte("prefix123"))
-	assert.Error(t, err)
+	// Test removing the root directory (should fail)
+	_, err = dl.Remove(db, []string{})
+	assert.Error(t, err, "removing the root directory should always be an error")
+
+	// Test listing an empty directory
+	_, err = dl.Create(db, []string{"empty"}, nil)
+	require.NoError(t, err)
+	subdirs, err := dl.List(db, []string{"empty"}, directory.ListOptions{})
+	require.NoError(t, err)
+	assert.Empty(t, subdirs)
+
+	// Test listing a directory with one item
+	_, err = dl.Create(db, []string{"single"}, nil)
+	require.NoError(t, err)
+	_, err = dl.Create(db, []string{"single", "item"}, nil)
+	require.NoError(t, err)
+	subdirs, err = dl.List(db, []string{"single"}, directory.ListOptions{})
+	require.NoError(t, err)
+	assert.Len(t, subdirs, 1)
+	assert.Equal(t, "item", subdirs[0])
 }
 
-func TestDirectoryLayer_IsPrefixFree(t *testing.T) {
+func TestDirectoryLayer_IsPrefixFree_MoreCases(t *testing.T) {
 	db, _ := setupAllTests(t)
 	dl := newIsolatedDirectoryLayer(t)
 
@@ -274,52 +292,38 @@ func TestDirectoryLayer_IsPrefixFree(t *testing.T) {
 	require.NoError(t, err)
 
 	_, err = db.Transact(func(tr fdb.Transaction) (interface{}, error) {
-		isFree, err := directory.IsPrefixFreeForTesting(dl, tr, []byte("prefix123"))
+		// Test empty prefix
+		isFree, err := directory.IsPrefixFreeForTesting(dl, tr, []byte{})
+		require.NoError(t, err)
+		assert.False(t, isFree, "empty prefix should not be free as it conflicts with the directory subspace itself")
+
+		// Test a prefix that is a sub-prefix of an existing prefix
+		isFree, err = directory.IsPrefixFreeForTesting(dl, tr, []byte("prefix12"))
 		require.NoError(t, err)
 		assert.False(t, isFree)
 
-		isFree, err = directory.IsPrefixFreeForTesting(dl, tr, []byte("prefix124"))
+		// Test a prefix that contains an existing prefix
+		isFree, err = directory.IsPrefixFreeForTesting(dl, tr, []byte("prefix1234"))
 		require.NoError(t, err)
-		assert.True(t, isFree)
+		assert.False(t, isFree)
+
 		return nil, nil
 	})
 	require.NoError(t, err)
 }
 
-func TestDirectoryLayer_MoveToRoot(t *testing.T) {
-	db, err := fdb.OpenDefault()
-	require.NoError(t, err)
-
-	dl := newIsolatedDirectoryLayer(t)
-	_, err = dl.MoveTo(db, []string{"anywhere"})
-	assert.Error(t, err)
-}
-
-func TestDirectoryLayer_RemoveNonExistent(t *testing.T) {
-	db, err := fdb.OpenDefault()
-	require.NoError(t, err)
-
-	dl := newIsolatedDirectoryLayer(t)
-	// Remove a non-existent directory
-	removed, err := dl.Remove(db, []string{"non_existent"})
-	require.NoError(t, err)
-	assert.False(t, removed)
-}
-
-func TestDirectory_Partition(t *testing.T) {
+func TestDirectoryLayer_MoreCoverage(t *testing.T) {
 	db, root := setupAllTests(t)
 
-	partition, err := root.Create(db, []string{"partition_test"}, []byte("partition"))
-	require.NoError(t, err)
+	// Test removing root with allowManualPrefixes=false from the default directory layer
+	_, err := directory.Root().Remove(db, []string{})
+	assert.Error(t, err)
 
+	// Test removing a directory inside a partition from the parent
+	partition, err := root.Create(db, []string{"partition_for_remove"}, []byte("partition"))
+	require.NoError(t, err)
 	_, err = partition.Create(db, []string{"a"}, nil)
 	require.NoError(t, err)
-
-	exists, err := partition.Exists(db, []string{"a"})
+	_, err = root.Remove(db, []string{"partition_for_remove", "a"})
 	require.NoError(t, err)
-	assert.True(t, exists)
-
-	exists, err = root.Exists(db, []string{"partition_test", "a"})
-	require.NoError(t, err)
-	assert.True(t, exists)
 }

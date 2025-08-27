@@ -1,7 +1,6 @@
 package directory
 
 import (
-	"encoding/binary"
 	"testing"
 	"time"
 
@@ -19,8 +18,7 @@ func TestDirectoryPartition(t *testing.T) {
 	// Create a new subspace for the partition to avoid conflicts
 	partitionRoot, err := ds.Create(db, []string{"partition_root"}, nil)
 	require.NoError(t, err)
-	prefix := make([]byte, 8)
-	binary.BigEndian.PutUint64(prefix, uint64(time.Now().UnixNano()))
+	prefix := []byte{byte(time.Now().UnixNano())}
 	partition, err := NewDirectoryLayer(partitionRoot, partitionRoot, true).CreatePrefix(db, []string{"partition_test"}, []byte("partition"), prefix)
 	require.NoError(t, err)
 
