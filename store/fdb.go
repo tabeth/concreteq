@@ -855,7 +855,7 @@ func (s *FDBStore) receiveStandardMessages(tr fdb.Transaction, queueDir director
 			// For simplicity in DeleteMessage, we just store the old key.
 			receiptData := map[string]interface{}{
 				"id":      msg.ID,
-				"vis_key": kv.Key, // Store the *original* key.
+				"vis_key": base64.StdEncoding.EncodeToString(kv.Key), // Store the *original* key.
 			}
 			receiptBytes, _ := json.Marshal(receiptData)
 			tr.Set(inflightDir.Pack(tuple.Tuple{receiptHandle}), receiptBytes)
@@ -1226,9 +1226,12 @@ func (s *FDBStore) DeleteMessage(ctx context.Context, queueName string, receiptH
 			if err == nil {
 				tr.Clear(fdb.Key(fifoKey))
 			}
-		} else if visKeyBytes, ok := receiptData["vis_key"].([]byte); ok {
+		} else if visKeyStr, ok := receiptData["vis_key"].(string); ok {
 			// It's a Standard message, delete from `visible_idx`.
-			tr.Clear(fdb.Key(visKeyBytes))
+			visKeyBytes, err := base64.StdEncoding.DecodeString(visKeyStr)
+			if err == nil {
+				tr.Clear(fdb.Key(visKeyBytes))
+			}
 		}
 
 		// 5. Delete the in-flight receipt handle itself.
@@ -1385,8 +1388,11 @@ func (s *FDBStore) ChangeMessageVisibility(ctx context.Context, queueName string
 
 		// 3. Clear the old visibility timeout key.
 		// The key is stored in the receipt handle data.
-		if visKeyBytes, ok := receiptData["vis_key"].([]byte); ok {
-			tr.Clear(fdb.Key(visKeyBytes))
+		if visKeyStr, ok := receiptData["vis_key"].(string); ok {
+			visKeyBytes, err := base64.StdEncoding.DecodeString(visKeyStr)
+			if err == nil {
+				tr.Clear(fdb.Key(visKeyBytes))
+			}
 		}
 
 		// 4. Update the message's visibility and write it back
@@ -1420,9 +1426,9 @@ func (s *FDBStore) ChangeMessageVisibility(ctx context.Context, queueName string
 	return err
 }
 
-func (s *FDBStore) ChangeMessageVisibilityBatch(ctx context.Context, queueName string, entries map[string]int) error {
+func (s *FDBStore) ChangeMessageVisibilityBatch(ctx context.Context, queueName string, entries map[string]int) (*models.ChangeMessageVisibilityBatchResponse, error) {
 	// TODO: Implement in FoundationDB.
-	return nil
+	return nil, nil
 }
 
 func (s *FDBStore) AddPermission(ctx context.Context, queueName, label string, permissions map[string][]string) error {
