@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -48,9 +50,13 @@ func (m *MockStore) GetQueueAttributes(ctx context.Context, name string) (map[st
 	return args.Get(0).(map[string]string), args.Error(1)
 }
 func (m *MockStore) SetQueueAttributes(ctx context.Context, name string, attributes map[string]string) error {
-	return nil
+	args := m.Called(ctx, name, attributes)
+	return args.Error(0)
 }
-func (m *MockStore) GetQueueURL(ctx context.Context, name string) (string, error) { return "", nil }
+func (m *MockStore) GetQueueURL(ctx context.Context, name string) (string, error) {
+	args := m.Called(ctx, name)
+	return args.String(0), args.Error(1)
+}
 func (m *MockStore) PurgeQueue(ctx context.Context, name string) error {
 	args := m.Called(ctx, name)
 	return args.Error(0)
@@ -92,7 +98,8 @@ func (m *MockStore) ChangeMessageVisibility(ctx context.Context, queueName strin
 	return args.Error(0)
 }
 func (m *MockStore) ChangeMessageVisibilityBatch(ctx context.Context, queueName string, entries map[string]int) error {
-	return nil
+	args := m.Called(ctx, queueName, entries)
+	return args.Error(0)
 }
 func (m *MockStore) AddPermission(ctx context.Context, queueName, label string, permissions map[string][]string) error {
 	return nil
@@ -250,6 +257,255 @@ func TestCreateQueueHandler(t *testing.T) {
 					assert.Fail(t, "Received unexpected plain text error response", "Response body: %s", rr.Body.String())
 				}
 			}
+
+			mockStore.AssertExpectations(t)
+		})
+	}
+}
+
+func TestSetQueueAttributesHandler(t *testing.T) {
+	tests := []struct {
+		name               string
+		inputBody          string
+		mockSetup          func(*MockStore)
+		expectedStatusCode int
+		expectedBody       string
+	}{
+		{
+			name:      "Successful Set Attributes",
+			inputBody: `{"QueueUrl": "http://localhost/queues/my-queue", "Attributes": {"VisibilityTimeout": "200"}}`,
+			mockSetup: func(ms *MockStore) {
+				ms.On("SetQueueAttributes", mock.Anything, "my-queue", map[string]string{"VisibilityTimeout": "200"}).Return(nil)
+			},
+			expectedStatusCode: http.StatusOK,
+			expectedBody:       "",
+		},
+		{
+			name:               "Missing QueueUrl",
+			inputBody:          `{"Attributes": {"VisibilityTimeout": "200"}}`,
+			mockSetup:          func(ms *MockStore) {},
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       `{"__type":"MissingParameter", "message":"The request must contain a QueueUrl."}`,
+		},
+		{
+			name:               "Missing Attributes",
+			inputBody:          `{"QueueUrl": "http://localhost/queues/my-queue"}`,
+			mockSetup:          func(ms *MockStore) {},
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       `{"__type":"MissingParameter", "message":"The request must contain Attributes."}`,
+		},
+		{
+			name:      "Queue Does Not Exist",
+			inputBody: `{"QueueUrl": "http://localhost/queues/non-existent", "Attributes": {"VisibilityTimeout": "200"}}`,
+			mockSetup: func(ms *MockStore) {
+				ms.On("SetQueueAttributes", mock.Anything, "non-existent", mock.Anything).Return(store.ErrQueueDoesNotExist)
+			},
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       `{"__type":"QueueDoesNotExist", "message":"The specified queue does not exist."}`,
+		},
+		{
+			name:      "Invalid Attribute Value",
+			inputBody: `{"QueueUrl": "http://localhost/queues/my-queue", "Attributes": {"DelaySeconds": "901"}}`,
+			mockSetup: func(ms *MockStore) {
+				// The validation happens before the store call
+			},
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       `{"__type":"InvalidAttributeName", "message":"invalid value for DelaySeconds: must be between 0 and 900"}`,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mockStore := new(MockStore)
+			tc.mockSetup(mockStore)
+
+			app := &App{Store: mockStore}
+			r := chi.NewRouter()
+			app.RegisterSQSHandlers(r)
+
+			req, _ := http.NewRequest("POST", "/", bytes.NewBufferString(tc.inputBody))
+			req.Header.Set("X-Amz-Target", "AmazonSQS.SetQueueAttributes")
+			rr := httptest.NewRecorder()
+
+			r.ServeHTTP(rr, req)
+
+			assert.Equal(t, tc.expectedStatusCode, rr.Code)
+			if tc.expectedBody != "" {
+				require.JSONEq(t, tc.expectedBody, rr.Body.String())
+			}
+			mockStore.AssertExpectations(t)
+		})
+	}
+}
+
+func TestGetQueueUrlHandler(t *testing.T) {
+	tests := []struct {
+		name               string
+		inputBody          string
+		mockSetup          func(*MockStore)
+		expectedStatusCode int
+		expectedBody       string
+	}{
+		{
+			name:      "Successful Get URL",
+			inputBody: `{"QueueName": "my-queue"}`,
+			mockSetup: func(ms *MockStore) {
+				ms.On("GetQueueURL", mock.Anything, "my-queue").Return("http://localhost:8080/queues/my-queue", nil)
+			},
+			expectedStatusCode: http.StatusOK,
+			expectedBody:       `{"QueueUrl":"http://localhost:8080/queues/my-queue"}`,
+		},
+		{
+			name:               "Missing QueueName",
+			inputBody:          `{}`,
+			mockSetup:          func(ms *MockStore) {},
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       `{"__type":"MissingParameter", "message":"The request must contain a QueueName."}`,
+		},
+		{
+			name:      "Queue Does Not Exist",
+			inputBody: `{"QueueName": "non-existent"}`,
+			mockSetup: func(ms *MockStore) {
+				ms.On("GetQueueURL", mock.Anything, "non-existent").Return("", store.ErrQueueDoesNotExist)
+			},
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       `{"__type":"QueueDoesNotExist", "message":"The specified queue does not exist."}`,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mockStore := new(MockStore)
+			tc.mockSetup(mockStore)
+
+			app := &App{Store: mockStore}
+			r := chi.NewRouter()
+			app.RegisterSQSHandlers(r)
+
+			req, _ := http.NewRequest("POST", "/", bytes.NewBufferString(tc.inputBody))
+			req.Host = "localhost:8080"
+			req.Header.Set("X-Amz-Target", "AmazonSQS.GetQueueUrl")
+			rr := httptest.NewRecorder()
+
+			r.ServeHTTP(rr, req)
+
+			assert.Equal(t, tc.expectedStatusCode, rr.Code)
+			if tc.expectedBody != "" {
+				require.JSONEq(t, tc.expectedBody, rr.Body.String())
+			}
+			mockStore.AssertExpectations(t)
+		})
+	}
+}
+
+func TestChangeMessageVisibilityBatchHandler(t *testing.T) {
+	tests := []struct {
+		name               string
+		inputBody          string
+		mockSetup          func(*MockStore)
+		expectedStatusCode int
+		expectedBody       string
+	}{
+		{
+			name: "Successful Batch Change",
+			inputBody: `{
+				"QueueUrl": "http://localhost/queues/my-queue",
+				"Entries": [
+					{"Id": "msg1", "ReceiptHandle": "handle1", "VisibilityTimeout": 10},
+					{"Id": "msg2", "ReceiptHandle": "handle2", "VisibilityTimeout": 20}
+				]
+			}`,
+			mockSetup: func(ms *MockStore) {
+				ms.On("ChangeMessageVisibilityBatch", mock.Anything, "my-queue", mock.AnythingOfType("map[string]int")).Return(nil)
+			},
+			expectedStatusCode: http.StatusOK,
+			expectedBody:       `{"Successful":[{"Id":"msg1"},{"Id":"msg2"}],"Failed":[]}`,
+		},
+		{
+			name:               "Missing QueueUrl",
+			inputBody:          `{"Entries": [{"Id": "msg1", "ReceiptHandle": "handle1", "VisibilityTimeout": 10}]}`,
+			mockSetup:          func(ms *MockStore) {},
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       `{"__type":"MissingParameter", "message":"The request must contain a QueueUrl."}`,
+		},
+		{
+			name:               "Too Many Entries",
+			inputBody:          `{"QueueUrl": "http://localhost/queues/q", "Entries": [` + strings.Repeat(`{"Id":"_","ReceiptHandle":"_","VisibilityTimeout":1},`, 10) + `{"Id":"_","ReceiptHandle":"_","VisibilityTimeout":1}]}`,
+			mockSetup:          func(ms *MockStore) {},
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       `{"__type":"TooManyEntriesInBatchRequest", "message":"The batch request contains more entries than permissible."}`,
+		},
+		{
+			name:               "Duplicate Entry Ids",
+			inputBody:          `{"QueueUrl": "http://localhost/queues/q", "Entries": [{"Id": "1", "ReceiptHandle": "h1", "VisibilityTimeout": 1}, {"Id": "1", "ReceiptHandle": "h2", "VisibilityTimeout": 1}]}`,
+			mockSetup:          func(ms *MockStore) {},
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       `{"__type":"BatchEntryIdsNotDistinct", "message":"Two or more batch entries in the request have the same Id."}`,
+		},
+		{
+			name:      "Internal error on batch change",
+			inputBody: `{"QueueUrl": "http://localhost/queues/my-queue", "Entries": [{"Id": "1", "ReceiptHandle": "invalid", "VisibilityTimeout": 1}]}`,
+			mockSetup: func(ms *MockStore) {
+				ms.On("ChangeMessageVisibilityBatch", mock.Anything, "my-queue", mock.Anything).Return(errors.New("internal error"))
+			},
+			expectedStatusCode: http.StatusOK,
+			expectedBody:       `{"Successful":[],"Failed":[{"Id":"1","Code":"InternalError","Message":"internal error","SenderFault":false}]}`,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mockStore := new(MockStore)
+			tc.mockSetup(mockStore)
+
+			app := &App{Store: mockStore}
+			r := chi.NewRouter()
+			app.RegisterSQSHandlers(r)
+
+			req, _ := http.NewRequest("POST", "/", bytes.NewBufferString(tc.inputBody))
+			req.Header.Set("X-Amz-Target", "AmazonSQS.ChangeMessageVisibilityBatch")
+			rr := httptest.NewRecorder()
+
+			r.ServeHTTP(rr, req)
+
+			assert.Equal(t, tc.expectedStatusCode, rr.Code)
+			if tc.expectedBody != "" {
+				require.JSONEq(t, tc.expectedBody, rr.Body.String())
+			}
+			mockStore.AssertExpectations(t)
+		})
+	}
+}
+
+func TestUnimplementedHandlers(t *testing.T) {
+	unimplementedTargets := []string{
+		"AmazonSQS.AddPermission",
+		"AmazonSQS.RemovePermission",
+		"AmazonSQS.ListQueueTags",
+		"AmazonSQS.TagQueue",
+		"AmazonSQS.UntagQueue",
+		"AmazonSQS.ListDeadLetterSourceQueues",
+		"AmazonSQS.StartMessageMoveTask",
+		"AmazonSQS.CancelMessageMoveTask",
+		"AmazonSQS.ListMessageMoveTasks",
+	}
+
+	for _, target := range unimplementedTargets {
+		t.Run(target, func(t *testing.T) {
+			mockStore := new(MockStore)
+			app := &App{Store: mockStore}
+			r := chi.NewRouter()
+			app.RegisterSQSHandlers(r)
+
+			req, _ := http.NewRequest("POST", "/", bytes.NewBufferString(`{}`))
+			req.Header.Set("X-Amz-Target", target)
+			rr := httptest.NewRecorder()
+
+			r.ServeHTTP(rr, req)
+
+			assert.Equal(t, http.StatusNotImplemented, rr.Code)
+			expectedBody := `{"__type":"NotImplemented", "message":"The requested action is not implemented."}`
+			require.JSONEq(t, expectedBody, rr.Body.String())
 
 			mockStore.AssertExpectations(t)
 		})
@@ -954,6 +1210,7 @@ func TestListQueuesHandler(t *testing.T) {
 		mockSetup          func(*MockStore)
 		expectedStatusCode int
 		expectedBody       string
+		responseLength     int
 	}{
 		{
 			name:      "Successful Listing",
@@ -963,6 +1220,38 @@ func TestListQueuesHandler(t *testing.T) {
 			},
 			expectedStatusCode: http.StatusOK,
 			expectedBody:       `{"QueueUrls":["http://localhost:8080/queues/test-q1"],"NextToken":"test-q1"}`,
+		},
+		{
+			name:      "Malformed JSON is ignored",
+			inputBody: `{"MaxResults": 1, "QueueNamePrefix": "test"`,
+			mockSetup: func(ms *MockStore) {
+				// The handler should proceed with default values, so the mock expects 0, "", ""
+				ms.On("ListQueues", mock.Anything, 0, "", "").Return([]string{"q1"}, "q1", nil)
+			},
+			expectedStatusCode: http.StatusOK,
+			expectedBody:       `{"QueueUrls":["http://localhost:8080/queues/q1"],"NextToken":"q1"}`,
+		},
+		{
+			name:      "Store Internal Error",
+			inputBody: `{}`,
+			mockSetup: func(ms *MockStore) {
+				ms.On("ListQueues", mock.Anything, 0, "", "").Return(nil, "", errors.New("internal error"))
+			},
+			expectedStatusCode: http.StatusInternalServerError,
+			expectedBody:       `{"__type":"InternalFailure", "message":"Failed to list queues"}`,
+		},
+		{
+			name:      "Over 1000 queues returned",
+			inputBody: `{}`, // No MaxResults
+			mockSetup: func(ms *MockStore) {
+				queues := make([]string, 1001)
+				for i := 0; i < 1001; i++ {
+					queues[i] = fmt.Sprintf("q%d", i)
+				}
+				ms.On("ListQueues", mock.Anything, 0, "", "").Return(queues, "next", nil)
+			},
+			expectedStatusCode: http.StatusOK,
+			responseLength:     1000, // Should be truncated to 1000
 		},
 	}
 
@@ -1004,6 +1293,13 @@ func TestListQueuesHandler(t *testing.T) {
 				} else { // It's a plain text error message from our old http.Error calls, which we should not have
 					assert.Fail(t, "Received unexpected plain text error response", "Response body: %s", rr.Body.String())
 				}
+			}
+
+			if tc.responseLength > 0 {
+				var resp models.ListQueuesResponse
+				err := json.Unmarshal(rr.Body.Bytes(), &resp)
+				require.NoError(t, err)
+				assert.Len(t, resp.QueueUrls, tc.responseLength)
 			}
 
 			mockStore.AssertExpectations(t)

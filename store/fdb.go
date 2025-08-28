@@ -9,6 +9,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"sort"
 	"strconv"
 	"strings"
@@ -268,10 +269,32 @@ func (s *FDBStore) GetQueueAttributes(ctx context.Context, name string) (map[str
 	return attributes.(map[string]string), nil
 }
 
-// SetQueueAttributes is not yet implemented.
+// SetQueueAttributes updates the attributes for a specified queue.
+// Note: This implementation overwrites all existing attributes with the provided ones.
+// A more advanced implementation might merge them.
 func (s *FDBStore) SetQueueAttributes(ctx context.Context, name string, attributes map[string]string) error {
-	// TODO: Implement updating the (queue_dir, "attributes") key.
-	return nil
+	_, err := s.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
+		exists, err := s.dir.Exists(tr, []string{name})
+		if err != nil {
+			return nil, err
+		}
+		if !exists {
+			return nil, ErrQueueDoesNotExist
+		}
+
+		queueDir, err := s.dir.Open(tr, []string{name}, nil)
+		if err != nil {
+			return nil, err
+		}
+
+		attrsBytes, err := json.Marshal(attributes)
+		if err != nil {
+			return nil, err
+		}
+		tr.Set(queueDir.Pack(tuple.Tuple{"attributes"}), attrsBytes)
+		return nil, nil
+	})
+	return err
 }
 
 // GetQueueURL is not yet implemented. The URL is constructed in the handler layer.
@@ -1330,6 +1353,85 @@ func (s *FDBStore) DeleteMessageBatch(ctx context.Context, queueName string, ent
 
 func (s *FDBStore) ChangeMessageVisibility(ctx context.Context, queueName string, receiptHandle string, visibilityTimeout int) error {
 	_, err := s.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
+		return nil, s.changeMessageVisibility(tr, queueName, receiptHandle, visibilityTimeout)
+	})
+	return err
+}
+
+func (s *FDBStore) changeMessageVisibility(tr fdb.Transaction, queueName string, receiptHandle string, visibilityTimeout int) error {
+	queueDir, err := s.dir.Open(tr, []string{queueName}, nil)
+	if err != nil {
+		// This can happen if the queue is deleted mid-transaction.
+		return ErrQueueDoesNotExist
+	}
+
+	messagesDir := queueDir.Sub("messages")
+	inflightDir := queueDir.Sub("inflight")
+	visibleIdxDir := queueDir.Sub("visible_idx")
+
+	inflightKey := inflightDir.Pack(tuple.Tuple{receiptHandle})
+	receiptBytes, err := tr.Get(inflightKey).Get()
+	if err != nil {
+		return err
+	}
+	if receiptBytes == nil {
+		return ErrInvalidReceiptHandle
+	}
+
+	var receiptData map[string]interface{}
+	if err := json.Unmarshal(receiptBytes, &receiptData); err != nil {
+		return ErrInvalidReceiptHandle
+	}
+
+	messageID, ok := receiptData["id"].(string)
+	if !ok {
+		return ErrInvalidReceiptHandle
+	}
+
+	msgBytes, err := tr.Get(messagesDir.Pack(tuple.Tuple{messageID})).Get()
+	if err != nil {
+		return err
+	}
+	if msgBytes == nil {
+		tr.Clear(inflightKey)
+		return ErrMessageNotInflight
+	}
+	var msg models.Message
+	if err := json.Unmarshal(msgBytes, &msg); err != nil {
+		return err
+	}
+
+	// Clear the old visibility timeout key.
+	if visKeyBytes, ok := receiptData["vis_key"].([]byte); ok {
+		tr.Clear(fdb.Key(visKeyBytes))
+	}
+
+	now := time.Now().Unix()
+	newVisibilityTimeout := now + int64(visibilityTimeout)
+	msg.VisibleAfter = newVisibilityTimeout
+
+	newMsgBytes, err := json.Marshal(msg)
+	if err != nil {
+		return err
+	}
+	tr.Set(messagesDir.Pack(tuple.Tuple{messageID}), newMsgBytes)
+
+	newShardID := r.Intn(numShards)
+	newVisKey := visibleIdxDir.Pack(tuple.Tuple{newShardID, newVisibilityTimeout, messageID})
+	tr.Set(newVisKey, []byte{})
+
+	receiptData["vis_key"] = newVisKey
+	newReceiptBytes, err := json.Marshal(receiptData)
+	if err != nil {
+		return err
+	}
+	tr.Set(inflightKey, newReceiptBytes)
+
+	return nil
+}
+
+func (s *FDBStore) ChangeMessageVisibilityBatch(ctx context.Context, queueName string, entries map[string]int) error {
+	_, err := s.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
 		exists, err := s.dir.Exists(tr, []string{queueName})
 		if err != nil {
 			return nil, err
@@ -1338,91 +1440,17 @@ func (s *FDBStore) ChangeMessageVisibility(ctx context.Context, queueName string
 			return nil, ErrQueueDoesNotExist
 		}
 
-		queueDir, err := s.dir.Open(tr, []string{queueName}, nil)
-		if err != nil {
-			return nil, err
+		for receiptHandle, visibilityTimeout := range entries {
+			err := s.changeMessageVisibility(tr, queueName, receiptHandle, visibilityTimeout)
+			if err != nil {
+				// A real implementation would return partial failures. For now, we fail the whole transaction.
+				// We can return a specific error type to indicate which handle failed.
+				return nil, fmt.Errorf("failed on receipt handle %s: %w", receiptHandle, err)
+			}
 		}
-
-		messagesDir := queueDir.Sub("messages")
-		inflightDir := queueDir.Sub("inflight")
-		visibleIdxDir := queueDir.Sub("visible_idx")
-
-		// 1. Look up the receipt handle to find the message it corresponds to.
-		inflightKey := inflightDir.Pack(tuple.Tuple{receiptHandle})
-		receiptBytes, err := tr.Get(inflightKey).Get()
-		if err != nil {
-			return nil, err
-		}
-		if receiptBytes == nil {
-			return nil, ErrInvalidReceiptHandle
-		}
-
-		var receiptData map[string]interface{}
-		if err := json.Unmarshal(receiptBytes, &receiptData); err != nil {
-			return nil, ErrInvalidReceiptHandle
-		}
-
-		messageID, ok := receiptData["id"].(string)
-		if !ok {
-			return nil, ErrInvalidReceiptHandle
-		}
-
-		// 2. Get the original message
-		msgBytes, err := tr.Get(messagesDir.Pack(tuple.Tuple{messageID})).Get()
-		if err != nil {
-			return nil, err
-		}
-		if msgBytes == nil {
-			// Message doesn't exist anymore, which is unexpected if the receipt handle is valid.
-			// However, we can treat this as if the message was deleted.
-			tr.Clear(inflightKey)
-			return nil, ErrInvalidReceiptHandle
-		}
-		var msg models.Message
-		if err := json.Unmarshal(msgBytes, &msg); err != nil {
-			return nil, err
-		}
-
-		// 3. Clear the old visibility timeout key.
-		// The key is stored in the receipt handle data.
-		if visKeyBytes, ok := receiptData["vis_key"].([]byte); ok {
-			tr.Clear(fdb.Key(visKeyBytes))
-		}
-
-		// 4. Update the message's visibility and write it back
-		now := time.Now().Unix()
-		newVisibilityTimeout := now + int64(visibilityTimeout)
-		msg.VisibleAfter = newVisibilityTimeout
-
-		newMsgBytes, err := json.Marshal(msg)
-		if err != nil {
-			return nil, err
-		}
-		tr.Set(messagesDir.Pack(tuple.Tuple{messageID}), newMsgBytes)
-
-		// 5. Create a new visibility index entry with the new timeout.
-		// We'll use a new random shard to avoid hot-spots.
-		newShardID := r.Intn(numShards)
-		newVisKey := visibleIdxDir.Pack(tuple.Tuple{newShardID, newVisibilityTimeout, messageID})
-		tr.Set(newVisKey, []byte{})
-
-		// 6. Update the receipt handle with the new visibility key so subsequent
-		// changes or deletions can find it.
-		receiptData["vis_key"] = newVisKey
-		newReceiptBytes, err := json.Marshal(receiptData)
-		if err != nil {
-			return nil, err
-		}
-		tr.Set(inflightKey, newReceiptBytes)
-
 		return nil, nil
 	})
 	return err
-}
-
-func (s *FDBStore) ChangeMessageVisibilityBatch(ctx context.Context, queueName string, entries map[string]int) error {
-	// TODO: Implement in FoundationDB.
-	return nil
 }
 
 func (s *FDBStore) AddPermission(ctx context.Context, queueName, label string, permissions map[string][]string) error {
@@ -1436,18 +1464,126 @@ func (s *FDBStore) RemovePermission(ctx context.Context, queueName, label string
 }
 
 func (s *FDBStore) ListQueueTags(ctx context.Context, queueName string) (map[string]string, error) {
-	// TODO: Implement in FoundationDB.
-	return nil, nil
+	tags, err := s.db.ReadTransact(func(tr fdb.ReadTransaction) (interface{}, error) {
+		exists, err := s.dir.Exists(tr, []string{queueName})
+		if err != nil {
+			return nil, err
+		}
+		if !exists {
+			return nil, ErrQueueDoesNotExist
+		}
+
+		queueDir, err := s.dir.Open(tr, []string{queueName}, nil)
+		if err != nil {
+			return nil, err
+		}
+
+		tagsBytes, err := tr.Get(queueDir.Pack(tuple.Tuple{"tags"})).Get()
+		if err != nil {
+			return nil, err
+		}
+		if len(tagsBytes) == 0 {
+			return make(map[string]string), nil
+		}
+
+		var storedTags map[string]string
+		if err := json.Unmarshal(tagsBytes, &storedTags); err != nil {
+			return nil, err
+		}
+		return storedTags, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return tags.(map[string]string), nil
 }
 
 func (s *FDBStore) TagQueue(ctx context.Context, queueName string, tags map[string]string) error {
-	// TODO: Implement in FoundationDB.
-	return nil
+	_, err := s.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
+		exists, err := s.dir.Exists(tr, []string{queueName})
+		if err != nil {
+			return nil, err
+		}
+		if !exists {
+			return nil, ErrQueueDoesNotExist
+		}
+
+		queueDir, err := s.dir.Open(tr, []string{queueName}, nil)
+		if err != nil {
+			return nil, err
+		}
+
+		// Get existing tags, or create a new map
+		var existingTags map[string]string
+		tagsBytes, err := tr.Get(queueDir.Pack(tuple.Tuple{"tags"})).Get()
+		if err != nil {
+			return nil, err
+		}
+		if len(tagsBytes) > 0 {
+			if err := json.Unmarshal(tagsBytes, &existingTags); err != nil {
+				return nil, err // Corrupt data
+			}
+		} else {
+			existingTags = make(map[string]string)
+		}
+
+		// Add new tags
+		for k, v := range tags {
+			existingTags[k] = v
+		}
+
+		// Write back
+		newTagsBytes, err := json.Marshal(existingTags)
+		if err != nil {
+			return nil, err
+		}
+		tr.Set(queueDir.Pack(tuple.Tuple{"tags"}), newTagsBytes)
+		return nil, nil
+	})
+	return err
 }
 
 func (s *FDBStore) UntagQueue(ctx context.Context, queueName string, tagKeys []string) error {
-	// TODO: Implement in FoundationDB.
-	return nil
+	_, err := s.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
+		exists, err := s.dir.Exists(tr, []string{queueName})
+		if err != nil {
+			return nil, err
+		}
+		if !exists {
+			return nil, ErrQueueDoesNotExist
+		}
+
+		queueDir, err := s.dir.Open(tr, []string{queueName}, nil)
+		if err != nil {
+			return nil, err
+		}
+
+		var existingTags map[string]string
+		tagsBytes, err := tr.Get(queueDir.Pack(tuple.Tuple{"tags"})).Get()
+		if err != nil {
+			return nil, err
+		}
+		if len(tagsBytes) > 0 {
+			if err := json.Unmarshal(tagsBytes, &existingTags); err != nil {
+				return nil, err
+			}
+		} else {
+			// Nothing to untag
+			return nil, nil
+		}
+
+		for _, key := range tagKeys {
+			delete(existingTags, key)
+		}
+
+		newTagsBytes, err := json.Marshal(existingTags)
+		if err != nil {
+			return nil, err
+		}
+		tr.Set(queueDir.Pack(tuple.Tuple{"tags"}), newTagsBytes)
+		return nil, nil
+	})
+	return err
 }
 
 func (s *FDBStore) ListDeadLetterSourceQueues(ctx context.Context, queueURL string) ([]string, error) {
