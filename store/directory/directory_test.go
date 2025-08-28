@@ -53,6 +53,18 @@ func TestDirectory_Root(t *testing.T) {
 	assert.Equal(t, []byte{}, r.GetLayer())
 }
 
+func TestDirectoryLayer_MoveTo(t *testing.T) {
+	// Get the root directory, which is a directoryLayer
+	root := Root()
+
+	// Attempt to move the root directory
+	_, err := root.MoveTo(db, []string{"new_path"})
+
+	// Check that the correct error is returned
+	require.Error(t, err)
+	assert.Equal(t, "the root directory cannot be moved", err.Error())
+}
+
 func TestDirectory_PackageLevelFunctions(t *testing.T) {
 	db, _ := setupAllTests(t)
 	testName := "pkg_lvl"

@@ -44,22 +44,6 @@ type GetQueueAttributesResponse struct {
 	Attributes map[string]string `json:"Attributes"`
 }
 
-// SetQueueAttributesRequest defines the parameters for the SQS SetQueueAttributes action.
-type SetQueueAttributesRequest struct {
-	QueueUrl   string            `json:"QueueUrl"`
-	Attributes map[string]string `json:"Attributes"`
-}
-
-// GetQueueUrlRequest defines the parameters for the SQS GetQueueUrl action.
-type GetQueueUrlRequest struct {
-	QueueName string `json:"QueueName"`
-}
-
-// GetQueueUrlResponse defines the structure for the SQS GetQueueUrl action's output.
-type GetQueueUrlResponse struct {
-	QueueUrl string `json:"QueueUrl"`
-}
-
 // MessageAttributeValue represents the value of a custom message attribute in SQS.
 // It can hold string, binary, or lists of these types.
 type MessageAttributeValue struct {
@@ -256,5 +240,46 @@ type DeleteMessageBatchResponse struct {
 
 // DeleteMessageBatchResultEntry contains the ID of a successfully deleted message in a batch.
 type DeleteMessageBatchResultEntry struct {
+	Id string `json:"Id"`
+}
+
+// SetQueueAttributesRequest defines the parameters for the SQS SetQueueAttributes action.
+type SetQueueAttributesRequest struct {
+	QueueUrl   string            `json:"QueueUrl"`
+	Attributes map[string]string `json:"Attributes"`
+}
+
+// GetQueueURLRequest defines the parameters for the SQS GetQueueUrl action.
+type GetQueueURLRequest struct {
+	QueueName              string `json:"QueueName"`
+	QueueOwnerAWSAccountId string `json:"QueueOwnerAWSAccountId,omitempty"`
+}
+
+// GetQueueURLResponse defines the structure for the SQS GetQueueUrl action's output.
+type GetQueueURLResponse struct {
+	QueueUrl string `json:"QueueUrl"`
+}
+
+// ChangeMessageVisibilityBatchRequest defines the parameters for the SQS ChangeMessageVisibilityBatch action.
+type ChangeMessageVisibilityBatchRequest struct {
+	QueueUrl string                                     `json:"QueueUrl"`
+	Entries  []ChangeMessageVisibilityBatchRequestEntry `json:"Entries"`
+}
+
+// ChangeMessageVisibilityBatchRequestEntry defines a single entry in a ChangeMessageVisibilityBatch request.
+type ChangeMessageVisibilityBatchRequestEntry struct {
+	Id                string `json:"Id"`
+	ReceiptHandle     string `json:"ReceiptHandle"`
+	VisibilityTimeout int    `json:"VisibilityTimeout"`
+}
+
+// ChangeMessageVisibilityBatchResponse defines the structure for the SQS ChangeMessageVisibilityBatch action's output.
+type ChangeMessageVisibilityBatchResponse struct {
+	Successful []ChangeMessageVisibilityBatchResultEntry `json:"Successful"`
+	Failed     []BatchResultErrorEntry                   `json:"Failed"`
+}
+
+// ChangeMessageVisibilityBatchResultEntry contains the ID of a successfully changed message in a batch.
+type ChangeMessageVisibilityBatchResultEntry struct {
 	Id string `json:"Id"`
 }

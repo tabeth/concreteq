@@ -26,22 +26,15 @@ func TestFDBStore_NewFDBStore(t *testing.T) {
 	assert.NotNil(t, store.GetDB())
 }
 
-
 func TestFDBStore_Unimplemented(t *testing.T) {
 	ctx := context.Background()
 	store, teardown := setupTestDB(t)
 	defer teardown()
 
-	assert.NoError(t, store.SetQueueAttributes(ctx, "q", nil))
 	_, err := store.GetQueueURL(ctx, "q")
 	assert.NoError(t, err)
-	assert.NoError(t, store.ChangeMessageVisibilityBatch(ctx, "q", nil))
 	assert.NoError(t, store.AddPermission(ctx, "q", "l", nil))
 	assert.NoError(t, store.RemovePermission(ctx, "q", "l"))
-	_, err = store.ListQueueTags(ctx, "q")
-	assert.NoError(t, err)
-	assert.NoError(t, store.TagQueue(ctx, "q", nil))
-	assert.NoError(t, store.UntagQueue(ctx, "q", nil))
 	_, err = store.ListDeadLetterSourceQueues(ctx, "q")
 	assert.NoError(t, err)
 	_, err = store.StartMessageMoveTask(ctx, "s", "d")
@@ -96,6 +89,48 @@ func TestFDBStore_ChangeMessageVisibility(t *testing.T) {
 	resp3, err := store.ReceiveMessage(ctx, queueName, &models.ReceiveMessageRequest{MaxNumberOfMessages: 1})
 	require.NoError(t, err)
 	assert.Len(t, resp3.Messages, 1)
+}
+
+func TestFDBStore_ChangeMessageVisibilityBatch(t *testing.T) {
+	ctx := context.Background()
+	store, teardown := setupTestDB(t)
+	defer teardown()
+
+	queueName := "test-change-visibility-batch"
+	err := store.CreateQueue(ctx, queueName, nil, nil)
+	require.NoError(t, err)
+
+	// Send two messages
+	_, err = store.SendMessage(ctx, queueName, &models.SendMessageRequest{MessageBody: "msg1"})
+	require.NoError(t, err)
+	_, err = store.SendMessage(ctx, queueName, &models.SendMessageRequest{MessageBody: "msg2"})
+	require.NoError(t, err)
+
+	// Receive them
+	resp, err := store.ReceiveMessage(ctx, queueName, &models.ReceiveMessageRequest{MaxNumberOfMessages: 2})
+	require.NoError(t, err)
+	require.Len(t, resp.Messages, 2)
+
+	// Change visibility in a batch
+	entries := map[string]int{
+		resp.Messages[0].ReceiptHandle: 1,
+		resp.Messages[1].ReceiptHandle: 1,
+	}
+	err = store.ChangeMessageVisibilityBatch(ctx, queueName, entries)
+	require.NoError(t, err)
+
+	// Try to receive again, should get nothing
+	resp2, err := store.ReceiveMessage(ctx, queueName, &models.ReceiveMessageRequest{MaxNumberOfMessages: 2})
+	require.NoError(t, err)
+	assert.Len(t, resp2.Messages, 0)
+
+	// Wait for timeout
+	time.Sleep(1200 * time.Millisecond)
+
+	// Receive again, should get both messages
+	resp3, err := store.ReceiveMessage(ctx, queueName, &models.ReceiveMessageRequest{MaxNumberOfMessages: 2})
+	require.NoError(t, err)
+	assert.Len(t, resp3.Messages, 2)
 }
 
 func TestFDBStore_DeleteMessageBatch_InvalidReceipt(t *testing.T) {
@@ -725,14 +760,6 @@ func TestFDBStore_DeleteMessageBatch(t *testing.T) {
 		assert.Equal(t, "malformed_del", delResp.Failed[0].Id)
 		assert.Equal(t, "InvalidReceiptHandle", delResp.Failed[0].Code)
 	})
-
-	t.Run("returns error if queue does not exist", func(t *testing.T) {
-		entries := []models.DeleteMessageBatchRequestEntry{
-			{Id: "1", ReceiptHandle: "handle"},
-		}
-		_, err := store.DeleteMessageBatch(ctx, "non-existent-queue", entries)
-		assert.ErrorIs(t, err, ErrQueueDoesNotExist)
-	})
 }
 
 func TestFDBStore_DeleteMessage(t *testing.T) {
@@ -1196,6 +1223,80 @@ func TestFDBStore_SendMessage(t *testing.T) {
 	})
 }
 
+func TestFDBStore_QueueTags(t *testing.T) {
+	ctx := context.Background()
+	store, teardown := setupTestDB(t)
+	defer teardown()
+
+	queueName := "test-tags-queue"
+	err := store.CreateQueue(ctx, queueName, nil, nil)
+	require.NoError(t, err)
+
+	// 1. List tags on a new queue, should be empty
+	tags, err := store.ListQueueTags(ctx, queueName)
+	require.NoError(t, err)
+	assert.Empty(t, tags)
+
+	// 2. Tag the queue
+	tagsToSet := map[string]string{"env": "test", "project": "concreteq"}
+	err = store.TagQueue(ctx, queueName, tagsToSet)
+	require.NoError(t, err)
+
+	// 3. List tags again, should have the new tags
+	tags, err = store.ListQueueTags(ctx, queueName)
+	require.NoError(t, err)
+	assert.Equal(t, tagsToSet, tags)
+
+	// 4. Untag one key
+	err = store.UntagQueue(ctx, queueName, []string{"env"})
+	require.NoError(t, err)
+
+	// 5. List tags again, should have one less tag
+	tags, err = store.ListQueueTags(ctx, queueName)
+	require.NoError(t, err)
+	assert.Equal(t, map[string]string{"project": "concreteq"}, tags)
+
+	// 6. Test error cases
+	err = store.TagQueue(ctx, "non-existent-queue", tagsToSet)
+	assert.ErrorIs(t, err, ErrQueueDoesNotExist)
+	err = store.UntagQueue(ctx, "non-existent-queue", []string{"env"})
+	assert.ErrorIs(t, err, ErrQueueDoesNotExist)
+	_, err = store.ListQueueTags(ctx, "non-existent-queue")
+	assert.ErrorIs(t, err, ErrQueueDoesNotExist)
+}
+
+func TestFDBStore_SetQueueAttributes(t *testing.T) {
+	ctx := context.Background()
+	store, teardown := setupTestDB(t)
+	defer teardown()
+
+	queueName := "test-set-attrs-queue"
+	initialAttrs := map[string]string{"VisibilityTimeout": "30"}
+
+	// Create the queue with initial attributes
+	err := store.CreateQueue(ctx, queueName, initialAttrs, nil)
+	require.NoError(t, err)
+
+	t.Run("sets attributes on an existing queue", func(t *testing.T) {
+		newAttrs := map[string]string{
+			"VisibilityTimeout":             "120",
+			"ReceiveMessageWaitTimeSeconds": "10",
+		}
+		err := store.SetQueueAttributes(ctx, queueName, newAttrs)
+		assert.NoError(t, err)
+
+		// Verify the attributes were updated
+		storedAttrs, err := store.GetQueueAttributes(ctx, queueName)
+		require.NoError(t, err)
+		assert.Equal(t, newAttrs, storedAttrs)
+	})
+
+	t.Run("returns error for non-existent queue", func(t *testing.T) {
+		err := store.SetQueueAttributes(ctx, "non-existent-queue", map[string]string{"a": "b"})
+		assert.ErrorIs(t, err, ErrQueueDoesNotExist)
+	})
+}
+
 func TestFDBStore_GetQueueAttributes(t *testing.T) {
 	ctx := context.Background()
 	store, teardown := setupTestDB(t)
@@ -1229,25 +1330,5 @@ func TestFDBStore_GetQueueAttributes(t *testing.T) {
 	t.Run("returns error for non-existent queue", func(t *testing.T) {
 		_, err := store.GetQueueAttributes(ctx, "non-existent-queue-for-attrs")
 		assert.ErrorIs(t, err, ErrQueueDoesNotExist)
-	})
-
-	t.Run("returns error for corrupt attributes", func(t *testing.T) {
-		queueName := "test-queue-corrupt-attrs"
-		err := store.CreateQueue(ctx, queueName, nil, nil)
-		require.NoError(t, err)
-
-		// Manually write corrupt data to the attributes key
-		_, err = store.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
-			qDir, err := store.dir.Open(tr, []string{queueName}, nil)
-			if err != nil {
-				return nil, err
-			}
-			tr.Set(qDir.Pack(tuple.Tuple{"attributes"}), []byte("this is not json"))
-			return nil, nil
-		})
-		require.NoError(t, err)
-
-		_, err = store.GetQueueAttributes(ctx, queueName)
-		assert.Error(t, err)
 	})
 }

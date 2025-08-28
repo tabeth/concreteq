@@ -114,6 +114,26 @@ func (app *App) RootSQSHandler(w http.ResponseWriter, r *http.Request) {
 		app.SetQueueAttributesHandler(w, r)
 	case "GetQueueUrl":
 		app.GetQueueUrlHandler(w, r)
+	case "ChangeMessageVisibilityBatch":
+		app.ChangeMessageVisibilityBatchHandler(w, r)
+	case "AddPermission":
+		app.AddPermissionHandler(w, r)
+	case "RemovePermission":
+		app.RemovePermissionHandler(w, r)
+	case "ListQueueTags":
+		app.ListQueueTagsHandler(w, r)
+	case "TagQueue":
+		app.TagQueueHandler(w, r)
+	case "UntagQueue":
+		app.UntagQueueHandler(w, r)
+	case "ListDeadLetterSourceQueues":
+		app.ListDeadLetterSourceQueuesHandler(w, r)
+	case "StartMessageMoveTask":
+		app.StartMessageMoveTaskHandler(w, r)
+	case "CancelMessageMoveTask":
+		app.CancelMessageMoveTaskHandler(w, r)
+	case "ListMessageMoveTasks":
+		app.ListMessageMoveTasksHandler(w, r)
 	default:
 		app.sendErrorResponse(w, "UnsupportedOperation", "Unsupported operation: "+action, http.StatusBadRequest)
 	}
@@ -419,11 +439,11 @@ func (app *App) GetQueueAttributesHandler(w http.ResponseWriter, r *http.Request
 	json.NewEncoder(w).Encode(resp)
 }
 
-// SetQueueAttributesHandler handles requests to set attributes for a queue.
+// SetQueueAttributesHandler handles requests to set attributes for a specified queue.
 func (app *App) SetQueueAttributesHandler(w http.ResponseWriter, r *http.Request) {
 	var req models.SetQueueAttributesRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		app.sendErrorResponse(w, "InvalidRequest", "Invalid request body", http.StatusBadRequest)
+		app.sendErrorResponse(w, "InvalidRequest", "The request is not a valid JSON.", http.StatusBadRequest)
 		return
 	}
 
@@ -431,24 +451,28 @@ func (app *App) SetQueueAttributesHandler(w http.ResponseWriter, r *http.Request
 		app.sendErrorResponse(w, "MissingParameter", "The request must contain a QueueUrl.", http.StatusBadRequest)
 		return
 	}
+
 	if len(req.Attributes) == 0 {
-		app.sendErrorResponse(w, "InvalidParameterValue", "SetQueueAttributes request must contain at least one attribute.", http.StatusBadRequest)
+		app.sendErrorResponse(w, "MissingParameter", "The request must contain Attributes.", http.StatusBadRequest)
 		return
 	}
 
+	queueName := path.Base(req.QueueUrl)
+
+	// Validate attributes before sending to store. Note: SQS has restrictions on which
+	// attributes can be changed after queue creation. This validation is simplified.
 	if err := validateAttributes(req.Attributes); err != nil {
 		app.sendErrorResponse(w, "InvalidAttributeName", err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	queueName := path.Base(req.QueueUrl)
 	err := app.Store.SetQueueAttributes(r.Context(), queueName, req.Attributes)
 	if err != nil {
 		if errors.Is(err, store.ErrQueueDoesNotExist) {
 			app.sendErrorResponse(w, "QueueDoesNotExist", "The specified queue does not exist.", http.StatusBadRequest)
 			return
 		}
-		app.sendErrorResponse(w, "InternalFailure", "Failed to set queue attributes", http.StatusInternalServerError)
+		app.sendErrorResponse(w, "InternalFailure", "Failed to set queue attributes.", http.StatusInternalServerError)
 		return
 	}
 
@@ -457,9 +481,9 @@ func (app *App) SetQueueAttributesHandler(w http.ResponseWriter, r *http.Request
 
 // GetQueueUrlHandler handles requests to retrieve the URL for a queue.
 func (app *App) GetQueueUrlHandler(w http.ResponseWriter, r *http.Request) {
-	var req models.GetQueueUrlRequest
+	var req models.GetQueueURLRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		app.sendErrorResponse(w, "InvalidRequest", "Invalid JSON format", http.StatusBadRequest)
+		app.sendErrorResponse(w, "InvalidRequest", "The request is not a valid JSON.", http.StatusBadRequest)
 		return
 	}
 
@@ -468,18 +492,15 @@ func (app *App) GetQueueUrlHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// In a real SQS implementation, you might query the store to verify the queue exists.
-	// Here, we'll just construct the URL, assuming the queue exists if the name is valid.
-	// The store layer doesn't have a GetQueueUrl method, so we construct it here.
-	// This is a simplification. A real implementation would have a more robust way
-	// of handling this, probably involving a call to the store.
+	// Delegate to the store, but fall back to constructing the URL if the store doesn't provide it.
+	// This is for compatibility with stores that might only verify existence.
 	_, err := app.Store.GetQueueURL(r.Context(), req.QueueName)
 	if err != nil {
 		if errors.Is(err, store.ErrQueueDoesNotExist) {
 			app.sendErrorResponse(w, "QueueDoesNotExist", "The specified queue does not exist.", http.StatusBadRequest)
 			return
 		}
-		app.sendErrorResponse(w, "InternalFailure", "Failed to get queue URL", http.StatusInternalServerError)
+		app.sendErrorResponse(w, "InternalFailure", "Failed to get queue URL.", http.StatusInternalServerError)
 		return
 	}
 
@@ -489,7 +510,7 @@ func (app *App) GetQueueUrlHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	queueURL := fmt.Sprintf("%s://%s/queues/%s", scheme, r.Host, req.QueueName)
 
-	resp := models.GetQueueUrlResponse{
+	resp := models.GetQueueURLResponse{
 		QueueUrl: queueURL,
 	}
 
@@ -1013,32 +1034,90 @@ func (app *App) ChangeMessageVisibilityHandler(w http.ResponseWriter, r *http.Re
 }
 
 func (app *App) ChangeMessageVisibilityBatchHandler(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(http.StatusNotImplemented)
+	var req models.ChangeMessageVisibilityBatchRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		app.sendErrorResponse(w, "InvalidRequest", "The request is not a valid JSON.", http.StatusBadRequest)
+		return
+	}
+
+	if req.QueueUrl == "" {
+		app.sendErrorResponse(w, "MissingParameter", "The request must contain a QueueUrl.", http.StatusBadRequest)
+		return
+	}
+	if len(req.Entries) > 10 {
+		app.sendErrorResponse(w, "TooManyEntriesInBatchRequest", "The batch request contains more entries than permissible.", http.StatusBadRequest)
+		return
+	}
+
+	ids := make(map[string]struct{})
+	for _, entry := range req.Entries {
+		if _, exists := ids[entry.Id]; exists {
+			app.sendErrorResponse(w, "BatchEntryIdsNotDistinct", "Two or more batch entries in the request have the same Id.", http.StatusBadRequest)
+			return
+		}
+		ids[entry.Id] = struct{}{}
+	}
+
+	queueName := path.Base(req.QueueUrl)
+	entriesMap := make(map[string]int)
+	for _, entry := range req.Entries {
+		entriesMap[entry.ReceiptHandle] = entry.VisibilityTimeout
+	}
+
+	// This is a simplified implementation. A real one would process each entry and report partial success/failure.
+	// The current store interface doesn't support partial failure for this operation.
+	err := app.Store.ChangeMessageVisibilityBatch(r.Context(), queueName, entriesMap)
+
+	resp := models.ChangeMessageVisibilityBatchResponse{
+		Successful: []models.ChangeMessageVisibilityBatchResultEntry{},
+		Failed:     []models.BatchResultErrorEntry{},
+	}
+	if err != nil {
+		// Because the store layer doesn't support partial success, we fail the whole batch.
+		// A more advanced implementation would require changing the store interface.
+		for _, entry := range req.Entries {
+			resp.Failed = append(resp.Failed, models.BatchResultErrorEntry{
+				Id:          entry.Id,
+				Code:        "InternalError", // Generic error
+				Message:     err.Error(),
+				SenderFault: false,
+			})
+		}
+	} else {
+		for _, entry := range req.Entries {
+			resp.Successful = append(resp.Successful, models.ChangeMessageVisibilityBatchResultEntry{Id: entry.Id})
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(resp)
 }
+
 func (app *App) AddPermissionHandler(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(http.StatusNotImplemented)
+	app.sendErrorResponse(w, "NotImplemented", "The requested action is not implemented.", http.StatusNotImplemented)
 }
 func (app *App) RemovePermissionHandler(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(http.StatusNotImplemented)
+	app.sendErrorResponse(w, "NotImplemented", "The requested action is not implemented.", http.StatusNotImplemented)
 }
 func (app *App) ListQueueTagsHandler(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(http.StatusNotImplemented)
+	app.sendErrorResponse(w, "NotImplemented", "The requested action is not implemented.", http.StatusNotImplemented)
 }
 func (app *App) TagQueueHandler(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(http.StatusNotImplemented)
+	app.sendErrorResponse(w, "NotImplemented", "The requested action is not implemented.", http.StatusNotImplemented)
 }
 func (app *App) UntagQueueHandler(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(http.StatusNotImplemented)
+	app.sendErrorResponse(w, "NotImplemented", "The requested action is not implemented.", http.StatusNotImplemented)
 }
 func (app *App) ListDeadLetterSourceQueuesHandler(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(http.StatusNotImplemented)
+	app.sendErrorResponse(w, "NotImplemented", "The requested action is not implemented.", http.StatusNotImplemented)
 }
 func (app *App) StartMessageMoveTaskHandler(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(http.StatusNotImplemented)
+	app.sendErrorResponse(w, "NotImplemented", "The requested action is not implemented.", http.StatusNotImplemented)
 }
 func (app *App) CancelMessageMoveTaskHandler(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(http.StatusNotImplemented)
+	app.sendErrorResponse(w, "NotImplemented", "The requested action is not implemented.", http.StatusNotImplemented)
 }
 func (app *App) ListMessageMoveTasksHandler(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(http.StatusNotImplemented)
+	app.sendErrorResponse(w, "NotImplemented", "The requested action is not implemented.", http.StatusNotImplemented)
 }
