@@ -26,26 +26,18 @@ func TestFDBStore_NewFDBStore(t *testing.T) {
 	assert.NotNil(t, store.GetDB())
 }
 
+
 func TestFDBStore_Unimplemented(t *testing.T) {
 	ctx := context.Background()
 	store, teardown := setupTestDB(t)
 	defer teardown()
 
-	var err error
-
-	err = store.CreateQueue(ctx, "q", nil, nil)
-	require.NoError(t, err)
-
-	err = store.SetQueueAttributes(ctx, "q", nil)
+	assert.NoError(t, store.SetQueueAttributes(ctx, "q", nil))
+	_, err := store.GetQueueURL(ctx, "q")
 	assert.NoError(t, err)
-	_, err = store.GetQueueURL(ctx, "q")
-	assert.NoError(t, err)
-	_, err = store.ChangeMessageVisibilityBatch(ctx, "q", nil)
-	assert.NoError(t, err)
-	err = store.AddPermission(ctx, "q", "l", nil)
-	assert.NoError(t, err)
-	err = store.RemovePermission(ctx, "q", "l")
-	assert.NoError(t, err)
+	assert.NoError(t, store.ChangeMessageVisibilityBatch(ctx, "q", nil))
+	assert.NoError(t, store.AddPermission(ctx, "q", "l", nil))
+	assert.NoError(t, store.RemovePermission(ctx, "q", "l"))
 	_, err = store.ListQueueTags(ctx, "q")
 	assert.NoError(t, err)
 	assert.NoError(t, store.TagQueue(ctx, "q", nil))
@@ -1229,5 +1221,25 @@ func TestFDBStore_GetQueueAttributes(t *testing.T) {
 	t.Run("returns error for non-existent queue", func(t *testing.T) {
 		_, err := store.GetQueueAttributes(ctx, "non-existent-queue-for-attrs")
 		assert.ErrorIs(t, err, ErrQueueDoesNotExist)
+	})
+
+	t.Run("returns error for corrupt attributes", func(t *testing.T) {
+		queueName := "test-queue-corrupt-attrs"
+		err := store.CreateQueue(ctx, queueName, nil, nil)
+		require.NoError(t, err)
+
+		// Manually write corrupt data to the attributes key
+		_, err = store.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
+			qDir, err := store.dir.Open(tr, []string{queueName}, nil)
+			if err != nil {
+				return nil, err
+			}
+			tr.Set(qDir.Pack(tuple.Tuple{"attributes"}), []byte("this is not json"))
+			return nil, nil
+		})
+		require.NoError(t, err)
+
+		_, err = store.GetQueueAttributes(ctx, queueName)
+		assert.Error(t, err)
 	})
 }

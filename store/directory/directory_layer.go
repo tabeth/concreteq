@@ -637,17 +637,3 @@ func isRangeEmpty(rtr fdb.ReadTransaction, r fdb.Range) bool {
 	}
 	return len(kvs) == 0
 }
-
-// IsPrefixFreeForTesting is a testing helper to check if a prefix is free.
-func IsPrefixFreeForTesting(d Directory, rtr fdb.ReadTransaction, prefix []byte) (bool, error) {
-	dl, ok := d.(directoryLayer)
-	if !ok {
-		// Try to see if it is a directoryPartition
-		dp, ok := d.(directoryPartition)
-		if !ok {
-			return false, errors.New("not a directoryLayer or directoryPartition")
-		}
-		dl = dp.directoryLayer
-	}
-	return dl.isPrefixFree(rtr, prefix)
-}

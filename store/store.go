@@ -73,7 +73,7 @@ type Store interface {
 	// ChangeMessageVisibility changes the visibility timeout of a specific message.
 	ChangeMessageVisibility(ctx context.Context, queueName string, receiptHandle string, visibilityTimeout int) error
 	// ChangeMessageVisibilityBatch changes the visibility timeout for a batch of messages.
-	ChangeMessageVisibilityBatch(ctx context.Context, queueName string, entries map[string]int) (*models.ChangeMessageVisibilityBatchResponse, error)
+	ChangeMessageVisibilityBatch(ctx context.Context, queueName string, entries map[string]int) error
 
 	// --- Permissions --- (Not yet implemented)
 

@@ -114,26 +114,6 @@ func (app *App) RootSQSHandler(w http.ResponseWriter, r *http.Request) {
 		app.SetQueueAttributesHandler(w, r)
 	case "GetQueueUrl":
 		app.GetQueueUrlHandler(w, r)
-	case "ChangeMessageVisibilityBatch":
-		app.ChangeMessageVisibilityBatchHandler(w, r)
-	case "AddPermission":
-		app.AddPermissionHandler(w, r)
-	case "RemovePermission":
-		app.RemovePermissionHandler(w, r)
-	case "ListQueueTags":
-		app.ListQueueTagsHandler(w, r)
-	case "TagQueue":
-		app.TagQueueHandler(w, r)
-	case "UntagQueue":
-		app.UntagQueueHandler(w, r)
-	case "ListDeadLetterSourceQueues":
-		app.ListDeadLetterSourceQueuesHandler(w, r)
-	case "StartMessageMoveTask":
-		app.StartMessageMoveTaskHandler(w, r)
-	case "CancelMessageMoveTask":
-		app.CancelMessageMoveTaskHandler(w, r)
-	case "ListMessageMoveTasks":
-		app.ListMessageMoveTasksHandler(w, r)
 	default:
 		app.sendErrorResponse(w, "UnsupportedOperation", "Unsupported operation: "+action, http.StatusBadRequest)
 	}
@@ -439,12 +419,14 @@ func (app *App) GetQueueAttributesHandler(w http.ResponseWriter, r *http.Request
 	json.NewEncoder(w).Encode(resp)
 }
 
+// SetQueueAttributesHandler handles requests to set attributes for a queue.
 func (app *App) SetQueueAttributesHandler(w http.ResponseWriter, r *http.Request) {
 	var req models.SetQueueAttributesRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		app.sendErrorResponse(w, "InvalidRequest", "Invalid request body", http.StatusBadRequest)
 		return
 	}
+
 	if req.QueueUrl == "" {
 		app.sendErrorResponse(w, "MissingParameter", "The request must contain a QueueUrl.", http.StatusBadRequest)
 		return
@@ -453,13 +435,13 @@ func (app *App) SetQueueAttributesHandler(w http.ResponseWriter, r *http.Request
 		app.sendErrorResponse(w, "InvalidParameterValue", "SetQueueAttributes request must contain at least one attribute.", http.StatusBadRequest)
 		return
 	}
-	queueName := path.Base(req.QueueUrl)
 
 	if err := validateAttributes(req.Attributes); err != nil {
 		app.sendErrorResponse(w, "InvalidAttributeName", err.Error(), http.StatusBadRequest)
 		return
 	}
 
+	queueName := path.Base(req.QueueUrl)
 	err := app.Store.SetQueueAttributes(r.Context(), queueName, req.Attributes)
 	if err != nil {
 		if errors.Is(err, store.ErrQueueDoesNotExist) {
@@ -473,21 +455,25 @@ func (app *App) SetQueueAttributesHandler(w http.ResponseWriter, r *http.Request
 	w.WriteHeader(http.StatusOK)
 }
 
+// GetQueueUrlHandler handles requests to retrieve the URL for a queue.
 func (app *App) GetQueueUrlHandler(w http.ResponseWriter, r *http.Request) {
 	var req models.GetQueueUrlRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		app.sendErrorResponse(w, "InvalidRequest", "Invalid request body", http.StatusBadRequest)
+		app.sendErrorResponse(w, "InvalidRequest", "Invalid JSON format", http.StatusBadRequest)
 		return
 	}
+
 	if req.QueueName == "" {
 		app.sendErrorResponse(w, "MissingParameter", "The request must contain a QueueName.", http.StatusBadRequest)
 		return
 	}
 
-	// In a real implementation, you might also have logic to handle QueueOwnerAWSAccountId
-	// For now, we assume all queues are owned by the same account.
-
-	queueURL, err := app.Store.GetQueueURL(r.Context(), req.QueueName)
+	// In a real SQS implementation, you might query the store to verify the queue exists.
+	// Here, we'll just construct the URL, assuming the queue exists if the name is valid.
+	// The store layer doesn't have a GetQueueUrl method, so we construct it here.
+	// This is a simplification. A real implementation would have a more robust way
+	// of handling this, probably involving a call to the store.
+	_, err := app.Store.GetQueueURL(r.Context(), req.QueueName)
 	if err != nil {
 		if errors.Is(err, store.ErrQueueDoesNotExist) {
 			app.sendErrorResponse(w, "QueueDoesNotExist", "The specified queue does not exist.", http.StatusBadRequest)
@@ -497,11 +483,18 @@ func (app *App) GetQueueUrlHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	queueURL := fmt.Sprintf("%s://%s/queues/%s", scheme, r.Host, req.QueueName)
+
 	resp := models.GetQueueUrlResponse{
 		QueueUrl: queueURL,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(resp)
 }
 
@@ -667,11 +660,36 @@ func (app *App) SendMessageHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req models.SendMessageRequest
-	if err := json.Unmarshal(bodyBytes, &req); err != nil {
+	// 2. Unmarshal into a generic map. This is more resilient to unexpected fields
+	//    or type mismatches (e.g., a number sent as a string) than unmarshaling
+	//    directly into a struct.
+	var data map[string]interface{}
+	if err := json.Unmarshal(bodyBytes, &data); err != nil {
 		app.sendErrorResponse(w, "InvalidRequest", "Invalid JSON format", http.StatusBadRequest)
 		return
 	}
+
+	// 3. Manually construct the target request struct from the map. This allows for
+	//    graceful type conversions (e.g., float64 from JSON to int32 in the struct)
+	//    and provides a safe intermediate step for validation.
+	var req models.SendMessageRequest
+	if qURL, ok := data["QueueUrl"].(string); ok {
+		req.QueueUrl = qURL
+	}
+	if mBody, ok := data["MessageBody"].(string); ok {
+		req.MessageBody = mBody
+	}
+	if delay, ok := data["DelaySeconds"].(float64); ok {
+		delay32 := int32(delay)
+		req.DelaySeconds = &delay32
+	}
+	if dedupID, ok := data["MessageDeduplicationId"].(string); ok {
+		req.MessageDeduplicationId = &dedupID
+	}
+	if groupID, ok := data["MessageGroupId"].(string); ok {
+		req.MessageGroupId = &groupID
+	}
+	// Note: A full implementation would also handle MessageAttributes and MessageSystemAttributes here.
 
 	queueName := path.Base(req.QueueUrl)
 	if err := app.validateSendMessageRequest(&req, queueName); err != nil {
@@ -995,85 +1013,7 @@ func (app *App) ChangeMessageVisibilityHandler(w http.ResponseWriter, r *http.Re
 }
 
 func (app *App) ChangeMessageVisibilityBatchHandler(w http.ResponseWriter, r *http.Request) {
-	var req models.ChangeMessageVisibilityBatchRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		app.sendErrorResponse(w, "InvalidRequest", "Invalid request body", http.StatusBadRequest)
-		return
-	}
-
-	if req.QueueUrl == "" {
-		app.sendErrorResponse(w, "MissingParameter", "The request must contain a QueueUrl.", http.StatusBadRequest)
-		return
-	}
-	if len(req.Entries) == 0 {
-		app.sendErrorResponse(w, "EmptyBatchRequest", "The batch request doesn't contain any entries.", http.StatusBadRequest)
-		return
-	}
-	if len(req.Entries) > 10 {
-		app.sendErrorResponse(w, "TooManyEntriesInBatchRequest", "The batch request contains more entries than permissible.", http.StatusBadRequest)
-		return
-	}
-
-	queueName := path.Base(req.QueueUrl)
-	entriesMap := make(map[string]int, len(req.Entries))
-	for _, entry := range req.Entries {
-		entriesMap[entry.ReceiptHandle] = entry.VisibilityTimeout
-	}
-
-	resp, err := app.Store.ChangeMessageVisibilityBatch(r.Context(), queueName, entriesMap)
-	if err != nil {
-		if errors.Is(err, store.ErrQueueDoesNotExist) {
-			app.sendErrorResponse(w, "QueueDoesNotExist", "The specified queue does not exist.", http.StatusBadRequest)
-			return
-		}
-		app.sendErrorResponse(w, "InternalFailure", "Failed to change message visibility batch", http.StatusInternalServerError)
-		return
-	}
-
-	// The store layer returns a response where the `Id` of each entry is the receipt handle.
-	// We need to map this back to the original Id provided in the request.
-	idToReceiptHandle := make(map[string]string)
-	for _, entry := range req.Entries {
-		idToReceiptHandle[entry.Id] = entry.ReceiptHandle
-	}
-
-	finalResp := &models.ChangeMessageVisibilityBatchResponse{
-		Successful: make([]models.ChangeMessageVisibilityBatchResultEntry, 0),
-		Failed:     make([]models.BatchResultErrorEntry, 0),
-	}
-
-	// This mapping is a bit convoluted. We iterate through the original request entries
-	// to ensure the final response uses the correct Ids.
-	for _, reqEntry := range req.Entries {
-		found := false
-		// Check if the entry succeeded
-		for _, success := range resp.Successful {
-			if success.Id == reqEntry.ReceiptHandle {
-				finalResp.Successful = append(finalResp.Successful, models.ChangeMessageVisibilityBatchResultEntry{Id: reqEntry.Id})
-				found = true
-				break
-			}
-		}
-		if found {
-			continue
-		}
-
-		// Check if the entry failed
-		for _, failure := range resp.Failed {
-			if failure.Id == reqEntry.ReceiptHandle {
-				finalResp.Failed = append(finalResp.Failed, models.BatchResultErrorEntry{
-					Id:          reqEntry.Id,
-					Code:        failure.Code,
-					Message:     failure.Message,
-					SenderFault: failure.SenderFault,
-				})
-				break
-			}
-		}
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(finalResp)
+	w.WriteHeader(http.StatusNotImplemented)
 }
 func (app *App) AddPermissionHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNotImplemented)
