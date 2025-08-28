@@ -725,6 +725,14 @@ func TestFDBStore_DeleteMessageBatch(t *testing.T) {
 		assert.Equal(t, "malformed_del", delResp.Failed[0].Id)
 		assert.Equal(t, "InvalidReceiptHandle", delResp.Failed[0].Code)
 	})
+
+	t.Run("returns error if queue does not exist", func(t *testing.T) {
+		entries := []models.DeleteMessageBatchRequestEntry{
+			{Id: "1", ReceiptHandle: "handle"},
+		}
+		_, err := store.DeleteMessageBatch(ctx, "non-existent-queue", entries)
+		assert.ErrorIs(t, err, ErrQueueDoesNotExist)
+	})
 }
 
 func TestFDBStore_DeleteMessage(t *testing.T) {

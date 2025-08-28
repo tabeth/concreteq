@@ -262,6 +262,39 @@ func TestCreateQueueHandler(t *testing.T) {
 	}
 }
 
+func TestUnimplementedRestHandlers(t *testing.T) {
+	tests := []struct {
+		method string
+		url    string
+	}{
+		{"POST", "/queues/q/messages/batch-visibility"},
+		{"POST", "/queues/q/permissions"},
+		{"DELETE", "/queues/q/permissions/label"},
+		{"GET", "/queues/q/tags"},
+		{"POST", "/queues/q/tags"},
+		{"DELETE", "/queues/q/tags"},
+		{"GET", "/dead-letter-source-queues"},
+		{"POST", "/message-move-tasks"},
+		{"POST", "/message-move-tasks/handle/cancel"},
+		{"GET", "/message-move-tasks"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.method+"_"+tc.url, func(t *testing.T) {
+			app := &App{Store: &MockStore{}}
+			r := chi.NewRouter()
+			app.RegisterSQSHandlers(r)
+
+			req, _ := http.NewRequest(tc.method, tc.url, nil)
+			rr := httptest.NewRecorder()
+
+			r.ServeHTTP(rr, req)
+
+			assert.Equal(t, http.StatusNotImplemented, rr.Code)
+		})
+	}
+}
+
 func TestDeleteMessageBatchHandler_InvalidJSON(t *testing.T) {
 	mockStore := new(MockStore)
 	app := &App{Store: mockStore}
