@@ -241,3 +241,30 @@ func TestDirectoryLayer_MoveRemovePartitions(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, removed)
 }
+
+func TestDirectoryLayer_MoveTo_Layer(t *testing.T) {
+	db, err := fdb.OpenDefault()
+	require.NoError(t, err)
+
+	dl := newIsolatedDirectoryLayer(t)
+
+	// Create source and destination directories
+	src, err := dl.Create(db, []string{"src"}, nil)
+	require.NoError(t, err)
+	_, err = dl.Create(db, []string{"dst"}, nil)
+	require.NoError(t, err)
+
+	// Move the source directory
+	_, err = src.MoveTo(db, []string{"dst", "moved"})
+	require.NoError(t, err)
+
+	// Verify the source directory no longer exists
+	exists, err := dl.Exists(db, []string{"src"})
+	require.NoError(t, err)
+	assert.False(t, exists)
+
+	// Verify the moved directory exists at the new location
+	exists, err = dl.Exists(db, []string{"dst", "moved"})
+	require.NoError(t, err)
+	assert.True(t, exists)
+}
