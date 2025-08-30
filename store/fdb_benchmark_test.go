@@ -10,8 +10,10 @@ import (
 
 func cleanup(b *testing.B, store *FDBStore, queueName string) {
 	err := store.DeleteQueue(context.Background(), queueName)
-	if err != nil && err != ErrQueueDoesNotExist {
-		b.Logf("Failed to cleanup queue %s: %v", queueName, err)
+	if err != nil {
+		if err.Error() != "queue does not exist" {
+			b.Logf("Failed to cleanup queue %s: %v", queueName, err)
+		}
 	}
 }
 
@@ -36,7 +38,7 @@ func BenchmarkReceiveMessageWithContention(b *testing.B) {
 	defer cleanup(b, store, queueName)
 
 	// Create a standard queue
-	err = store.CreateQueue(context.Background(), queueName, nil, nil)
+	_, err = store.CreateQueue(context.Background(), queueName, nil, nil)
 	if err != nil {
 		b.Fatalf("Failed to create queue: %v", err)
 	}
