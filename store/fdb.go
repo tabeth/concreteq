@@ -9,7 +9,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
+	"errors"
 	"sort"
 	"strconv"
 	"strings"
@@ -78,7 +78,8 @@ func NewFDBStoreAtPath(path ...string) (*FDBStore, error) {
 	return &FDBStore{db: db, dir: dir}, nil
 }
 
-// CreateQueue creates a new queue in FoundationDB.
+// CreateQueue creates a new queue in FoundationDB. If the queue already exists,
+// it returns the existing attributes to allow the handler to perform idempotency checks.
 // The entire operation is performed within a single transaction to ensure atomicity.
 //
 // Data Model:
@@ -86,18 +87,34 @@ func NewFDBStoreAtPath(path ...string) (*FDBStore, error) {
 //   e.g., `(app_dir, "my-queue")`
 // - Attributes and tags are stored as JSON blobs at well-known keys within the queue's directory.
 //   e.g., `(app_dir, "my-queue", "attributes") -> "{...}"`
-func (s *FDBStore) CreateQueue(ctx context.Context, name string, attributes map[string]string, tags map[string]string) error {
-	_, err := s.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
-		// First, check if a queue with this name already exists to prevent overwriting.
+func (s *FDBStore) CreateQueue(ctx context.Context, name string, attributes map[string]string, tags map[string]string) (map[string]string, error) {
+	resp, err := s.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
+		// First, check if a queue with this name already exists.
 		exists, err := s.dir.Exists(tr, []string{name})
 		if err != nil {
 			return nil, err
 		}
 		if exists {
-			return nil, ErrQueueAlreadyExists
+			// If it exists, read its attributes and return them for the handler to compare.
+			queueDir, err := s.dir.Open(tr, []string{name}, nil)
+			if err != nil {
+				return nil, err
+			}
+			attrsBytes, err := tr.Get(queueDir.Pack(tuple.Tuple{"attributes"})).Get()
+			if err != nil {
+				return nil, err
+			}
+			if len(attrsBytes) == 0 {
+				return make(map[string]string), nil
+			}
+			var storedAttrs map[string]string
+			if err := json.Unmarshal(attrsBytes, &storedAttrs); err != nil {
+				return nil, err
+			}
+			return storedAttrs, nil
 		}
 
-		// Create a new directory (subspace) for this specific queue.
+		// If it doesn't exist, create a new directory (subspace) for this specific queue.
 		queueDir, err := s.dir.Create(tr, []string{name}, nil)
 		if err != nil {
 			return nil, err
@@ -109,7 +126,6 @@ func (s *FDBStore) CreateQueue(ctx context.Context, name string, attributes map[
 			if err != nil {
 				return nil, err
 			}
-			// The key is created by packing a tuple, which ensures proper byte ordering.
 			tr.Set(queueDir.Pack(tuple.Tuple{"attributes"}), attrsBytes)
 		}
 
@@ -122,9 +138,17 @@ func (s *FDBStore) CreateQueue(ctx context.Context, name string, attributes map[
 			tr.Set(queueDir.Pack(tuple.Tuple{"tags"}), tagsBytes)
 		}
 
+		// Return nil to indicate the queue was newly created.
 		return nil, nil
 	})
-	return err
+
+	if err != nil {
+		return nil, err
+	}
+	if resp == nil {
+		return nil, nil
+	}
+	return resp.(map[string]string), nil
 }
 
 // DeleteQueue removes a queue and all its associated data from FoundationDB.
@@ -531,29 +555,35 @@ func (s *FDBStore) buildResponseAttributes(msg *models.Message, req *models.Rece
 
 // buildResponseMessageAttributes assembles the map of user-defined attributes for a message.
 func (s *FDBStore) buildResponseMessageAttributes(msg *models.Message, req *models.ReceiveMessageRequest) map[string]models.MessageAttributeValue {
-	if len(msg.Attributes) == 0 || len(req.MessageAttributeNames) == 0 {
+	if len(msg.Attributes) == 0 {
+		return nil
+	}
+	// If no specific attributes are requested, SQS returns nothing.
+	if len(req.MessageAttributeNames) == 0 {
 		return nil
 	}
 
 	returnedAttrs := make(map[string]models.MessageAttributeValue)
-	wantsAll := false
-	requested := make(map[string]bool)
 
-	for _, name := range req.MessageAttributeNames {
-		if name == "All" || name == ".*" {
-			wantsAll = true
-			break
+	for _, reqName := range req.MessageAttributeNames {
+		if reqName == "All" || reqName == ".*" {
+			// If "All" or ".*" is requested, return all attributes.
+			return msg.Attributes
 		}
-		requested[name] = true
-	}
 
-	if wantsAll {
-		return msg.Attributes
-	}
-
-	for name, value := range msg.Attributes {
-		if requested[name] {
-			returnedAttrs[name] = value
+		if strings.HasSuffix(reqName, ".*") {
+			// Handle prefix wildcard
+			prefix := strings.TrimSuffix(reqName, ".*")
+			for attrName, attrValue := range msg.Attributes {
+				if strings.HasPrefix(attrName, prefix) {
+					returnedAttrs[attrName] = attrValue
+				}
+			}
+		} else {
+			// Handle exact match
+			if attrValue, ok := msg.Attributes[reqName]; ok {
+				returnedAttrs[reqName] = attrValue
+			}
 		}
 	}
 
@@ -1430,8 +1460,16 @@ func (s *FDBStore) changeMessageVisibility(tr fdb.Transaction, queueName string,
 	return nil
 }
 
-func (s *FDBStore) ChangeMessageVisibilityBatch(ctx context.Context, queueName string, entries map[string]int) error {
-	_, err := s.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
+func (s *FDBStore) ChangeMessageVisibilityBatch(ctx context.Context, queueName string, entries []models.ChangeMessageVisibilityBatchRequestEntry) (*models.ChangeMessageVisibilityBatchResponse, error) {
+	resp := &models.ChangeMessageVisibilityBatchResponse{
+		Successful: []models.ChangeMessageVisibilityBatchResultEntry{},
+		Failed:     []models.BatchResultErrorEntry{},
+	}
+
+	// First, check if the queue exists. If not, the entire batch fails.
+	// This check is implicitly handled by getQueueSubspace, but an explicit
+	// check here makes the logic clearer and fails faster.
+	_, err := s.db.ReadTransact(func(tr fdb.ReadTransaction) (interface{}, error) {
 		exists, err := s.dir.Exists(tr, []string{queueName})
 		if err != nil {
 			return nil, err
@@ -1439,18 +1477,44 @@ func (s *FDBStore) ChangeMessageVisibilityBatch(ctx context.Context, queueName s
 		if !exists {
 			return nil, ErrQueueDoesNotExist
 		}
-
-		for receiptHandle, visibilityTimeout := range entries {
-			err := s.changeMessageVisibility(tr, queueName, receiptHandle, visibilityTimeout)
-			if err != nil {
-				// A real implementation would return partial failures. For now, we fail the whole transaction.
-				// We can return a specific error type to indicate which handle failed.
-				return nil, fmt.Errorf("failed on receipt handle %s: %w", receiptHandle, err)
-			}
-		}
 		return nil, nil
 	})
-	return err
+
+	if err != nil {
+		// If the queue doesn't exist, we can't proceed. The handler layer
+		// will need to turn this into a batch failure response.
+		// For other errors, we also return immediately.
+		return nil, err
+	}
+
+	for _, entry := range entries {
+		err := s.ChangeMessageVisibility(ctx, queueName, entry.ReceiptHandle, entry.VisibilityTimeout)
+		if err != nil {
+			// Map internal errors to SQS error types for the response.
+			code := "InternalError"
+			senderFault := false
+			if errors.Is(err, ErrInvalidReceiptHandle) {
+				code = "ReceiptHandleIsInvalid"
+				senderFault = true
+			} else if errors.Is(err, ErrMessageNotInflight) {
+				code = "MessageNotInflight"
+				senderFault = true
+			}
+
+			resp.Failed = append(resp.Failed, models.BatchResultErrorEntry{
+				Id:          entry.Id,
+				Code:        code,
+				Message:     err.Error(),
+				SenderFault: senderFault,
+			})
+		} else {
+			resp.Successful = append(resp.Successful, models.ChangeMessageVisibilityBatchResultEntry{
+				Id: entry.Id,
+			})
+		}
+	}
+
+	return resp, nil
 }
 
 func (s *FDBStore) AddPermission(ctx context.Context, queueName, label string, permissions map[string][]string) error {

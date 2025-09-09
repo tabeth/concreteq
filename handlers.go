@@ -114,6 +114,8 @@ func (app *App) RootSQSHandler(w http.ResponseWriter, r *http.Request) {
 		app.SetQueueAttributesHandler(w, r)
 	case "GetQueueUrl":
 		app.GetQueueUrlHandler(w, r)
+	case "SendMessageBatch":
+		app.SendMessageBatchHandler(w, r)
 	case "ChangeMessageVisibilityBatch":
 		app.ChangeMessageVisibilityBatchHandler(w, r)
 	case "AddPermission":
@@ -146,6 +148,7 @@ func (app *App) RootSQSHandler(w http.ResponseWriter, r *http.Request) {
 // Valid values: alphanumeric characters, hyphens (-), and underscores (_).
 // For FIFO queues, the name must end with the .fifo suffix.
 var queueNameRegex = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,80}(\.fifo)?$`)
+var batchEntryIdRegex = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,80}$`)
 
 // validateIntAttribute is a helper for checking if a string can be parsed as an integer
 // and falls within a specified min/max range. This is used for validating queue attributes.
@@ -272,14 +275,9 @@ func (app *App) CreateQueueHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// After all validation passes, delegate to the storage layer to create the queue.
-	err := app.Store.CreateQueue(r.Context(), req.QueueName, req.Attributes, req.Tags)
+	// After all validation passes, delegate to the storage layer.
+	existingAttributes, err := app.Store.CreateQueue(r.Context(), req.QueueName, req.Attributes, req.Tags)
 	if err != nil {
-		// Handle specific errors returned from the store, like the queue already existing.
-		if errors.Is(err, store.ErrQueueAlreadyExists) {
-			app.sendErrorResponse(w, "QueueAlreadyExists", "Queue already exists", http.StatusConflict)
-			return
-		}
 		app.sendErrorResponse(w, "InternalFailure", "Failed to create queue", http.StatusInternalServerError)
 		return
 	}
@@ -290,14 +288,40 @@ func (app *App) CreateQueueHandler(w http.ResponseWriter, r *http.Request) {
 		scheme = "https"
 	}
 	queueURL := fmt.Sprintf("%s://%s/queues/%s", scheme, r.Host, req.QueueName)
-
 	resp := models.CreateQueueResponse{
 		QueueURL: queueURL,
 	}
-
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
+
+	// Handle idempotency based on SQS rules.
+	if existingAttributes != nil {
+		// Queue already existed. Check if attributes are identical.
+		if !areAttributesEqual(req.Attributes, existingAttributes) {
+			app.sendErrorResponse(w, "QueueNameExists", "A queue with this name already exists with different attributes.", http.StatusBadRequest)
+			return
+		}
+		// Attributes are the same, so it's an idempotent success.
+		w.WriteHeader(http.StatusOK)
+	} else {
+		// Queue was newly created.
+		w.WriteHeader(http.StatusCreated)
+	}
+
 	json.NewEncoder(w).Encode(resp)
+}
+
+// areAttributesEqual compares two maps of queue attributes for equality.
+// It handles the case where one map is nil.
+func areAttributesEqual(a, b map[string]string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for k, v := range a {
+		if w, ok := b[k]; !ok || v != w {
+			return false
+		}
+	}
+	return true
 }
 
 // DeleteQueueHandler handles requests to delete an existing queue.
@@ -335,6 +359,16 @@ func (app *App) ListQueuesHandler(w http.ResponseWriter, r *http.Request) {
 		// is acceptable, so we ignore decoding errors and proceed with default values.
 	}
 
+	// Validate MaxResults according to SQS documentation (1-1000).
+	if req.MaxResults < 0 || req.MaxResults > 1000 {
+		// Note: A value of 0 is valid if MaxResults is omitted, but invalid if specified as 0.
+		// The JSON decoding to an int makes this distinction impossible without a pointer.
+		// For now, we treat 0 as "not specified". An explicit 0 would be a client error.
+		// SQS docs are specific that the range is 1-1000.
+		app.sendErrorResponse(w, "InvalidParameterValue", "MaxResults must be an integer between 1 and 1000.", http.StatusBadRequest)
+		return
+	}
+
 	// Delegate to the storage layer to fetch the list of queues.
 	queueNames, newNextToken, err := app.Store.ListQueues(r.Context(), req.MaxResults, req.NextToken, req.QueueNamePrefix)
 	if err != nil {
@@ -360,7 +394,11 @@ func (app *App) ListQueuesHandler(w http.ResponseWriter, r *http.Request) {
 
 	resp := models.ListQueuesResponse{
 		QueueUrls: queueURLs,
-		NextToken: newNextToken,
+	}
+
+	// SQS docs: NextToken is only returned if MaxResults was specified.
+	if req.MaxResults > 0 {
+		resp.NextToken = newNextToken
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -377,6 +415,7 @@ func (app *App) GetQueueAttributesHandler(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	// Perform batch-level validation before calling the store.
 	if req.QueueUrl == "" {
 		app.sendErrorResponse(w, "MissingParameter", "The request must contain a QueueUrl.", http.StatusBadRequest)
 		return
@@ -398,36 +437,45 @@ func (app *App) GetQueueAttributesHandler(w http.ResponseWriter, r *http.Request
 	// This ensures consistency with the SQS API.
 	allAttributes["QueueArn"] = fmt.Sprintf("arn:aws:sqs:us-east-1:123456789012:%s", queueName)
 	if _, ok := allAttributes["VisibilityTimeout"]; !ok {
-		allAttributes["VisibilityTimeout"] = "30" // Default SQS value
+		allAttributes["VisibilityTimeout"] = "30"
 	}
 	if _, ok := allAttributes["ReceiveMessageWaitTimeSeconds"]; !ok {
-		allAttributes["ReceiveMessageWaitTimeSeconds"] = "0" // Default SQS value
+		allAttributes["ReceiveMessageWaitTimeSeconds"] = "0"
 	}
-	// Additional attributes can be defaulted here as needed.
+	if _, ok := allAttributes["MessageRetentionPeriod"]; !ok {
+		allAttributes["MessageRetentionPeriod"] = "345600" // 4 days
+	}
+	if _, ok := allAttributes["MaximumMessageSize"]; !ok {
+		allAttributes["MaximumMessageSize"] = "262144" // 256 KiB
+	}
+	if _, ok := allAttributes["DelaySeconds"]; !ok {
+		allAttributes["DelaySeconds"] = "0"
+	}
+	if _, ok := allAttributes["KmsDataKeyReusePeriodSeconds"]; !ok {
+		allAttributes["KmsDataKeyReusePeriodSeconds"] = "300" // 5 minutes
+	}
 
 	// Now, filter the attributes based on the client's request.
 	responseAttributes := make(map[string]string)
 	wantsAll := false
-	for _, name := range req.AttributeNames {
-		if name == "All" {
-			wantsAll = true
-			break
-		}
+	if len(req.AttributeNames) > 0 && req.AttributeNames[0] == "All" {
+		wantsAll = true
 	}
 
 	if wantsAll {
 		responseAttributes = allAttributes
 	} else {
 		for _, name := range req.AttributeNames {
-			if val, ok := allAttributes[name]; ok {
-				responseAttributes[name] = val
-			} else {
-				// According to SQS docs, requesting a non-existent attribute is an error.
-				// However, some implementations are more lenient. We will be strict.
-				// Note: A real SQS implementation would also need to validate the attribute name itself.
+			// First, validate that the requested attribute name is a valid SQS attribute.
+			if !validQueueAttributeNames[name] {
 				app.sendErrorResponse(w, "InvalidAttributeName", "The specified attribute "+name+" does not exist.", http.StatusBadRequest)
 				return
 			}
+			// If the attribute exists in our map (either from store or defaulted), add it to the response.
+			if val, ok := allAttributes[name]; ok {
+				responseAttributes[name] = val
+			}
+			// If a valid attribute is requested but not present (e.g. RedrivePolicy), it's omitted, not an error.
 		}
 	}
 
@@ -459,10 +507,13 @@ func (app *App) SetQueueAttributesHandler(w http.ResponseWriter, r *http.Request
 
 	queueName := path.Base(req.QueueUrl)
 
-	// Validate attributes before sending to store. Note: SQS has restrictions on which
-	// attributes can be changed after queue creation. This validation is simplified.
-	if err := validateAttributes(req.Attributes); err != nil {
-		app.sendErrorResponse(w, "InvalidAttributeName", err.Error(), http.StatusBadRequest)
+	// Validate attributes before sending to store.
+	if err := validateSettableAttributes(req.Attributes); err != nil {
+		if serr, ok := err.(*SqsError); ok {
+			app.sendErrorResponse(w, serr.Type, serr.Message, http.StatusBadRequest)
+		} else {
+			app.sendErrorResponse(w, "InvalidAttributeValue", err.Error(), http.StatusBadRequest)
+		}
 		return
 	}
 
@@ -551,7 +602,77 @@ func (app *App) PurgeQueueHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
+// SqsError is a custom error type for returning specific AWS-style errors.
+type SqsError struct {
+	Type    string
+	Message string
+}
+
+func (e *SqsError) Error() string {
+	return e.Message
+}
+
+// A map of attributes that can be set after a queue is created.
+var settableQueueAttributes = map[string]bool{
+	"DelaySeconds":                  true,
+	"MaximumMessageSize":            true,
+	"MessageRetentionPeriod":        true,
+	"Policy":                        true,
+	"ReceiveMessageWaitTimeSeconds": true,
+	"VisibilityTimeout":             true,
+	"RedrivePolicy":                 true,
+	"KmsMasterKeyId":                true,
+	"KmsDataKeyReusePeriodSeconds":  true,
+	"SqsManagedSseEnabled":          true,
+	// Note: FIFO-related attributes like ContentBasedDeduplication are often settable,
+	// but depend on the queue type. For simplicity, we assume they are settable if validated.
+	"ContentBasedDeduplication": true,
+}
+
+// validateSettableAttributes performs validation for attributes that can be changed
+// on an existing queue. It returns a more specific SqsError type.
+func validateSettableAttributes(attributes map[string]string) error {
+	if err := validateAttributes(attributes); err != nil {
+		return err
+	}
+	for key := range attributes {
+		if !settableQueueAttributes[key] {
+			return &SqsError{
+				Type:    "InvalidAttributeName",
+				Message: fmt.Sprintf("Attribute %s cannot be changed.", key),
+			}
+		}
+	}
+	return nil
+}
+
 // --- Message Management Handlers and Helpers ---
+
+// All valid queue attribute names for GetQueueAttributes
+var validQueueAttributeNames = map[string]bool{
+	"All":    true,
+	"Policy": true,
+	"VisibilityTimeout":                 true,
+	"MaximumMessageSize":                true,
+	"MessageRetentionPeriod":            true,
+	"ApproximateNumberOfMessages":       true,
+	"ApproximateNumberOfMessagesNotVisible": true,
+	"CreatedTimestamp":                  true,
+	"LastModifiedTimestamp":             true,
+	"QueueArn":                          true,
+	"ApproximateNumberOfMessagesDelayed":    true,
+	"DelaySeconds":                      true,
+	"ReceiveMessageWaitTimeSeconds":     true,
+	"RedrivePolicy":                     true,
+	"FifoQueue":                         true,
+	"ContentBasedDeduplication":         true,
+	"KmsMasterKeyId":                    true,
+	"KmsDataKeyReusePeriodSeconds":      true,
+	"DeduplicationScope":                true,
+	"FifoThroughputLimit":               true,
+	"RedriveAllowPolicy":                true,
+	"SqsManagedSseEnabled":              true,
+}
 
 // validMessageSystemAttributeNames is a set of the allowed system attribute names for messages.
 var validMessageSystemAttributeNames = map[string]bool{
@@ -572,6 +693,20 @@ func isValidMessageAttributeName(name string) bool {
 	if len(name) > 256 {
 		return false
 	}
+	if name == "All" {
+		return true
+	}
+	// Handle wildcard case: prefix.*
+	if strings.HasSuffix(name, ".*") {
+		prefix := name[:len(name)-2]
+		// The prefix itself must be a valid attribute name part.
+		if len(prefix) == 0 {
+			return true // ".*" is valid on its own to match all custom attributes
+		}
+		// Let's reuse the existing validation logic for the prefix.
+		name = prefix
+	}
+
 	// Custom attributes cannot start with "aws." or "amazon.".
 	if strings.HasPrefix(strings.ToLower(name), "aws.") || strings.HasPrefix(strings.ToLower(name), "amazon.") {
 		return false
@@ -599,6 +734,20 @@ func isValidSqsChars(s string) bool {
 	return true
 }
 
+// isSqsMessageBodyValid checks if the message body contains only valid characters
+// as per the SQS documentation.
+func isSqsMessageBodyValid(body string) bool {
+	for _, r := range body {
+		if !((r == 0x9) || (r == 0xA) || (r == 0xD) ||
+			(r >= 0x20 && r <= 0xD7FF) ||
+			(r >= 0xE000 && r <= 0xFFFD) ||
+			(r >= 0x10000 && r <= 0x10FFFF)) {
+			return false
+		}
+	}
+	return true
+}
+
 func (app *App) validateSendMessageRequest(req *models.SendMessageRequest, queueName string) error {
 	if req.QueueUrl == "" {
 		return errors.New("MissingParameter: The request must contain a QueueUrl.")
@@ -606,6 +755,10 @@ func (app *App) validateSendMessageRequest(req *models.SendMessageRequest, queue
 
 	if len(req.MessageBody) < 1 || len(req.MessageBody) > 256*1024 { // 1 char to 256 KiB
 		return errors.New("InvalidParameterValue: The message body must be between 1 and 262144 bytes long.")
+	}
+
+	if !isSqsMessageBodyValid(req.MessageBody) {
+		return errors.New("InvalidMessageContents: The message contains characters outside the allowed set.")
 	}
 
 	if req.DelaySeconds != nil {
@@ -672,45 +825,11 @@ func (app *App) validateSendMessageRequest(req *models.SendMessageRequest, queue
 
 // SendMessageHandler handles requests to send a single message to a queue.
 func (app *App) SendMessageHandler(w http.ResponseWriter, r *http.Request) {
-	// This handler demonstrates a robust way to parse incoming JSON.
-	// 1. Read the entire body. This prevents issues with streaming decoders
-	//    leaving the connection in an indeterminate state on error.
-	bodyBytes, err := io.ReadAll(r.Body)
-	if err != nil {
-		app.sendErrorResponse(w, "InvalidRequest", "Failed to read request body", http.StatusBadRequest)
-		return
-	}
-
-	// 2. Unmarshal into a generic map. This is more resilient to unexpected fields
-	//    or type mismatches (e.g., a number sent as a string) than unmarshaling
-	//    directly into a struct.
-	var data map[string]interface{}
-	if err := json.Unmarshal(bodyBytes, &data); err != nil {
+	var req models.SendMessageRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		app.sendErrorResponse(w, "InvalidRequest", "Invalid JSON format", http.StatusBadRequest)
 		return
 	}
-
-	// 3. Manually construct the target request struct from the map. This allows for
-	//    graceful type conversions (e.g., float64 from JSON to int32 in the struct)
-	//    and provides a safe intermediate step for validation.
-	var req models.SendMessageRequest
-	if qURL, ok := data["QueueUrl"].(string); ok {
-		req.QueueUrl = qURL
-	}
-	if mBody, ok := data["MessageBody"].(string); ok {
-		req.MessageBody = mBody
-	}
-	if delay, ok := data["DelaySeconds"].(float64); ok {
-		delay32 := int32(delay)
-		req.DelaySeconds = &delay32
-	}
-	if dedupID, ok := data["MessageDeduplicationId"].(string); ok {
-		req.MessageDeduplicationId = &dedupID
-	}
-	if groupID, ok := data["MessageGroupId"].(string); ok {
-		req.MessageGroupId = &groupID
-	}
-	// Note: A full implementation would also handle MessageAttributes and MessageSystemAttributes here.
 
 	queueName := path.Base(req.QueueUrl)
 	if err := app.validateSendMessageRequest(&req, queueName); err != nil {
@@ -771,7 +890,7 @@ func (app *App) SendMessageBatchHandler(w http.ResponseWriter, r *http.Request) 
 	// --- Per-Entry Validation ---
 	ids := make(map[string]struct{})
 	totalPayloadSize := 0
-	queueName := chi.URLParam(r, "queueName")
+	queueName := path.Base(req.QueueUrl)
 
 	for _, entry := range req.Entries {
 		// Ensure all entry IDs within a single batch request are unique.
@@ -955,10 +1074,10 @@ func (app *App) DeleteMessageBatchHandler(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// Ensure entry IDs are distinct within the batch.
+	// Ensure entry IDs are valid and distinct within the batch.
 	ids := make(map[string]struct{})
 	for _, entry := range req.Entries {
-		if entry.Id == "" {
+		if !batchEntryIdRegex.MatchString(entry.Id) {
 			app.sendErrorResponse(w, "InvalidBatchEntryId", "The Id of a batch entry in a batch request doesn't abide by the specification.", http.StatusBadRequest)
 			return
 		}
@@ -1059,34 +1178,35 @@ func (app *App) ChangeMessageVisibilityBatchHandler(w http.ResponseWriter, r *ht
 	}
 
 	queueName := path.Base(req.QueueUrl)
-	entriesMap := make(map[string]int)
-	for _, entry := range req.Entries {
-		entriesMap[entry.ReceiptHandle] = entry.VisibilityTimeout
-	}
 
-	// This is a simplified implementation. A real one would process each entry and report partial success/failure.
-	// The current store interface doesn't support partial failure for this operation.
-	err := app.Store.ChangeMessageVisibilityBatch(r.Context(), queueName, entriesMap)
-
-	resp := models.ChangeMessageVisibilityBatchResponse{
-		Successful: []models.ChangeMessageVisibilityBatchResultEntry{},
-		Failed:     []models.BatchResultErrorEntry{},
-	}
+	// Delegate the core logic, including partial failures, to the store layer.
+	resp, err := app.Store.ChangeMessageVisibilityBatch(r.Context(), queueName, req.Entries)
 	if err != nil {
-		// Because the store layer doesn't support partial success, we fail the whole batch.
-		// A more advanced implementation would require changing the store interface.
+		// This error is for entire-batch failures, e.g., the queue doesn't exist.
+		// In this case, we fail all entries.
+		failedResp := &models.ChangeMessageVisibilityBatchResponse{
+			Successful: []models.ChangeMessageVisibilityBatchResultEntry{},
+			Failed:     []models.BatchResultErrorEntry{},
+		}
+		var code string
+		if errors.Is(err, store.ErrQueueDoesNotExist) {
+			code = "QueueDoesNotExist"
+		} else {
+			code = "InternalError"
+		}
+
 		for _, entry := range req.Entries {
-			resp.Failed = append(resp.Failed, models.BatchResultErrorEntry{
+			failedResp.Failed = append(failedResp.Failed, models.BatchResultErrorEntry{
 				Id:          entry.Id,
-				Code:        "InternalError", // Generic error
+				Code:        code,
 				Message:     err.Error(),
 				SenderFault: false,
 			})
 		}
-	} else {
-		for _, entry := range req.Entries {
-			resp.Successful = append(resp.Successful, models.ChangeMessageVisibilityBatchResultEntry{Id: entry.Id})
-		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK) // Batch operations return 200 even if all entries fail.
+		json.NewEncoder(w).Encode(failedResp)
+		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")

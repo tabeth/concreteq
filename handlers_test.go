@@ -25,9 +25,12 @@ type MockStore struct {
 	mock.Mock
 }
 
-func (m *MockStore) CreateQueue(ctx context.Context, name string, attributes, tags map[string]string) error {
+func (m *MockStore) CreateQueue(ctx context.Context, name string, attributes, tags map[string]string) (map[string]string, error) {
 	args := m.Called(ctx, name, attributes, tags)
-	return args.Error(0)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(map[string]string), args.Error(1)
 }
 
 func (m *MockStore) DeleteQueue(ctx context.Context, name string) error {
@@ -97,9 +100,12 @@ func (m *MockStore) ChangeMessageVisibility(ctx context.Context, queueName strin
 	args := m.Called(ctx, queueName, receiptHandle, visibilityTimeout)
 	return args.Error(0)
 }
-func (m *MockStore) ChangeMessageVisibilityBatch(ctx context.Context, queueName string, entries map[string]int) error {
+func (m *MockStore) ChangeMessageVisibilityBatch(ctx context.Context, queueName string, entries []models.ChangeMessageVisibilityBatchRequestEntry) (*models.ChangeMessageVisibilityBatchResponse, error) {
 	args := m.Called(ctx, queueName, entries)
-	return args.Error(0)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*models.ChangeMessageVisibilityBatchResponse), args.Error(1)
 }
 func (m *MockStore) AddPermission(ctx context.Context, queueName, label string, permissions map[string][]string) error {
 	return nil
@@ -137,7 +143,7 @@ func TestCreateQueueHandler(t *testing.T) {
 			name:      "Successful Standard Queue Creation",
 			inputBody: `{"QueueName": "my-test-queue"}`,
 			mockSetup: func(ms *MockStore) {
-				ms.On("CreateQueue", mock.Anything, "my-test-queue", mock.Anything, mock.Anything).Return(nil)
+				ms.On("CreateQueue", mock.Anything, "my-test-queue", mock.Anything, mock.Anything).Return(nil, nil)
 			},
 			expectedStatusCode: http.StatusCreated,
 			expectedBody:       `{"QueueUrl":"http://localhost:8080/queues/my-test-queue"}`,
@@ -146,7 +152,7 @@ func TestCreateQueueHandler(t *testing.T) {
 			name:      "Successful FIFO Queue Creation",
 			inputBody: `{"QueueName": "my-fifo-queue.fifo", "Attributes": {"FifoQueue": "true"}}`,
 			mockSetup: func(ms *MockStore) {
-				ms.On("CreateQueue", mock.Anything, "my-fifo-queue.fifo", mock.Anything, mock.Anything).Return(nil)
+				ms.On("CreateQueue", mock.Anything, "my-fifo-queue.fifo", mock.Anything, mock.Anything).Return(nil, nil)
 			},
 			expectedStatusCode: http.StatusCreated,
 			expectedBody:       `{"QueueUrl":"http://localhost:8080/queues/my-fifo-queue.fifo"}`,
@@ -208,13 +214,24 @@ func TestCreateQueueHandler(t *testing.T) {
 			expectedBody:       `{"__type":"InvalidParameterValue", "message":"DeduplicationScope is only valid for FIFO queues"}`,
 		},
 		{
-			name:      "Queue Already Exists",
-			inputBody: `{"QueueName": "existing-queue"}`,
+			name:      "Idempotent Success - Queue Exists with Same Attributes",
+			inputBody: `{"QueueName": "existing-queue", "Attributes": {"VisibilityTimeout": "100"}}`,
 			mockSetup: func(ms *MockStore) {
-				ms.On("CreateQueue", mock.Anything, "existing-queue", mock.Anything, mock.Anything).Return(store.ErrQueueAlreadyExists)
+				existingAttrs := map[string]string{"VisibilityTimeout": "100"}
+				ms.On("CreateQueue", mock.Anything, "existing-queue", existingAttrs, mock.Anything).Return(existingAttrs, nil)
 			},
-			expectedStatusCode: http.StatusConflict,
-			expectedBody:       `{"__type":"QueueAlreadyExists", "message":"Queue already exists"}`,
+			expectedStatusCode: http.StatusOK, // Note: 200 OK for idempotent success, not 201
+			expectedBody:       `{"QueueUrl":"http://localhost:8080/queues/existing-queue"}`,
+		},
+		{
+			name:      "QueueNameExists - Queue Exists with Different Attributes",
+			inputBody: `{"QueueName": "existing-queue", "Attributes": {"VisibilityTimeout": "200"}}`,
+			mockSetup: func(ms *MockStore) {
+				existingAttrs := map[string]string{"VisibilityTimeout": "100"}
+				ms.On("CreateQueue", mock.Anything, "existing-queue", mock.Anything, mock.Anything).Return(existingAttrs, nil)
+			},
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       `{"__type":"QueueNameExists", "message":"A queue with this name already exists with different attributes."}`,
 		},
 	}
 
@@ -310,7 +327,16 @@ func TestSetQueueAttributesHandler(t *testing.T) {
 				// The validation happens before the store call
 			},
 			expectedStatusCode: http.StatusBadRequest,
-			expectedBody:       `{"__type":"InvalidAttributeName", "message":"invalid value for DelaySeconds: must be between 0 and 900"}`,
+			expectedBody:       `{"__type":"InvalidAttributeValue", "message":"invalid value for DelaySeconds: must be between 0 and 900"}`,
+		},
+		{
+			name:      "Attempt to set immutable attribute",
+			inputBody: `{"QueueUrl": "http://localhost/queues/my-queue", "Attributes": {"FifoQueue": "true"}}`,
+			mockSetup: func(ms *MockStore) {
+				// No store call, validation fails first
+			},
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       `{"__type":"InvalidAttributeName", "message":"Attribute FifoQueue cannot be changed."}`,
 		},
 	}
 
@@ -416,7 +442,11 @@ func TestChangeMessageVisibilityBatchHandler(t *testing.T) {
 				]
 			}`,
 			mockSetup: func(ms *MockStore) {
-				ms.On("ChangeMessageVisibilityBatch", mock.Anything, "my-queue", mock.AnythingOfType("map[string]int")).Return(nil)
+				resp := &models.ChangeMessageVisibilityBatchResponse{
+					Successful: []models.ChangeMessageVisibilityBatchResultEntry{{Id: "msg1"}, {Id: "msg2"}},
+					Failed:     []models.BatchResultErrorEntry{},
+				}
+				ms.On("ChangeMessageVisibilityBatch", mock.Anything, "my-queue", mock.AnythingOfType("[]models.ChangeMessageVisibilityBatchRequestEntry")).Return(resp, nil)
 			},
 			expectedStatusCode: http.StatusOK,
 			expectedBody:       `{"Successful":[{"Id":"msg1"},{"Id":"msg2"}],"Failed":[]}`,
@@ -443,13 +473,28 @@ func TestChangeMessageVisibilityBatchHandler(t *testing.T) {
 			expectedBody:       `{"__type":"BatchEntryIdsNotDistinct", "message":"Two or more batch entries in the request have the same Id."}`,
 		},
 		{
-			name:      "Internal error on batch change",
-			inputBody: `{"QueueUrl": "http://localhost/queues/my-queue", "Entries": [{"Id": "1", "ReceiptHandle": "invalid", "VisibilityTimeout": 1}]}`,
+			name:      "Partial Failure",
+			inputBody: `{"QueueUrl": "http://localhost/queues/my-queue", "Entries": [{"Id": "ok_id", "ReceiptHandle": "ok_handle"}, {"Id": "fail_id", "ReceiptHandle": "fail_handle"}]}`,
 			mockSetup: func(ms *MockStore) {
-				ms.On("ChangeMessageVisibilityBatch", mock.Anything, "my-queue", mock.Anything).Return(errors.New("internal error"))
+				resp := &models.ChangeMessageVisibilityBatchResponse{
+					Successful: []models.ChangeMessageVisibilityBatchResultEntry{{Id: "ok_id"}},
+					Failed: []models.BatchResultErrorEntry{
+						{Id: "fail_id", Code: "ReceiptHandleIsInvalid", Message: "The receipt handle is not valid.", SenderFault: true},
+					},
+				}
+				ms.On("ChangeMessageVisibilityBatch", mock.Anything, "my-queue", mock.AnythingOfType("[]models.ChangeMessageVisibilityBatchRequestEntry")).Return(resp, nil)
 			},
 			expectedStatusCode: http.StatusOK,
-			expectedBody:       `{"Successful":[],"Failed":[{"Id":"1","Code":"InternalError","Message":"internal error","SenderFault":false}]}`,
+			expectedBody:       `{"Successful":[{"Id":"ok_id"}],"Failed":[{"Id":"fail_id","Code":"ReceiptHandleIsInvalid","Message":"The receipt handle is not valid.","SenderFault":true}]}`,
+		},
+		{
+			name:      "Full batch failure due to non-existent queue",
+			inputBody: `{"QueueUrl": "http://localhost/queues/non-existent", "Entries": [{"Id": "1", "ReceiptHandle": "h1"}]}`,
+			mockSetup: func(ms *MockStore) {
+				ms.On("ChangeMessageVisibilityBatch", mock.Anything, "non-existent", mock.AnythingOfType("[]models.ChangeMessageVisibilityBatchRequestEntry")).Return(nil, store.ErrQueueDoesNotExist)
+			},
+			expectedStatusCode: http.StatusOK,
+			expectedBody:       `{"Successful":[],"Failed":[{"Id":"1","Code":"QueueDoesNotExist","Message":"queue does not exist","SenderFault":false}]}`,
 		},
 	}
 
@@ -525,7 +570,7 @@ func TestGetQueueAttributesHandler(t *testing.T) {
 			inputBody: `{"QueueUrl": "http://localhost/queues/my-queue", "AttributeNames": ["All"]}`,
 			mockSetup: func(ms *MockStore) {
 				ms.On("GetQueueAttributes", mock.Anything, "my-queue").Return(map[string]string{
-					"VisibilityTimeout": "100",
+					"VisibilityTimeout": "100", // This one is set on the queue
 				}, nil)
 			},
 			expectedStatusCode: http.StatusOK,
@@ -533,7 +578,11 @@ func TestGetQueueAttributesHandler(t *testing.T) {
 				"Attributes": {
 					"VisibilityTimeout": "100",
 					"QueueArn": "arn:aws:sqs:us-east-1:123456789012:my-queue",
-					"ReceiveMessageWaitTimeSeconds": "0"
+					"ReceiveMessageWaitTimeSeconds": "0",
+					"MessageRetentionPeriod": "345600",
+					"MaximumMessageSize": "262144",
+					"DelaySeconds": "0",
+					"KmsDataKeyReusePeriodSeconds": "300"
 				}
 			}`,
 		},
@@ -564,9 +613,40 @@ func TestGetQueueAttributesHandler(t *testing.T) {
 			expectedBody:       `{"__type":"QueueDoesNotExist", "message":"The specified queue does not exist."}`,
 		},
 		{
+			name:      "Successful - With Defaulted Attributes",
+			inputBody: `{"QueueUrl": "http://localhost/queues/my-queue", "AttributeNames": ["All"]}`,
+			mockSetup: func(ms *MockStore) {
+				// Store returns no attributes, so handler should provide all defaults.
+				ms.On("GetQueueAttributes", mock.Anything, "my-queue").Return(map[string]string{}, nil)
+			},
+			expectedStatusCode: http.StatusOK,
+			expectedBody: `{
+				"Attributes": {
+					"QueueArn": "arn:aws:sqs:us-east-1:123456789012:my-queue",
+					"VisibilityTimeout": "30",
+					"ReceiveMessageWaitTimeSeconds": "0",
+					"MessageRetentionPeriod": "345600",
+					"MaximumMessageSize": "262144",
+					"DelaySeconds": "0",
+					"KmsDataKeyReusePeriodSeconds": "300"
+				}
+			}`,
+		},
+		{
+			name:      "Requesting valid but unset attribute",
+			inputBody: `{"QueueUrl": "http://localhost/queues/my-queue", "AttributeNames": ["RedrivePolicy"]}`,
+			mockSetup: func(ms *MockStore) {
+				// Store returns nothing for RedrivePolicy, and it has no default.
+				ms.On("GetQueueAttributes", mock.Anything, "my-queue").Return(map[string]string{}, nil)
+			},
+			expectedStatusCode: http.StatusOK,
+			expectedBody:       `{"Attributes": {}}`, // Response should be empty, not an error.
+		},
+		{
 			name:      "Invalid Attribute Name",
 			inputBody: `{"QueueUrl": "http://localhost/queues/my-queue", "AttributeNames": ["NonExistentAttribute"]}`,
 			mockSetup: func(ms *MockStore) {
+				// Store call happens before attribute name validation, so it must be mocked.
 				ms.On("GetQueueAttributes", mock.Anything, "my-queue").Return(map[string]string{}, nil)
 			},
 			expectedStatusCode: http.StatusBadRequest,
@@ -809,21 +889,10 @@ func TestSendMessageBatchHandler(t *testing.T) {
 
 			app := &App{Store: mockStore}
 			r := chi.NewRouter()
-			// We need to register the specific handler for this test
-			r.Post("/queues/{queueName}/messages/batch", app.SendMessageBatchHandler)
+			app.RegisterSQSHandlers(r)
 
-			// Extract queue name from the URL in the payload
-			var payload struct {
-				QueueUrl string `json:"QueueUrl"`
-			}
-			json.Unmarshal([]byte(tc.inputBody), &payload)
-			queueName := chi.URLParam(httptest.NewRequest("POST", payload.QueueUrl, nil), "queueName")
-			if queueName == "" && payload.QueueUrl != "" {
-				queueName = payload.QueueUrl[strings.LastIndex(payload.QueueUrl, "/")+1:]
-			}
-
-			requestURL := "/queues/" + queueName + "/messages/batch"
-			req, _ := http.NewRequest("POST", requestURL, bytes.NewBufferString(tc.inputBody))
+			req, _ := http.NewRequest("POST", "/", bytes.NewBufferString(tc.inputBody))
+			req.Header.Set("X-Amz-Target", "AmazonSQS.SendMessageBatch")
 			rr := httptest.NewRecorder()
 
 			r.ServeHTTP(rr, req)
@@ -991,6 +1060,25 @@ func TestReceiveMessageHandler(t *testing.T) {
 			},
 			expectedStatusCode: http.StatusBadRequest,
 			expectedBody:       `{"__type":"QueueDoesNotExist", "message":"The specified queue does not exist."}`,
+		},
+		{
+			name:      "Successful Receive with wildcard attribute",
+			inputBody: `{"QueueUrl": "http://localhost:8080/queues/my-queue", "MessageAttributeNames": ["custom.*"]}`,
+			mockSetup: func(ms *MockStore) {
+				ms.On("ReceiveMessage", mock.Anything, "my-queue", mock.MatchedBy(func(req *models.ReceiveMessageRequest) bool {
+					return len(req.MessageAttributeNames) == 1 && req.MessageAttributeNames[0] == "custom.*"
+				})).Return(&models.ReceiveMessageResponse{
+					Messages: []models.ResponseMessage{
+						{
+							MessageId:     "uuid1",
+							ReceiptHandle: "receipt1",
+							Body:          "hello",
+							MD5OfBody:     "md5-hello",
+						},
+					},
+				}, nil)
+			},
+			expectedStatusCode: http.StatusOK,
 		},
 	}
 
@@ -1226,10 +1314,10 @@ func TestListQueuesHandler(t *testing.T) {
 			inputBody: `{"MaxResults": 1, "QueueNamePrefix": "test"`,
 			mockSetup: func(ms *MockStore) {
 				// The handler should proceed with default values, so the mock expects 0, "", ""
-				ms.On("ListQueues", mock.Anything, 0, "", "").Return([]string{"q1"}, "q1", nil)
+				ms.On("ListQueues", mock.Anything, 0, "", "").Return([]string{"q1"}, "this-should-be-ignored", nil)
 			},
 			expectedStatusCode: http.StatusOK,
-			expectedBody:       `{"QueueUrls":["http://localhost:8080/queues/q1"],"NextToken":"q1"}`,
+			expectedBody:       `{"QueueUrls":["http://localhost:8080/queues/q1"]}`, // NextToken is omitted
 		},
 		{
 			name:      "Store Internal Error",
@@ -1252,6 +1340,23 @@ func TestListQueuesHandler(t *testing.T) {
 			},
 			expectedStatusCode: http.StatusOK,
 			responseLength:     1000, // Should be truncated to 1000
+		},
+		{
+			name:               "Invalid MaxResults too high",
+			inputBody:          `{"MaxResults": 1001}`,
+			mockSetup:          func(ms *MockStore) {},
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       `{"__type":"InvalidParameterValue", "message":"MaxResults must be an integer between 1 and 1000."}`,
+		},
+		{
+			name:      "No NextToken when MaxResults is not specified",
+			inputBody: `{}`,
+			mockSetup: func(ms *MockStore) {
+				// Store returns a next token, but the handler should omit it because MaxResults is 0
+				ms.On("ListQueues", mock.Anything, 0, "", "").Return([]string{"q1"}, "some-token", nil)
+			},
+			expectedStatusCode: http.StatusOK,
+			expectedBody:       `{"QueueUrls":["http://localhost:8080/queues/q1"]}`, // NextToken is omitted
 		},
 	}
 
@@ -1326,6 +1431,33 @@ func TestSendMessageHandler(t *testing.T) {
 			},
 			expectedStatusCode: http.StatusOK,
 			expectedBody:       `{"MD5OfMessageBody":"5d41402abc4b2a76b9719d911017c592","MessageId":"some-uuid"}`,
+		},
+		{
+			name: "Successful Send with Message Attributes",
+			inputBody: `{
+				"MessageBody": "hello with attributes",
+				"QueueUrl": "http://localhost:8080/queues/my-queue",
+				"MessageAttributes": {
+					"Attribute1": {"DataType": "String", "StringValue": "Value1"}
+				}
+			}`,
+			mockSetup: func(ms *MockStore) {
+				ms.On("SendMessage", mock.Anything, "my-queue", mock.MatchedBy(func(req *models.SendMessageRequest) bool {
+					val, ok := req.MessageAttributes["Attribute1"]
+					return ok && val.DataType == "String" && *val.StringValue == "Value1"
+				})).Return(&models.SendMessageResponse{
+					MessageId:      "some-uuid-attrs",
+					MD5OfMessageBody: "some-md5",
+				}, nil)
+			},
+			expectedStatusCode: http.StatusOK,
+		},
+		{
+			name:               "Invalid Message Body Characters",
+			inputBody:          `{"MessageBody": "hello\u0000world", "QueueUrl": "http://localhost:8080/queues/my-queue"}`,
+			mockSetup:          func(ms *MockStore) {},
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       `{"__type":"InvalidMessageContents", "message":"The message contains characters outside the allowed set."}`,
 		},
 		{
 			name:      "Successful Send to FIFO Queue",
