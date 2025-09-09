@@ -60,7 +60,7 @@ func TestFDBStore_ChangeMessageVisibility(t *testing.T) {
 	defer teardown()
 
 	queueName := "test-change-visibility"
-	err := store.CreateQueue(ctx, queueName, nil, nil)
+	_, err := store.CreateQueue(ctx, queueName, nil, nil)
 	require.NoError(t, err)
 
 	// Send a message
@@ -97,7 +97,7 @@ func TestFDBStore_ChangeMessageVisibilityBatch(t *testing.T) {
 	defer teardown()
 
 	queueName := "test-change-visibility-batch"
-	err := store.CreateQueue(ctx, queueName, nil, nil)
+	_, err := store.CreateQueue(ctx, queueName, nil, nil)
 	require.NoError(t, err)
 
 	// Send two messages
@@ -112,12 +112,19 @@ func TestFDBStore_ChangeMessageVisibilityBatch(t *testing.T) {
 	require.Len(t, resp.Messages, 2)
 
 	// Change visibility in a batch
-	entries := map[string]int{
-		resp.Messages[0].ReceiptHandle: 1,
-		resp.Messages[1].ReceiptHandle: 1,
+	entries := []models.ChangeMessageVisibilityBatchRequestEntry{
+		{Id: "m1", ReceiptHandle: resp.Messages[0].ReceiptHandle, VisibilityTimeout: 1},
+		{Id: "m2", ReceiptHandle: resp.Messages[1].ReceiptHandle, VisibilityTimeout: 1},
+		{Id: "m3", ReceiptHandle: "non-existent-handle", VisibilityTimeout: 1},
 	}
-	err = store.ChangeMessageVisibilityBatch(ctx, queueName, entries)
+
+	batchResp, err := store.ChangeMessageVisibilityBatch(ctx, queueName, entries)
 	require.NoError(t, err)
+	require.NotNil(t, batchResp)
+	assert.Len(t, batchResp.Successful, 2)
+	assert.Len(t, batchResp.Failed, 1)
+	assert.Equal(t, "m3", batchResp.Failed[0].Id)
+	assert.Equal(t, "ReceiptHandleIsInvalid", batchResp.Failed[0].Code)
 
 	// Try to receive again, should get nothing
 	resp2, err := store.ReceiveMessage(ctx, queueName, &models.ReceiveMessageRequest{MaxNumberOfMessages: 2})
@@ -139,7 +146,7 @@ func TestFDBStore_DeleteMessageBatch_InvalidReceipt(t *testing.T) {
 	defer teardown()
 
 	queueName := "test-delete-batch-invalid-receipt"
-	err := store.CreateQueue(ctx, queueName, nil, nil)
+	_, err := store.CreateQueue(ctx, queueName, nil, nil)
 	require.NoError(t, err)
 
 	// Manually insert a malformed receipt handle
@@ -165,7 +172,7 @@ func TestFDBStore_ChangeMessageVisibility_NotInflight(t *testing.T) {
 	defer teardown()
 
 	queueName := "test-change-visibility-not-inflight"
-	err := store.CreateQueue(ctx, queueName, nil, nil)
+	_, err := store.CreateQueue(ctx, queueName, nil, nil)
 	require.NoError(t, err)
 
 	err = store.ChangeMessageVisibility(ctx, queueName, "not-a-real-handle", 60)
@@ -178,7 +185,7 @@ func TestFDBStore_DeleteMessageBatch_MessageNotFound(t *testing.T) {
 	defer teardown()
 
 	queueName := "test-delete-batch-msg-not-found"
-	err := store.CreateQueue(ctx, queueName, nil, nil)
+	_, err := store.CreateQueue(ctx, queueName, nil, nil)
 	require.NoError(t, err)
 
 	// Send and receive a message
@@ -274,8 +281,9 @@ func TestFDBStore_CreateQueue(t *testing.T) {
 
 	t.Run("creates a new queue successfully", func(t *testing.T) {
 		queueName := "test-queue-1"
-		err := store.CreateQueue(ctx, queueName, nil, nil)
+		existingAttrs, err := store.CreateQueue(ctx, queueName, nil, nil)
 		assert.NoError(t, err)
+		assert.Nil(t, existingAttrs, "Expected nil for existing attributes on new queue creation")
 
 		// Verify the directory was created within the store's subspace
 		exists, err := store.dir.Exists(store.db, []string{queueName})
@@ -283,15 +291,17 @@ func TestFDBStore_CreateQueue(t *testing.T) {
 		assert.True(t, exists, "expected queue directory to exist")
 	})
 
-	t.Run("returns error if queue already exists", func(t *testing.T) {
+	t.Run("returns attributes if queue already exists", func(t *testing.T) {
 		queueName := "test-queue-2"
+		attributes := map[string]string{"VisibilityTimeout": "100"}
 		// Create it once
-		err := store.CreateQueue(ctx, queueName, nil, nil)
+		_, err := store.CreateQueue(ctx, queueName, attributes, nil)
 		require.NoError(t, err)
 
 		// Try to create it again
-		err = store.CreateQueue(ctx, queueName, nil, nil)
-		assert.ErrorIs(t, err, ErrQueueAlreadyExists)
+		existingAttrs, err := store.CreateQueue(ctx, queueName, attributes, nil)
+		assert.NoError(t, err)
+		assert.Equal(t, attributes, existingAttrs)
 	})
 
 	t.Run("stores attributes and tags correctly", func(t *testing.T) {
@@ -299,7 +309,7 @@ func TestFDBStore_CreateQueue(t *testing.T) {
 		attributes := map[string]string{"VisibilityTimeout": "60"}
 		tags := map[string]string{"Project": "concreteq"}
 
-		err := store.CreateQueue(ctx, queueName, attributes, tags)
+		_, err := store.CreateQueue(ctx, queueName, attributes, tags)
 		require.NoError(t, err)
 
 		// Verify data directly in FDB
@@ -346,9 +356,9 @@ func TestFDBStore_ListQueues(t *testing.T) {
 
 	// Create the queues in FDB
 	for _, name := range allTestQueues {
-		err := store.CreateQueue(context.Background(), name, nil, nil)
+		_, err := store.CreateQueue(context.Background(), name, nil, nil)
 		// We ignore "already exists" error to make tests idempotent
-		if err != nil && err != ErrQueueAlreadyExists {
+		if err != nil {
 			t.Fatalf("Failed to create test queue %s: %v", name, err)
 		}
 	}
@@ -424,7 +434,7 @@ func TestFDBStore_DeleteQueue(t *testing.T) {
 	t.Run("deletes an existing queue", func(t *testing.T) {
 		queueName := "queue-to-delete"
 		// Create the queue first
-		err := store.CreateQueue(ctx, queueName, nil, nil)
+		_, err := store.CreateQueue(ctx, queueName, nil, nil)
 		require.NoError(t, err)
 
 		// Now delete it
@@ -446,7 +456,7 @@ func TestFDBStore_DeleteQueue(t *testing.T) {
 	t.Run("deletes a queue and all its contents", func(t *testing.T) {
 		queueName := "queue-with-contents"
 		// 1. Create queue and add a message
-		err := store.CreateQueue(ctx, queueName, nil, nil)
+		_, err := store.CreateQueue(ctx, queueName, nil, nil)
 		require.NoError(t, err)
 		_, err = store.SendMessage(ctx, queueName, &models.SendMessageRequest{MessageBody: "this should be deleted"})
 		require.NoError(t, err)
@@ -456,7 +466,7 @@ func TestFDBStore_DeleteQueue(t *testing.T) {
 		require.NoError(t, err)
 
 		// 3. Re-create the queue with the same name
-		err = store.CreateQueue(ctx, queueName, nil, nil)
+		_, err = store.CreateQueue(ctx, queueName, nil, nil)
 		require.NoError(t, err)
 
 		// 4. Try to receive a message - should be empty
@@ -473,7 +483,7 @@ func TestFDBStore_SendMessageBatch(t *testing.T) {
 
 	t.Run("sends a batch successfully to a standard queue", func(t *testing.T) {
 		queueName := "test-batch-std"
-		err := store.CreateQueue(ctx, queueName, nil, nil)
+		_, err := store.CreateQueue(ctx, queueName, nil, nil)
 		require.NoError(t, err)
 		batchRequest := &models.SendMessageBatchRequest{
 			QueueUrl: "http://localhost/" + queueName,
@@ -502,7 +512,7 @@ func TestFDBStore_SendMessageBatch(t *testing.T) {
 
 	t.Run("sends a batch to a fifo queue with deduplication", func(t *testing.T) {
 		fifoQueueName := "test-batch-fifo-dedup.fifo"
-		err := store.CreateQueue(ctx, fifoQueueName, map[string]string{"FifoQueue": "true"}, nil)
+		_, err := store.CreateQueue(ctx, fifoQueueName, map[string]string{"FifoQueue": "true"}, nil)
 		require.NoError(t, err)
 
 		dedupID := "batch-dedup-1"
@@ -550,7 +560,7 @@ func TestFDBStore_SendMessageBatch(t *testing.T) {
 
 	t.Run("handles partial failures within a batch", func(t *testing.T) {
 		fifoQueueName := "test-batch-partial-fail.fifo"
-		err := store.CreateQueue(ctx, fifoQueueName, map[string]string{"FifoQueue": "true"}, nil)
+		_, err := store.CreateQueue(ctx, fifoQueueName, map[string]string{"FifoQueue": "true"}, nil)
 		require.NoError(t, err)
 
 		gID := "batch-group-2"
@@ -591,7 +601,7 @@ func TestFDBStore_FifoQueue_Fairness(t *testing.T) {
 	defer teardown()
 
 	queueName := "test-fifo-fairness.fifo"
-	err := store.CreateQueue(ctx, queueName, map[string]string{"FifoQueue": "true"}, nil)
+	_, err := store.CreateQueue(ctx, queueName, map[string]string{"FifoQueue": "true"}, nil)
 	require.NoError(t, err)
 
 	// Send many messages to group-a (the noisy neighbor)
@@ -698,7 +708,7 @@ func TestFDBStore_DeleteMessageBatch(t *testing.T) {
 
 	t.Run("successfully deletes a batch from a standard queue", func(t *testing.T) {
 		queueName := "std-delete-batch"
-		err := store.CreateQueue(ctx, queueName, nil, nil)
+		_, err := store.CreateQueue(ctx, queueName, nil, nil)
 		require.NoError(t, err)
 
 		// Send and receive two messages
@@ -728,7 +738,7 @@ func TestFDBStore_DeleteMessageBatch(t *testing.T) {
 
 	t.Run("handles partial success in a batch", func(t *testing.T) {
 		queueName := "std-delete-batch-partial"
-		err := store.CreateQueue(ctx, queueName, nil, nil)
+		_, err := store.CreateQueue(ctx, queueName, nil, nil)
 		require.NoError(t, err)
 
 		// Send and receive one message
@@ -768,7 +778,7 @@ func TestFDBStore_DeleteMessage(t *testing.T) {
 	defer teardown()
 
 	queueName := "test-delete-queue"
-	err := store.CreateQueue(ctx, queueName, nil, nil)
+	_, err := store.CreateQueue(ctx, queueName, nil, nil)
 	require.NoError(t, err)
 
 	// --- Sub-test: Successful Deletion ---
@@ -823,7 +833,7 @@ func TestFDBStore_DeleteMessage(t *testing.T) {
 
 	t.Run("Deleting from FIFO queue unlocks message group", func(t *testing.T) {
 		fifoQueueName := "fifo-delete-unlock.fifo"
-		err := store.CreateQueue(ctx, fifoQueueName, map[string]string{"FifoQueue": "true"}, nil)
+		_, err := store.CreateQueue(ctx, fifoQueueName, map[string]string{"FifoQueue": "true"}, nil)
 		require.NoError(t, err)
 
 		g1 := "group-to-unlock"
@@ -863,7 +873,7 @@ func TestFDBStore_ReceiveMessage(t *testing.T) {
 			store, teardown := setupTestDB(t)
 			defer teardown()
 			queueName := "std-empty"
-			err := store.CreateQueue(ctx, queueName, nil, nil)
+			_, err := store.CreateQueue(ctx, queueName, nil, nil)
 			require.NoError(t, err)
 
 			resp, err := store.ReceiveMessage(ctx, queueName, &models.ReceiveMessageRequest{MaxNumberOfMessages: 1})
@@ -876,7 +886,7 @@ func TestFDBStore_ReceiveMessage(t *testing.T) {
 			defer teardown()
 			queueName := "std-visibility"
 			// Use a short visibility timeout for the test
-			err := store.CreateQueue(ctx, queueName, map[string]string{"VisibilityTimeout": "1"}, nil)
+			_, err := store.CreateQueue(ctx, queueName, map[string]string{"VisibilityTimeout": "1"}, nil)
 			require.NoError(t, err)
 			_, err = store.SendMessage(ctx, queueName, &models.SendMessageRequest{MessageBody: "visible-test"})
 			require.NoError(t, err)
@@ -905,7 +915,7 @@ func TestFDBStore_ReceiveMessage(t *testing.T) {
 			store, teardown := setupTestDB(t)
 			defer teardown()
 			queueName := "std-long-poll"
-			err := store.CreateQueue(ctx, queueName, nil, nil)
+			_, err := store.CreateQueue(ctx, queueName, nil, nil)
 			require.NoError(t, err)
 
 			msgChan := make(chan *models.ReceiveMessageResponse)
@@ -937,7 +947,7 @@ func TestFDBStore_ReceiveMessage(t *testing.T) {
 			store, teardown := setupTestDB(t)
 			defer teardown()
 			queueName := "fifo-group-lock.fifo"
-			err := store.CreateQueue(ctx, queueName, map[string]string{"FifoQueue": "true"}, nil)
+			_, err := store.CreateQueue(ctx, queueName, map[string]string{"FifoQueue": "true"}, nil)
 			require.NoError(t, err)
 			g1, g2 := "group1", "group2"
 			_, err = store.SendMessage(ctx, queueName, &models.SendMessageRequest{MessageBody: "g1-msg1", MessageGroupId: &g1})
@@ -967,7 +977,7 @@ func TestFDBStore_ReceiveMessage(t *testing.T) {
 			store, teardown := setupTestDB(t)
 			defer teardown()
 			queueName := "fifo-dedup-recv.fifo"
-			err := store.CreateQueue(ctx, queueName, map[string]string{"FifoQueue": "true"}, nil)
+			_, err := store.CreateQueue(ctx, queueName, map[string]string{"FifoQueue": "true"}, nil)
 			require.NoError(t, err)
 			g1 := "group1"
 			_, err = store.SendMessage(ctx, queueName, &models.SendMessageRequest{MessageBody: "msg1", MessageGroupId: &g1})
@@ -1002,7 +1012,7 @@ func TestFDBStore_PurgeQueue(t *testing.T) {
 		tags := map[string]string{"Owner": "test"}
 
 		// 1. Create queue with attributes and tags
-		err := store.CreateQueue(ctx, queueName, attributes, tags)
+		_, err := store.CreateQueue(ctx, queueName, attributes, tags)
 		require.NoError(t, err)
 
 		// 2. Add some dummy message keys directly to FDB
@@ -1057,7 +1067,7 @@ func TestFDBStore_PurgeQueue(t *testing.T) {
 
 	t.Run("returns error if purged recently", func(t *testing.T) {
 		queueName := "queue-to-purge-twice"
-		err := store.CreateQueue(ctx, queueName, nil, nil)
+		_, err := store.CreateQueue(ctx, queueName, nil, nil)
 		require.NoError(t, err)
 
 		// First purge should succeed
@@ -1071,7 +1081,7 @@ func TestFDBStore_PurgeQueue(t *testing.T) {
 
 	t.Run("purges a FIFO queue successfully", func(t *testing.T) {
 		queueName := "fifo-queue-to-purge.fifo"
-		err := store.CreateQueue(ctx, queueName, map[string]string{"FifoQueue": "true"}, nil)
+		_, err := store.CreateQueue(ctx, queueName, map[string]string{"FifoQueue": "true"}, nil)
 		require.NoError(t, err)
 		g1 := "group1"
 		_, err = store.SendMessage(ctx, queueName, &models.SendMessageRequest{MessageBody: "msg1", MessageGroupId: &g1})
@@ -1095,7 +1105,7 @@ func TestFDBStore_DeleteRecreateIsolation(t *testing.T) {
 
 	queueName := "queue-to-delete-and-recreate"
 	// 1. Create queue and add a message
-	err := store.CreateQueue(ctx, queueName, nil, nil)
+	_, err := store.CreateQueue(ctx, queueName, nil, nil)
 	require.NoError(t, err)
 	_, err = store.SendMessage(ctx, queueName, &models.SendMessageRequest{MessageBody: "this should be deleted"})
 	require.NoError(t, err)
@@ -1105,7 +1115,7 @@ func TestFDBStore_DeleteRecreateIsolation(t *testing.T) {
 	require.NoError(t, err)
 
 	// 3. Re-create the queue with the same name
-	err = store.CreateQueue(ctx, queueName, nil, nil)
+	_, err = store.CreateQueue(ctx, queueName, nil, nil)
 	require.NoError(t, err)
 
 	// 4. Try to receive a message - should be empty
@@ -1122,7 +1132,7 @@ func TestFDBStore_SendMessage(t *testing.T) {
 
 	t.Run("sends a simple message successfully", func(t *testing.T) {
 		queueName := "test-send-simple"
-		err := store.CreateQueue(ctx, queueName, nil, nil)
+		_, err := store.CreateQueue(ctx, queueName, nil, nil)
 		require.NoError(t, err)
 
 		msgRequest := &models.SendMessageRequest{
@@ -1145,7 +1155,7 @@ func TestFDBStore_SendMessage(t *testing.T) {
 
 	t.Run("sends a message with attributes and verifies hash", func(t *testing.T) {
 		queueName := "test-send-with-attrs"
-		err := store.CreateQueue(ctx, queueName, nil, nil)
+		_, err := store.CreateQueue(ctx, queueName, nil, nil)
 		require.NoError(t, err)
 
 		stringValue := "my_attribute_value_1"
@@ -1169,7 +1179,7 @@ func TestFDBStore_SendMessage(t *testing.T) {
 
 	t.Run("sends a message with delay", func(t *testing.T) {
 		queueName := "test-send-with-delay"
-		err := store.CreateQueue(ctx, queueName, nil, nil)
+		_, err := store.CreateQueue(ctx, queueName, nil, nil)
 		require.NoError(t, err)
 		delaySeconds := int32(10)
 		msgRequest := &models.SendMessageRequest{
@@ -1190,7 +1200,7 @@ func TestFDBStore_SendMessage(t *testing.T) {
 
 	t.Run("sends a message to a fifo queue and checks deduplication", func(t *testing.T) {
 		fifoQueueName := "test-send-fifo-dedup.fifo"
-		err := store.CreateQueue(ctx, fifoQueueName, map[string]string{"FifoQueue": "true"}, nil)
+		_, err := store.CreateQueue(ctx, fifoQueueName, map[string]string{"FifoQueue": "true"}, nil)
 		require.NoError(t, err)
 
 		dedupID := "dedup-id-123"
@@ -1229,7 +1239,7 @@ func TestFDBStore_QueueTags(t *testing.T) {
 	defer teardown()
 
 	queueName := "test-tags-queue"
-	err := store.CreateQueue(ctx, queueName, nil, nil)
+	_, err := store.CreateQueue(ctx, queueName, nil, nil)
 	require.NoError(t, err)
 
 	// 1. List tags on a new queue, should be empty
@@ -1274,7 +1284,7 @@ func TestFDBStore_SetQueueAttributes(t *testing.T) {
 	initialAttrs := map[string]string{"VisibilityTimeout": "30"}
 
 	// Create the queue with initial attributes
-	err := store.CreateQueue(ctx, queueName, initialAttrs, nil)
+	_, err := store.CreateQueue(ctx, queueName, initialAttrs, nil)
 	require.NoError(t, err)
 
 	t.Run("sets attributes on an existing queue", func(t *testing.T) {
@@ -1308,7 +1318,7 @@ func TestFDBStore_GetQueueAttributes(t *testing.T) {
 			"VisibilityTimeout":      "120",
 			"MessageRetentionPeriod": "86400",
 		}
-		err := store.CreateQueue(ctx, queueName, attributes, nil)
+		_, err := store.CreateQueue(ctx, queueName, attributes, nil)
 		require.NoError(t, err)
 
 		storedAttrs, err := store.GetQueueAttributes(ctx, queueName)
@@ -1318,7 +1328,7 @@ func TestFDBStore_GetQueueAttributes(t *testing.T) {
 
 	t.Run("returns empty map for queue with no attributes", func(t *testing.T) {
 		queueName := "test-queue-no-attrs"
-		err := store.CreateQueue(ctx, queueName, nil, nil)
+		_, err := store.CreateQueue(ctx, queueName, nil, nil)
 		require.NoError(t, err)
 
 		storedAttrs, err := store.GetQueueAttributes(ctx, queueName)

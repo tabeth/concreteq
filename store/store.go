@@ -14,10 +14,6 @@ import (
 // This is more robust than checking for error strings. For example, handlers can use
 // `errors.Is(err, store.ErrQueueDoesNotExist)` to implement specific logic for that case.
 var (
-	// ErrQueueAlreadyExists is returned when trying to create a queue that already exists.
-	// This maps to the SQS `QueueAlreadyExists` error.
-	ErrQueueAlreadyExists = errors.New("queue already exists")
-
 	// ErrQueueDoesNotExist is returned when trying to operate on a queue that does not exist.
 	// This maps to the SQS `QueueDoesNotExist` error.
 	ErrQueueDoesNotExist = errors.New("queue does not exist")
@@ -44,7 +40,8 @@ type Store interface {
 	// --- Queue Management ---
 
 	// CreateQueue creates a new queue with the given name, attributes, and tags.
-	CreateQueue(ctx context.Context, name string, attributes map[string]string, tags map[string]string) error
+	// If the queue already exists, it returns the existing attributes for idempotency checks.
+	CreateQueue(ctx context.Context, name string, attributes map[string]string, tags map[string]string) (existingAttributes map[string]string, err error)
 	// DeleteQueue removes a queue and all of its messages.
 	DeleteQueue(ctx context.Context, name string) error
 	// ListQueues returns a list of queue names, supporting pagination and prefix filtering.
@@ -73,7 +70,7 @@ type Store interface {
 	// ChangeMessageVisibility changes the visibility timeout of a specific message.
 	ChangeMessageVisibility(ctx context.Context, queueName string, receiptHandle string, visibilityTimeout int) error
 	// ChangeMessageVisibilityBatch changes the visibility timeout for a batch of messages.
-	ChangeMessageVisibilityBatch(ctx context.Context, queueName string, entries map[string]int) error
+	ChangeMessageVisibilityBatch(ctx context.Context, queueName string, entries []models.ChangeMessageVisibilityBatchRequestEntry) (*models.ChangeMessageVisibilityBatchResponse, error)
 
 	// --- Permissions --- (Not yet implemented)
 

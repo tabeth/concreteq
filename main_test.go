@@ -172,14 +172,16 @@ func TestIntegration_CreateQueue(t *testing.T) {
 			},
 		},
 		{
-			name: "Queue Already Exists",
+			name: "QueueNameExists with different attributes",
 			setup: func(t *testing.T) {
-				err := app.store.CreateQueue(context.Background(), "my-existing-queue", nil, nil)
+				// Pre-create a queue with a specific attribute
+				_, err := app.store.CreateQueue(context.Background(), "my-existing-queue", map[string]string{"VisibilityTimeout": "50"}, nil)
 				require.NoError(t, err)
 			},
-			inputBody:          `{"QueueName": "my-existing-queue"}`,
-			expectedStatusCode: http.StatusConflict,
-			expectedBody:       `{"__type":"QueueAlreadyExists", "message":"Queue already exists"}`,
+			// Attempt to create the same queue with a *different* attribute value
+			inputBody:          `{"QueueName": "my-existing-queue", "Attributes": {"VisibilityTimeout": "100"}}`,
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       `{"__type":"QueueNameExists", "message":"A queue with this name already exists with different attributes."}`,
 		},
 		{
 			name:               "Invalid Queue Name",
@@ -334,7 +336,7 @@ func TestIntegration_GetQueueAttributes(t *testing.T) {
 		"VisibilityTimeout":      "123",
 		"MessageRetentionPeriod": "456",
 	}
-	err := app.store.CreateQueue(ctx, queueName, attributes, nil)
+	_, err := app.store.CreateQueue(ctx, queueName, attributes, nil)
 	require.NoError(t, err)
 
 	t.Run("Get All Attributes", func(t *testing.T) {
@@ -357,7 +359,10 @@ func TestIntegration_GetQueueAttributes(t *testing.T) {
 			"VisibilityTimeout":             "123",
 			"MessageRetentionPeriod":        "456",
 			"QueueArn":                      fmt.Sprintf("arn:aws:sqs:us-east-1:123456789012:%s", queueName),
-			"ReceiveMessageWaitTimeSeconds": "0", // Default value
+			"ReceiveMessageWaitTimeSeconds": "0",
+			"DelaySeconds":                  "0",
+			"MaximumMessageSize":            "262144",
+			"KmsDataKeyReusePeriodSeconds":  "300",
 		}
 		assert.Equal(t, expectedAttrs, respBody.Attributes)
 	})
@@ -411,7 +416,7 @@ func TestIntegration_ListDeletePurgeQueues(t *testing.T) {
 	ctx := context.Background()
 	initialQueues := []string{"list-queue-a", "list-queue-b", "prefix-queue-1", "prefix-queue-2", "purge-queue-1"}
 	for _, qName := range initialQueues {
-		err := app.store.CreateQueue(ctx, qName, nil, nil)
+		_, err := app.store.CreateQueue(ctx, qName, nil, nil)
 		require.NoError(t, err)
 	}
 
@@ -574,9 +579,9 @@ func TestIntegration_SendMessageBatch(t *testing.T) {
 	stdQueueURL := fmt.Sprintf("%s/queues/%s", app.baseURL, stdQueueName)
 	fifoQueueURL := fmt.Sprintf("%s/queues/%s", app.baseURL, fifoQueueName)
 
-	err := app.store.CreateQueue(ctx, stdQueueName, nil, nil)
+	_, err := app.store.CreateQueue(ctx, stdQueueName, nil, nil)
 	require.NoError(t, err)
-	err = app.store.CreateQueue(ctx, fifoQueueName, map[string]string{"FifoQueue": "true"}, nil)
+	_, err = app.store.CreateQueue(ctx, fifoQueueName, map[string]string{"FifoQueue": "true"}, nil)
 	require.NoError(t, err)
 
 	tests := []struct {
@@ -809,7 +814,7 @@ func TestIntegration_ChangeMessageVisibility(t *testing.T) {
 	queueURL := fmt.Sprintf("%s/queues/%s", app.baseURL, queueName)
 
 	// 1. Create a queue
-	err := app.store.CreateQueue(ctx, queueName, nil, nil)
+	_, err := app.store.CreateQueue(ctx, queueName, nil, nil)
 	require.NoError(t, err)
 
 	// 2. Send a message
@@ -855,7 +860,7 @@ func TestIntegration_ReceiveMessage_Validation(t *testing.T) {
 	ctx := context.Background()
 
 	queueName := "test-receive-validation"
-	err := app.store.CreateQueue(ctx, queueName, nil, nil)
+	_, err := app.store.CreateQueue(ctx, queueName, nil, nil)
 	require.NoError(t, err)
 
 	t.Run("Invalid ReceiveRequestAttemptId", func(t *testing.T) {
@@ -942,7 +947,7 @@ func TestIntegration_DeleteMessageBatch(t *testing.T) {
 	queueURL := fmt.Sprintf("%s/queues/%s", app.baseURL, queueName)
 
 	// Setup: Create a queue
-	err := app.store.CreateQueue(ctx, queueName, nil, nil)
+	_, err := app.store.CreateQueue(ctx, queueName, nil, nil)
 	require.NoError(t, err)
 
 	t.Run("Successful Batch Deletion", func(t *testing.T) {
@@ -1021,6 +1026,27 @@ func TestIntegration_DeleteMessageBatch(t *testing.T) {
 		assert.Equal(t, "valid_msg", delResp.Successful[0].Id)
 		assert.Equal(t, "invalid_msg", delResp.Failed[0].Id)
 	})
+
+	t.Run("Invalid Batch Entry Id", func(t *testing.T) {
+		delReq := models.DeleteMessageBatchRequest{
+			QueueUrl: queueURL,
+			Entries: []models.DeleteMessageBatchRequestEntry{
+				{Id: "invalid-id!", ReceiptHandle: "some-handle"},
+			},
+		}
+		bodyBytes, _ := json.Marshal(delReq)
+		req, _ := http.NewRequest("POST", app.baseURL+"/", bytes.NewBuffer(bodyBytes))
+		req.Header.Set("X-Amz-Target", "AmazonSQS.DeleteMessageBatch")
+		httpResp, err := http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		defer httpResp.Body.Close()
+
+		assert.Equal(t, http.StatusBadRequest, httpResp.StatusCode)
+		var errResp models.ErrorResponse
+		err = json.NewDecoder(httpResp.Body).Decode(&errResp)
+		require.NoError(t, err)
+		assert.Equal(t, "InvalidBatchEntryId", errResp.Type)
+	})
 }
 
 func TestIntegration_DeleteMessage(t *testing.T) {
@@ -1032,7 +1058,7 @@ func TestIntegration_DeleteMessage(t *testing.T) {
 	queueURL := fmt.Sprintf("%s/queues/%s", app.baseURL, queueName)
 
 	// Setup: Create a queue and a message to delete
-	err := app.store.CreateQueue(ctx, queueName, nil, nil)
+	_, err := app.store.CreateQueue(ctx, queueName, nil, nil)
 	require.NoError(t, err)
 	_, err = app.store.SendMessage(ctx, queueName, &models.SendMessageRequest{MessageBody: "a message"})
 	require.NoError(t, err)
@@ -1110,9 +1136,9 @@ func TestIntegration_Messaging(t *testing.T) {
 	fifoQueueName := "messaging-queue-fifo.fifo"
 
 	// --- Setup: Create queues for testing ---
-	err := app.store.CreateQueue(ctx, stdQueueName, nil, nil)
+	_, err := app.store.CreateQueue(ctx, stdQueueName, nil, nil)
 	require.NoError(t, err)
-	err = app.store.CreateQueue(ctx, fifoQueueName, map[string]string{"FifoQueue": "true"}, nil)
+	_, err = app.store.CreateQueue(ctx, fifoQueueName, map[string]string{"FifoQueue": "true"}, nil)
 	require.NoError(t, err)
 
 	t.Run("SendAndReceiveStandard", func(t *testing.T) {
@@ -1193,7 +1219,7 @@ func TestIntegration_Messaging(t *testing.T) {
 			return nil, nil
 		})
 		require.NoError(t, err)
-		err = app.store.CreateQueue(ctx, fifoQueueName, map[string]string{"FifoQueue": "true"}, nil)
+		_, err = app.store.CreateQueue(ctx, fifoQueueName, map[string]string{"FifoQueue": "true"}, nil)
 		require.NoError(t, err)
 
 		// Send messages to the same group
@@ -1249,7 +1275,7 @@ func TestIntegration_Messaging(t *testing.T) {
 			return nil, nil
 		})
 		require.NoError(t, err)
-		err = app.store.CreateQueue(ctx, fifoQueueName, map[string]string{"FifoQueue": "true"}, nil)
+		_, err = app.store.CreateQueue(ctx, fifoQueueName, map[string]string{"FifoQueue": "true"}, nil)
 		require.NoError(t, err)
 
 		// Send a message with a deduplication ID
@@ -1311,9 +1337,9 @@ func TestIntegration_Messaging(t *testing.T) {
 			return nil, nil
 		})
 		require.NoError(t, err)
-		err = app.store.CreateQueue(ctx, stdQueueName, nil, nil)
+		_, err = app.store.CreateQueue(ctx, stdQueueName, nil, nil)
 		require.NoError(t, err)
-		err = app.store.CreateQueue(ctx, fifoQueueName, map[string]string{"FifoQueue": "true"}, nil)
+		_, err = app.store.CreateQueue(ctx, fifoQueueName, map[string]string{"FifoQueue": "true"}, nil)
 		require.NoError(t, err)
 
 		t.Run("AtLeastOnceDelivery (Visibility Timeout)", func(t *testing.T) {
@@ -1369,7 +1395,7 @@ func TestIntegration_Messaging(t *testing.T) {
 
 		t.Run("Message Delay", func(t *testing.T) {
 			delayQueueName := "delay-queue"
-			err := app.store.CreateQueue(ctx, delayQueueName, nil, nil)
+			_, err := app.store.CreateQueue(ctx, delayQueueName, nil, nil)
 			require.NoError(t, err)
 
 			// Send a message with a 2-second delay
