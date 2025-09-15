@@ -44,6 +44,21 @@ func TestFDBStore_Unimplemented(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+func TestFDBStore_Unimplemented_Stubs(t *testing.T) {
+	ctx := context.Background()
+	store, teardown := setupTestDB(t)
+	defer teardown()
+
+	_, err := store.ListDeadLetterSourceQueues(ctx, "q")
+	assert.NoError(t, err)
+	_, err = store.StartMessageMoveTask(ctx, "s", "d")
+	assert.NoError(t, err)
+	err = store.CancelMessageMoveTask(ctx, "t")
+	assert.NoError(t, err)
+	_, err = store.ListMessageMoveTasks(ctx, "s")
+	assert.NoError(t, err)
+}
+
 func TestHashSystemAttributes(t *testing.T) {
 	sv := "value"
 	attrs := map[string]models.MessageSystemAttributeValue{
@@ -1273,6 +1288,38 @@ func TestFDBStore_QueueTags(t *testing.T) {
 	assert.ErrorIs(t, err, ErrQueueDoesNotExist)
 	_, err = store.ListQueueTags(ctx, "non-existent-queue")
 	assert.ErrorIs(t, err, ErrQueueDoesNotExist)
+}
+
+func TestFDBStore_UntagQueue_Coverage(t *testing.T) {
+	ctx := context.Background()
+	store, teardown := setupTestDB(t)
+	defer teardown()
+
+	t.Run("Untagging a queue with no tags", func(t *testing.T) {
+		queueName := "test-tags-queue-no-tags"
+		_, err := store.CreateQueue(ctx, queueName, nil, nil)
+		require.NoError(t, err)
+
+		err = store.UntagQueue(ctx, queueName, []string{"any-key"})
+		assert.NoError(t, err)
+	})
+
+	t.Run("Untagging with corrupt tags", func(t *testing.T) {
+		queueName := "test-corrupt-tags"
+		_, err := store.CreateQueue(ctx, queueName, nil, nil)
+		require.NoError(t, err)
+
+		// Manually insert corrupt tag data
+		_, err = store.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
+			qDir, _ := store.dir.Open(tr, []string{queueName}, nil)
+			tr.Set(qDir.Pack(tuple.Tuple{"tags"}), []byte("not-json"))
+			return nil, nil
+		})
+		require.NoError(t, err)
+
+		err = store.UntagQueue(ctx, queueName, []string{"any-key"})
+		assert.Error(t, err)
+	})
 }
 
 func TestFDBStore_SetQueueAttributes(t *testing.T) {

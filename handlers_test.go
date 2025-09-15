@@ -496,6 +496,22 @@ func TestChangeMessageVisibilityBatchHandler(t *testing.T) {
 			expectedStatusCode: http.StatusOK,
 			expectedBody:       `{"Successful":[],"Failed":[{"Id":"1","Code":"QueueDoesNotExist","Message":"queue does not exist","SenderFault":false}]}`,
 		},
+		{
+			name:      "Invalid JSON",
+			inputBody: `{"QueueUrl": "http://localhost/queues/my-queue", "Entries": [}`,
+			mockSetup: func(ms *MockStore) {},
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       `{"__type":"InvalidRequest", "message":"The request is not a valid JSON."}`,
+		},
+		{
+			name:      "Store returns generic error",
+			inputBody: `{"QueueUrl": "http://localhost/queues/my-queue", "Entries": [{"Id": "1", "ReceiptHandle": "h1"}]}`,
+			mockSetup: func(ms *MockStore) {
+				ms.On("ChangeMessageVisibilityBatch", mock.Anything, "my-queue", mock.AnythingOfType("[]models.ChangeMessageVisibilityBatchRequestEntry")).Return(nil, errors.New("generic error"))
+			},
+			expectedStatusCode: http.StatusOK,
+			expectedBody:       `{"Successful":[],"Failed":[{"Id":"1","Code":"InternalError","Message":"generic error","SenderFault":false}]}`,
+		},
 	}
 
 	for _, tc := range tests {
