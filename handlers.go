@@ -1221,13 +1221,96 @@ func (app *App) RemovePermissionHandler(w http.ResponseWriter, r *http.Request) 
 	app.sendErrorResponse(w, "NotImplemented", "The requested action is not implemented.", http.StatusNotImplemented)
 }
 func (app *App) ListQueueTagsHandler(w http.ResponseWriter, r *http.Request) {
-	app.sendErrorResponse(w, "NotImplemented", "The requested action is not implemented.", http.StatusNotImplemented)
+	var req models.ListQueueTagsRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		app.sendErrorResponse(w, "InvalidRequest", "The request is not a valid JSON.", http.StatusBadRequest)
+		return
+	}
+
+	if req.QueueUrl == "" {
+		app.sendErrorResponse(w, "MissingParameter", "The request must contain a QueueUrl.", http.StatusBadRequest)
+		return
+	}
+	queueName := path.Base(req.QueueUrl)
+
+	tags, err := app.Store.ListQueueTags(r.Context(), queueName)
+	if err != nil {
+		if errors.Is(err, store.ErrQueueDoesNotExist) {
+			app.sendErrorResponse(w, "QueueDoesNotExist", "The specified queue does not exist.", http.StatusBadRequest)
+			return
+		}
+		app.sendErrorResponse(w, "InternalFailure", "Failed to list queue tags", http.StatusInternalServerError)
+		return
+	}
+
+	resp := models.ListQueueTagsResponse{
+		Tags: tags,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
 }
+
 func (app *App) TagQueueHandler(w http.ResponseWriter, r *http.Request) {
-	app.sendErrorResponse(w, "NotImplemented", "The requested action is not implemented.", http.StatusNotImplemented)
+	var req models.TagQueueRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		app.sendErrorResponse(w, "InvalidRequest", "The request is not a valid JSON.", http.StatusBadRequest)
+		return
+	}
+
+	if req.QueueUrl == "" {
+		app.sendErrorResponse(w, "MissingParameter", "The request must contain a QueueUrl.", http.StatusBadRequest)
+		return
+	}
+	if len(req.Tags) == 0 {
+		app.sendErrorResponse(w, "MissingParameter", "The request must contain Tags.", http.StatusBadRequest)
+		return
+	}
+
+	queueName := path.Base(req.QueueUrl)
+
+	err := app.Store.TagQueue(r.Context(), queueName, req.Tags)
+	if err != nil {
+		if errors.Is(err, store.ErrQueueDoesNotExist) {
+			app.sendErrorResponse(w, "QueueDoesNotExist", "The specified queue does not exist.", http.StatusBadRequest)
+			return
+		}
+		app.sendErrorResponse(w, "InternalFailure", "Failed to tag queue", http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
 }
+
 func (app *App) UntagQueueHandler(w http.ResponseWriter, r *http.Request) {
-	app.sendErrorResponse(w, "NotImplemented", "The requested action is not implemented.", http.StatusNotImplemented)
+	var req models.UntagQueueRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		app.sendErrorResponse(w, "InvalidRequest", "The request is not a valid JSON.", http.StatusBadRequest)
+		return
+	}
+
+	if req.QueueUrl == "" {
+		app.sendErrorResponse(w, "MissingParameter", "The request must contain a QueueUrl.", http.StatusBadRequest)
+		return
+	}
+	if len(req.TagKeys) == 0 {
+		app.sendErrorResponse(w, "MissingParameter", "The request must contain TagKeys.", http.StatusBadRequest)
+		return
+	}
+
+	queueName := path.Base(req.QueueUrl)
+
+	err := app.Store.UntagQueue(r.Context(), queueName, req.TagKeys)
+	if err != nil {
+		if errors.Is(err, store.ErrQueueDoesNotExist) {
+			app.sendErrorResponse(w, "QueueDoesNotExist", "The specified queue does not exist.", http.StatusBadRequest)
+			return
+		}
+		app.sendErrorResponse(w, "InternalFailure", "Failed to untag queue", http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
 }
 func (app *App) ListDeadLetterSourceQueuesHandler(w http.ResponseWriter, r *http.Request) {
 	app.sendErrorResponse(w, "NotImplemented", "The requested action is not implemented.", http.StatusNotImplemented)
