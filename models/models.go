@@ -283,3 +283,31 @@ type ChangeMessageVisibilityBatchResponse struct {
 type ChangeMessageVisibilityBatchResultEntry struct {
 	Id string `json:"Id"`
 }
+
+// ListQueueTagsRequest defines the parameters for the SQS ListQueueTags action.
+type ListQueueTagsRequest struct {
+	QueueUrl string `json:"QueueUrl"`
+}
+
+// ListQueueTagsResponse defines the structure for the SQS ListQueueTags action's output.
+type ListQueueTagsResponse struct {
+	Tags map[string]string `json:"Tags"`
+}
+
+// TagQueueRequest defines the parameters for the SQS TagQueue action.
+type TagQueueRequest struct {
+	QueueUrl string            `json:"QueueUrl"`
+	Tags     map[string]string `json:"Tags"`
+}
+
+// TagQueueResponse defines the structure for the SQS TagQueue action's output.
+type TagQueueResponse struct{}
+
+// UntagQueueRequest defines the parameters for the SQS UntagQueue action.
+type UntagQueueRequest struct {
+	QueueUrl string   `json:"QueueUrl"`
+	TagKeys  []string `json:"TagKeys"`
+}
+
+// UntagQueueResponse defines the structure for the SQS UntagQueue action's output.
+type UntagQueueResponse struct{}
