@@ -1233,6 +1233,147 @@ func TestFDBStore_SendMessage(t *testing.T) {
 	})
 }
 
+func TestFDBStore_ContentBasedDeduplication(t *testing.T) {
+	ctx := context.Background()
+	store, teardown := setupTestDB(t)
+	defer teardown()
+
+	fifoQueueName := "test-content-dedup.fifo"
+	_, err := store.CreateQueue(ctx, fifoQueueName, map[string]string{
+		"FifoQueue":                 "true",
+		"ContentBasedDeduplication": "true",
+	}, nil)
+	require.NoError(t, err)
+
+	gID := "group1"
+	msgRequest1 := &models.SendMessageRequest{
+		MessageBody:    "hello content dedup",
+		MessageGroupId: &gID,
+		QueueUrl:       "http://localhost:8080/queues/" + fifoQueueName,
+	}
+
+	// 1. Send first message without Deduplication ID
+	resp1, err := store.SendMessage(ctx, fifoQueueName, msgRequest1)
+	assert.NoError(t, err)
+	require.NotNil(t, resp1)
+
+	// 2. Send same message again without Deduplication ID
+	// Should be deduplicated based on content hash
+	msgRequest2 := &models.SendMessageRequest{
+		MessageBody:    "hello content dedup",
+		MessageGroupId: &gID,
+		QueueUrl:       "http://localhost:8080/queues/" + fifoQueueName,
+	}
+	resp2, err := store.SendMessage(ctx, fifoQueueName, msgRequest2)
+	assert.NoError(t, err)
+	require.NotNil(t, resp2)
+
+	assert.Equal(t, resp1.MessageId, resp2.MessageId)
+	assert.Equal(t, resp1.SequenceNumber, resp2.SequenceNumber)
+
+	// 3. Send different message without ID
+	msgRequest3 := &models.SendMessageRequest{
+		MessageBody:    "hello different content",
+		MessageGroupId: &gID,
+		QueueUrl:       "http://localhost:8080/queues/" + fifoQueueName,
+	}
+	resp3, err := store.SendMessage(ctx, fifoQueueName, msgRequest3)
+	assert.NoError(t, err)
+	assert.NotEqual(t, resp1.MessageId, resp3.MessageId)
+
+	// 4. Batch Send
+	batchRequest := &models.SendMessageBatchRequest{
+		QueueUrl: "http://localhost/" + fifoQueueName,
+		Entries: []models.SendMessageBatchRequestEntry{
+			{Id: "1", MessageBody: "batch content 1", MessageGroupId: &gID},
+			{Id: "2", MessageBody: "batch content 1", MessageGroupId: &gID}, // Same content, should dedup
+			{Id: "3", MessageBody: "batch content 2", MessageGroupId: &gID},
+		},
+	}
+	batchResp, err := store.SendMessageBatch(ctx, fifoQueueName, batchRequest)
+	require.NoError(t, err)
+	require.Len(t, batchResp.Successful, 3)
+
+	assert.Equal(t, batchResp.Successful[0].MessageId, batchResp.Successful[1].MessageId)
+	assert.NotEqual(t, batchResp.Successful[0].MessageId, batchResp.Successful[2].MessageId)
+}
+
+func TestFDBStore_RedrivePolicy(t *testing.T) {
+	ctx := context.Background()
+	store, teardown := setupTestDB(t)
+	defer teardown()
+
+	t.Run("Standard Queue DLQ", func(t *testing.T) {
+		dlqName := "test-dlq"
+		_, err := store.CreateQueue(ctx, dlqName, nil, nil)
+		require.NoError(t, err)
+
+		srcQueueName := "test-src-queue"
+		redrivePolicy := fmt.Sprintf(`{"deadLetterTargetArn":"arn:aws:sqs:us-east-1:123456789012:%s","maxReceiveCount":"1"}`, dlqName)
+		_, err = store.CreateQueue(ctx, srcQueueName, map[string]string{"RedrivePolicy": redrivePolicy}, nil)
+		require.NoError(t, err)
+
+		// Send message to source
+		_, err = store.SendMessage(ctx, srcQueueName, &models.SendMessageRequest{MessageBody: "msg1"})
+		require.NoError(t, err)
+
+		// 1. Receive message first time (count = 1). Should be received.
+		resp1, err := store.ReceiveMessage(ctx, srcQueueName, &models.ReceiveMessageRequest{MaxNumberOfMessages: 1, VisibilityTimeout: 1, AttributeNames: []string{"ApproximateReceiveCount"}})
+		require.NoError(t, err)
+		require.Len(t, resp1.Messages, 1)
+		assert.Equal(t, "1", resp1.Messages[0].Attributes["ApproximateReceiveCount"])
+
+		time.Sleep(2 * time.Second)
+
+		// 2. Receive message second time (count = 2). Should be moved to DLQ.
+		resp2, err := store.ReceiveMessage(ctx, srcQueueName, &models.ReceiveMessageRequest{MaxNumberOfMessages: 1})
+		require.NoError(t, err)
+		assert.Len(t, resp2.Messages, 0)
+
+		// 3. Check DLQ
+		respDLQ, err := store.ReceiveMessage(ctx, dlqName, &models.ReceiveMessageRequest{MaxNumberOfMessages: 1, AttributeNames: []string{"ApproximateReceiveCount"}})
+		require.NoError(t, err)
+		require.Len(t, respDLQ.Messages, 1)
+		assert.Equal(t, "msg1", respDLQ.Messages[0].Body)
+		assert.Equal(t, "3", respDLQ.Messages[0].Attributes["ApproximateReceiveCount"])
+	})
+
+	t.Run("FIFO Queue DLQ", func(t *testing.T) {
+		dlqName := "test-fifo-dlq.fifo"
+		_, err := store.CreateQueue(ctx, dlqName, map[string]string{"FifoQueue": "true"}, nil)
+		require.NoError(t, err)
+
+		srcQueueName := "test-src-fifo.fifo"
+		redrivePolicy := fmt.Sprintf(`{"deadLetterTargetArn":"arn:aws:sqs:us-east-1:123456789012:%s","maxReceiveCount":"1"}`, dlqName)
+		_, err = store.CreateQueue(ctx, srcQueueName, map[string]string{"FifoQueue": "true", "RedrivePolicy": redrivePolicy}, nil)
+		require.NoError(t, err)
+
+		gID := "g1"
+		_, err = store.SendMessage(ctx, srcQueueName, &models.SendMessageRequest{MessageBody: "msg-fifo", MessageGroupId: &gID})
+		require.NoError(t, err)
+
+		// 1. Receive (count -> 1)
+		resp1, err := store.ReceiveMessage(ctx, srcQueueName, &models.ReceiveMessageRequest{MaxNumberOfMessages: 1, VisibilityTimeout: 1, AttributeNames: []string{"ApproximateReceiveCount"}})
+		require.NoError(t, err)
+		require.Len(t, resp1.Messages, 1)
+		assert.Equal(t, "1", resp1.Messages[0].Attributes["ApproximateReceiveCount"])
+
+		time.Sleep(2 * time.Second)
+
+		// 2. Receive again (count -> 2). Should move to DLQ.
+		resp2, err := store.ReceiveMessage(ctx, srcQueueName, &models.ReceiveMessageRequest{MaxNumberOfMessages: 1})
+		require.NoError(t, err)
+		assert.Len(t, resp2.Messages, 0)
+
+		// 3. Check DLQ
+		respDLQ, err := store.ReceiveMessage(ctx, dlqName, &models.ReceiveMessageRequest{MaxNumberOfMessages: 1, AttributeNames: []string{"ApproximateReceiveCount"}})
+		require.NoError(t, err)
+		require.Len(t, respDLQ.Messages, 1)
+		assert.Equal(t, "msg-fifo", respDLQ.Messages[0].Body)
+		assert.Equal(t, "3", respDLQ.Messages[0].Attributes["ApproximateReceiveCount"])
+	})
+}
+
 func TestFDBStore_QueueTags(t *testing.T) {
 	ctx := context.Background()
 	store, teardown := setupTestDB(t)
