@@ -311,3 +311,54 @@ type UntagQueueRequest struct {
 
 // UntagQueueResponse defines the structure for the SQS UntagQueue action's output.
 type UntagQueueResponse struct{}
+
+// StartMessageMoveTaskRequest defines the parameters for the SQS StartMessageMoveTask action.
+type StartMessageMoveTaskRequest struct {
+	SourceArn      string `json:"SourceArn"`
+	DestinationArn string `json:"DestinationArn,omitempty"`
+	MaxNumberOfMessagesPerSecond int `json:"MaxNumberOfMessagesPerSecond,omitempty"`
+}
+
+// StartMessageMoveTaskResponse defines the structure for the SQS StartMessageMoveTask action's output.
+type StartMessageMoveTaskResponse struct {
+	TaskHandle string `json:"TaskHandle"`
+}
+
+// CancelMessageMoveTaskRequest defines the parameters for the SQS CancelMessageMoveTask action.
+type CancelMessageMoveTaskRequest struct {
+	TaskHandle string `json:"TaskHandle"`
+}
+
+// CancelMessageMoveTaskResponse defines the structure for the SQS CancelMessageMoveTask action's output.
+type CancelMessageMoveTaskResponse struct {
+	ApproximateNumberOfMessagesMoved int64 `json:"ApproximateNumberOfMessagesMoved"`
+	ApproximateNumberOfMessagesToMove int64 `json:"ApproximateNumberOfMessagesToMove"`
+	FailureReason string `json:"FailureReason,omitempty"`
+	SourceArn string `json:"SourceArn"`
+	Status string `json:"Status"`
+	TaskHandle string `json:"TaskHandle"`
+}
+
+// ListMessageMoveTasksRequest defines the parameters for the SQS ListMessageMoveTasks action.
+type ListMessageMoveTasksRequest struct {
+	SourceArn string `json:"SourceArn"`
+	MaxResults int `json:"MaxResults,omitempty"`
+}
+
+// ListMessageMoveTasksResultEntry represents a single task in the list response.
+type ListMessageMoveTasksResultEntry struct {
+	ApproximateNumberOfMessagesMoved int64 `json:"ApproximateNumberOfMessagesMoved"`
+	ApproximateNumberOfMessagesToMove int64 `json:"ApproximateNumberOfMessagesToMove"`
+	DestinationArn string `json:"DestinationArn"`
+	FailureReason string `json:"FailureReason,omitempty"`
+	MaxNumberOfMessagesPerSecond int `json:"MaxNumberOfMessagesPerSecond,omitempty"`
+	SourceArn string `json:"SourceArn"`
+	StartedTimestamp int64 `json:"StartedTimestamp"`
+	Status string `json:"Status"`
+	TaskHandle string `json:"TaskHandle"`
+}
+
+// ListMessageMoveTasksResponse defines the structure for the SQS ListMessageMoveTasks action's output.
+type ListMessageMoveTasksResponse struct {
+	Results []ListMessageMoveTasksResultEntry `json:"Results"`
+}

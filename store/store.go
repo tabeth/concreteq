@@ -100,5 +100,5 @@ type Store interface {
 	// CancelMessageMoveTask cancels a message move task.
 	CancelMessageMoveTask(ctx context.Context, taskHandle string) error
 	// ListMessageMoveTasks lists the message move tasks for a specific source queue.
-	ListMessageMoveTasks(ctx context.Context, sourceArn string) ([]string, error)
+	ListMessageMoveTasks(ctx context.Context, sourceArn string) ([]models.ListMessageMoveTasksResultEntry, error)
 }
