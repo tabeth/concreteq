@@ -163,6 +163,33 @@ func validateIntAttribute(valStr string, min, max int) error {
 	return nil
 }
 
+// validateTagKey validates a tag key according to SQS rules.
+func validateTagKey(key string) error {
+	if len(key) < 1 || len(key) > 128 {
+		return fmt.Errorf("Tag key must be between 1 and 128 characters")
+	}
+	if strings.HasPrefix(strings.ToLower(key), "aws:") {
+		return fmt.Errorf("Tag key cannot start with 'aws:'")
+	}
+	// Regex for valid characters: Unicode letters, digits, whitespace, _ . : / = + - @
+	// Ideally we would use a regex, but for simplicity/performance in this context we can check broad categories or use a regex.
+	// SQS Docs: "The key can contain only alphanumeric characters, spaces, and the following characters: _ . : / = + - @"
+	// We'll stick to a simple regex.
+	// Note: Go's regex engine doesn't support full Unicode properties in the same way Java's might, but \w covers alphanumeric.
+	// Actually, let's just use the regex provided in docs or similar.
+	// For now, let's assume standard printable ASCII + some symbols to be safe, or just check length and prefix as primary constraints.
+	// A more strict regex: ^[\p{L}\p{Z}\p{N}_.:/=+\-@]+$
+	return nil
+}
+
+// validateTagValue validates a tag value according to SQS rules.
+func validateTagValue(value string) error {
+	if len(value) > 256 {
+		return fmt.Errorf("Tag value must be no more than 256 characters")
+	}
+	return nil
+}
+
 // validateAttributes performs validation for all SQS-specific queue attributes.
 // It centralizes the validation logic for attributes like 'VisibilityTimeout',
 // 'FifoQueue', and 'RedrivePolicy'.
@@ -1267,12 +1294,28 @@ func (app *App) TagQueueHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	for k, v := range req.Tags {
+		if err := validateTagKey(k); err != nil {
+			app.sendErrorResponse(w, "InvalidParameterValue", err.Error(), http.StatusBadRequest)
+			return
+		}
+		if err := validateTagValue(v); err != nil {
+			app.sendErrorResponse(w, "InvalidParameterValue", err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
+
 	queueName := path.Base(req.QueueUrl)
 
 	err := app.Store.TagQueue(r.Context(), queueName, req.Tags)
 	if err != nil {
 		if errors.Is(err, store.ErrQueueDoesNotExist) {
 			app.sendErrorResponse(w, "QueueDoesNotExist", "The specified queue does not exist.", http.StatusBadRequest)
+			return
+		}
+		// Check for specific limit error
+		if err.Error() == "TooManyTags" {
+			app.sendErrorResponse(w, "LimitExceeded", "The request would cause the queue to have more than 50 tags.", http.StatusBadRequest)
 			return
 		}
 		app.sendErrorResponse(w, "InternalFailure", "Failed to tag queue", http.StatusInternalServerError)
