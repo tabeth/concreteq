@@ -311,3 +311,15 @@ type UntagQueueRequest struct {
 
 // UntagQueueResponse defines the structure for the SQS UntagQueue action's output.
 type UntagQueueResponse struct{}
+// ListDeadLetterSourceQueuesRequest defines the parameters for the SQS ListDeadLetterSourceQueues action.
+type ListDeadLetterSourceQueuesRequest struct {
+	QueueUrl   string `json:"QueueUrl"`
+	MaxResults int    `json:"MaxResults"`
+	NextToken  string `json:"NextToken"`
+}
+
+// ListDeadLetterSourceQueuesResponse defines the structure for the SQS ListDeadLetterSourceQueues action's output.
+type ListDeadLetterSourceQueuesResponse struct {
+	QueueUrls []string `json:"queueUrls"`
+	NextToken string   `json:"NextToken,omitempty"`
+}
