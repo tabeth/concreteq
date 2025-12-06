@@ -126,8 +126,12 @@ func (m *MockStore) UntagQueue(ctx context.Context, queueName string, tagKeys []
 	args := m.Called(ctx, queueName, tagKeys)
 	return args.Error(0)
 }
-func (m *MockStore) ListDeadLetterSourceQueues(ctx context.Context, queueURL string) ([]string, error) {
-	return nil, nil
+func (m *MockStore) ListDeadLetterSourceQueues(ctx context.Context, queueName string) ([]string, error) {
+	args := m.Called(ctx, queueName)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]string), args.Error(1)
 }
 func (m *MockStore) StartMessageMoveTask(ctx context.Context, sourceArn, destinationArn string) (string, error) {
 	return "", nil

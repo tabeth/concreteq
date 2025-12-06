@@ -1818,9 +1818,65 @@ func (s *FDBStore) UntagQueue(ctx context.Context, queueName string, tagKeys []s
 	return err
 }
 
-func (s *FDBStore) ListDeadLetterSourceQueues(ctx context.Context, queueURL string) ([]string, error) {
-	// TODO: Implement in FoundationDB.
-	return nil, nil
+func (s *FDBStore) ListDeadLetterSourceQueues(ctx context.Context, queueName string) ([]string, error) {
+	sourceQueueURLs, err := s.db.ReadTransact(func(tr fdb.ReadTransaction) (interface{}, error) {
+		// 1. Verify that the dead-letter queue (queueName) exists.
+		exists, err := s.dir.Exists(tr, []string{queueName})
+		if err != nil {
+			return nil, err
+		}
+		if !exists {
+			return nil, ErrQueueDoesNotExist
+		}
+
+		// 2. Iterate over all queues to find those that point to this DLQ.
+		// Note: This is an expensive operation (O(N) where N is number of queues).
+		// For a production system with many queues, a reverse index (DLQ -> [SourceQueues]) would be better.
+		allQueues, err := s.dir.List(tr, []string{})
+		if err != nil {
+			return nil, err
+		}
+
+		var matchingQueues []string
+		for _, qName := range allQueues {
+			queueDir, err := s.dir.Open(tr, []string{qName}, nil)
+			if err != nil {
+				continue
+			}
+
+			attrsBytes, err := tr.Get(queueDir.Pack(tuple.Tuple{"attributes"})).Get()
+			if err != nil {
+				continue
+			}
+			if len(attrsBytes) == 0 {
+				continue
+			}
+
+			var attrs map[string]string
+			if err := json.Unmarshal(attrsBytes, &attrs); err != nil {
+				continue
+			}
+
+			if policyStr, ok := attrs["RedrivePolicy"]; ok {
+				var policy struct {
+					DeadLetterTargetArn string `json:"deadLetterTargetArn"`
+				}
+				if json.Unmarshal([]byte(policyStr), &policy) == nil {
+					// The ARN format is arn:aws:sqs:region:account:queueName
+					// We just check if the ARN ends with ":" + queueName
+					if strings.HasSuffix(policy.DeadLetterTargetArn, ":"+queueName) {
+						matchingQueues = append(matchingQueues, qName)
+					}
+				}
+			}
+		}
+		return matchingQueues, nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+	return sourceQueueURLs.([]string), nil
 }
 
 func (s *FDBStore) StartMessageMoveTask(ctx context.Context, sourceArn, destinationArn string) (string, error) {

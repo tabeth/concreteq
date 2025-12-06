@@ -1313,7 +1313,44 @@ func (app *App) UntagQueueHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 func (app *App) ListDeadLetterSourceQueuesHandler(w http.ResponseWriter, r *http.Request) {
-	app.sendErrorResponse(w, "NotImplemented", "The requested action is not implemented.", http.StatusNotImplemented)
+	var req models.ListDeadLetterSourceQueuesRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		app.sendErrorResponse(w, "InvalidRequest", "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if req.QueueUrl == "" {
+		app.sendErrorResponse(w, "MissingParameter", "The request must contain a QueueUrl.", http.StatusBadRequest)
+		return
+	}
+	queueName := path.Base(req.QueueUrl)
+
+	queueNames, err := app.Store.ListDeadLetterSourceQueues(r.Context(), queueName)
+	if err != nil {
+		if errors.Is(err, store.ErrQueueDoesNotExist) {
+			app.sendErrorResponse(w, "QueueDoesNotExist", "The specified queue does not exist.", http.StatusBadRequest)
+			return
+		}
+		app.sendErrorResponse(w, "InternalFailure", "Failed to list dead letter source queues", http.StatusInternalServerError)
+		return
+	}
+
+	// Construct the queue URLs from the queue names
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	queueURLs := make([]string, len(queueNames))
+	for i, name := range queueNames {
+		queueURLs[i] = fmt.Sprintf("%s://%s/queues/%s", scheme, r.Host, name)
+	}
+
+	resp := models.ListDeadLetterSourceQueuesResponse{
+		QueueUrls: queueURLs,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
 }
 func (app *App) StartMessageMoveTaskHandler(w http.ResponseWriter, r *http.Request) {
 	app.sendErrorResponse(w, "NotImplemented", "The requested action is not implemented.", http.StatusNotImplemented)
