@@ -35,13 +35,64 @@ func TestFDBStore_Unimplemented(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, store.AddPermission(ctx, "q", "l", nil))
 	assert.NoError(t, store.RemovePermission(ctx, "q", "l"))
-	_, err = store.ListDeadLetterSourceQueues(ctx, "q")
-	assert.NoError(t, err)
 	_, err = store.StartMessageMoveTask(ctx, "s", "d")
 	assert.NoError(t, err)
 	assert.NoError(t, store.CancelMessageMoveTask(ctx, "t"))
 	_, err = store.ListMessageMoveTasks(ctx, "s")
 	assert.NoError(t, err)
+}
+
+func TestFDBStore_ListDeadLetterSourceQueues(t *testing.T) {
+	ctx := context.Background()
+	store, teardown := setupTestDB(t)
+	defer teardown()
+
+	// Create DLQ
+	dlqName := "my-dlq"
+	_, err := store.CreateQueue(ctx, dlqName, nil, nil)
+	require.NoError(t, err)
+
+	// Create source queues pointing to DLQ
+	src1 := "src1"
+	redrive1 := fmt.Sprintf(`{"deadLetterTargetArn":"arn:aws:sqs:us-east-1:123456789012:%s","maxReceiveCount":"5"}`, dlqName)
+	_, err = store.CreateQueue(ctx, src1, map[string]string{"RedrivePolicy": redrive1}, nil)
+	require.NoError(t, err)
+
+	src2 := "src2"
+	redrive2 := fmt.Sprintf(`{"deadLetterTargetArn":"arn:aws:sqs:us-east-1:123456789012:%s","maxReceiveCount":"3"}`, dlqName)
+	_, err = store.CreateQueue(ctx, src2, map[string]string{"RedrivePolicy": redrive2}, nil)
+	require.NoError(t, err)
+
+	// Create a queue that does NOT point to DLQ
+	src3 := "src3"
+	_, err = store.CreateQueue(ctx, src3, nil, nil)
+	require.NoError(t, err)
+
+	// Create another DLQ and a queue pointing to it
+	otherDlq := "other-dlq"
+	_, err = store.CreateQueue(ctx, otherDlq, nil, nil)
+	require.NoError(t, err)
+	src4 := "src4"
+	redrive4 := fmt.Sprintf(`{"deadLetterTargetArn":"arn:aws:sqs:us-east-1:123456789012:%s","maxReceiveCount":"1"}`, otherDlq)
+	_, err = store.CreateQueue(ctx, src4, map[string]string{"RedrivePolicy": redrive4}, nil)
+	require.NoError(t, err)
+
+	// List sources for my-dlq
+	sources, err := store.ListDeadLetterSourceQueues(ctx, dlqName)
+	require.NoError(t, err)
+	assert.Len(t, sources, 2)
+	assert.Contains(t, sources, src1)
+	assert.Contains(t, sources, src2)
+
+	// List sources for other-dlq
+	sourcesOther, err := store.ListDeadLetterSourceQueues(ctx, otherDlq)
+	require.NoError(t, err)
+	assert.Len(t, sourcesOther, 1)
+	assert.Contains(t, sourcesOther, src4)
+
+	// List sources for non-existent DLQ
+	_, err = store.ListDeadLetterSourceQueues(ctx, "non-existent")
+	assert.ErrorIs(t, err, ErrQueueDoesNotExist)
 }
 
 func TestHashSystemAttributes(t *testing.T) {
