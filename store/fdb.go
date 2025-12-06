@@ -1764,6 +1764,10 @@ func (s *FDBStore) TagQueue(ctx context.Context, queueName string, tags map[stri
 			existingTags[k] = v
 		}
 
+		if len(existingTags) > 50 {
+			return nil, errors.New("TooManyTags")
+		}
+
 		// Write back
 		newTagsBytes, err := json.Marshal(existingTags)
 		if err != nil {

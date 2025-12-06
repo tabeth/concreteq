@@ -637,6 +637,56 @@ func TestIntegration_NewFeatures(t *testing.T) {
 		resp.Body.Close()
 	})
 
+	t.Run("Tagging Validation", func(t *testing.T) {
+		queueName := "tagging-validation-queue"
+		createBody := fmt.Sprintf(`{"QueueName": "%s"}`, queueName)
+		req, _ := http.NewRequest("POST", app.baseURL+"/", bytes.NewBufferString(createBody))
+		req.Header.Set("X-Amz-Target", "AmazonSQS.CreateQueue")
+		resp, err := http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		assert.Equal(t, http.StatusCreated, resp.StatusCode)
+		resp.Body.Close()
+
+		queueUrl := fmt.Sprintf("%s/queues/%s", app.baseURL, queueName)
+
+		// 1. Invalid Tag Key (prefix aws:)
+		tagBody := fmt.Sprintf(`{"QueueUrl": "%s", "Tags": {"aws:invalid": "val"}}`, queueUrl)
+		req, _ = http.NewRequest("POST", app.baseURL+"/", bytes.NewBufferString(tagBody))
+		req.Header.Set("X-Amz-Target", "AmazonSQS.TagQueue")
+		resp, err = http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+		resp.Body.Close()
+
+		// 2. Too Many Tags (>50)
+		// First add 50 tags
+		tags := make(map[string]string)
+		for i := 0; i < 50; i++ {
+			tags[fmt.Sprintf("tag%d", i)] = "val"
+		}
+		tagsJson, _ := json.Marshal(tags)
+		tagBody = fmt.Sprintf(`{"QueueUrl": "%s", "Tags": %s}`, queueUrl, string(tagsJson))
+		req, _ = http.NewRequest("POST", app.baseURL+"/", bytes.NewBufferString(tagBody))
+		req.Header.Set("X-Amz-Target", "AmazonSQS.TagQueue")
+		resp, err = http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+		resp.Body.Close()
+
+		// Try to add one more unique tag
+		tagBody = fmt.Sprintf(`{"QueueUrl": "%s", "Tags": {"overflow": "val"}}`, queueUrl)
+		req, _ = http.NewRequest("POST", app.baseURL+"/", bytes.NewBufferString(tagBody))
+		req.Header.Set("X-Amz-Target", "AmazonSQS.TagQueue")
+		resp, err = http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+		// Check error type
+		var errResp models.ErrorResponse
+		json.NewDecoder(resp.Body).Decode(&errResp)
+		assert.Equal(t, "LimitExceeded", errResp.Type)
+		resp.Body.Close()
+	})
+
 	t.Run("FIFO ContentBasedDeduplication", func(t *testing.T) {
 		queueName := "fifo-dedup-integ.fifo"
 		createBody := fmt.Sprintf(`{"QueueName": "%s", "Attributes": {"FifoQueue": "true", "ContentBasedDeduplication": "true"}}`, queueName)
