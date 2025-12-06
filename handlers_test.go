@@ -112,13 +112,19 @@ func (m *MockStore) AddPermission(ctx context.Context, queueName, label string, 
 }
 func (m *MockStore) RemovePermission(ctx context.Context, queueName, label string) error { return nil }
 func (m *MockStore) ListQueueTags(ctx context.Context, queueName string) (map[string]string, error) {
-	return nil, nil
+	args := m.Called(ctx, queueName)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(map[string]string), args.Error(1)
 }
 func (m *MockStore) TagQueue(ctx context.Context, queueName string, tags map[string]string) error {
-	return nil
+	args := m.Called(ctx, queueName, tags)
+	return args.Error(0)
 }
 func (m *MockStore) UntagQueue(ctx context.Context, queueName string, tagKeys []string) error {
-	return nil
+	args := m.Called(ctx, queueName, tagKeys)
+	return args.Error(0)
 }
 func (m *MockStore) ListDeadLetterSourceQueues(ctx context.Context, queueURL string) ([]string, error) {
 	return nil, nil
@@ -275,6 +281,101 @@ func TestCreateQueueHandler(t *testing.T) {
 				}
 			}
 
+			mockStore.AssertExpectations(t)
+		})
+	}
+}
+
+func TestTaggingHandlers(t *testing.T) {
+	tests := []struct {
+		name               string
+		action             string
+		inputBody          string
+		mockSetup          func(*MockStore)
+		expectedStatusCode int
+		expectedBody       string
+	}{
+		{
+			name:      "ListQueueTags - Success",
+			action:    "AmazonSQS.ListQueueTags",
+			inputBody: `{"QueueUrl": "http://localhost/queues/my-queue"}`,
+			mockSetup: func(ms *MockStore) {
+				ms.On("ListQueueTags", mock.Anything, "my-queue").Return(map[string]string{"tag1": "val1"}, nil)
+			},
+			expectedStatusCode: http.StatusOK,
+			expectedBody:       `{"Tags":{"tag1":"val1"}}`,
+		},
+		{
+			name:      "ListQueueTags - Queue Does Not Exist",
+			action:    "AmazonSQS.ListQueueTags",
+			inputBody: `{"QueueUrl": "http://localhost/queues/non-existent"}`,
+			mockSetup: func(ms *MockStore) {
+				ms.On("ListQueueTags", mock.Anything, "non-existent").Return(nil, store.ErrQueueDoesNotExist)
+			},
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       `{"__type":"QueueDoesNotExist", "message":"The specified queue does not exist."}`,
+		},
+		{
+			name:      "TagQueue - Success",
+			action:    "AmazonSQS.TagQueue",
+			inputBody: `{"QueueUrl": "http://localhost/queues/my-queue", "Tags": {"tag1": "val1"}}`,
+			mockSetup: func(ms *MockStore) {
+				ms.On("TagQueue", mock.Anything, "my-queue", map[string]string{"tag1": "val1"}).Return(nil)
+			},
+			expectedStatusCode: http.StatusOK,
+			expectedBody:       "",
+		},
+		{
+			name:      "TagQueue - Missing Tags",
+			action:    "AmazonSQS.TagQueue",
+			inputBody: `{"QueueUrl": "http://localhost/queues/my-queue"}`,
+			mockSetup: func(ms *MockStore) {},
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       `{"__type":"MissingParameter", "message":"The request must contain Tags."}`,
+		},
+		{
+			name:      "UntagQueue - Success",
+			action:    "AmazonSQS.UntagQueue",
+			inputBody: `{"QueueUrl": "http://localhost/queues/my-queue", "TagKeys": ["tag1"]}`,
+			mockSetup: func(ms *MockStore) {
+				ms.On("UntagQueue", mock.Anything, "my-queue", []string{"tag1"}).Return(nil)
+			},
+			expectedStatusCode: http.StatusOK,
+			expectedBody:       "",
+		},
+		{
+			name:      "UntagQueue - Missing TagKeys",
+			action:    "AmazonSQS.UntagQueue",
+			inputBody: `{"QueueUrl": "http://localhost/queues/my-queue"}`,
+			mockSetup: func(ms *MockStore) {},
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       `{"__type":"MissingParameter", "message":"The request must contain TagKeys."}`,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mockStore := new(MockStore)
+			tc.mockSetup(mockStore)
+
+			app := &App{Store: mockStore}
+			r := chi.NewRouter()
+			app.RegisterSQSHandlers(r)
+
+			req, _ := http.NewRequest("POST", "/", bytes.NewBufferString(tc.inputBody))
+			req.Header.Set("X-Amz-Target", tc.action)
+			rr := httptest.NewRecorder()
+
+			r.ServeHTTP(rr, req)
+
+			assert.Equal(t, tc.expectedStatusCode, rr.Code)
+			if tc.expectedBody != "" {
+				if rr.Code >= 300 {
+					require.JSONEq(t, tc.expectedBody, rr.Body.String())
+				} else if rr.Body.Len() > 0 {
+					require.JSONEq(t, tc.expectedBody, rr.Body.String())
+				}
+			}
 			mockStore.AssertExpectations(t)
 		})
 	}
@@ -526,9 +627,6 @@ func TestUnimplementedHandlers(t *testing.T) {
 	unimplementedTargets := []string{
 		"AmazonSQS.AddPermission",
 		"AmazonSQS.RemovePermission",
-		"AmazonSQS.ListQueueTags",
-		"AmazonSQS.TagQueue",
-		"AmazonSQS.UntagQueue",
 		"AmazonSQS.ListDeadLetterSourceQueues",
 		"AmazonSQS.StartMessageMoveTask",
 		"AmazonSQS.CancelMessageMoveTask",
