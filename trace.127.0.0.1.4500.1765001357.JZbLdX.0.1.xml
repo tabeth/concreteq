@@ -1,0 +1,9 @@
+<?xml version="1.0"?>
+<Trace>
+<Event Severity="10" Time="1765001357.998001" DateTime="2025-12-06T06:09:17Z" Type="Net2Starting" ID="0000000000000000" ThreadID="5530320114049371892" Machine="127.0.0.1:4500" LogGroup="default" />
+<Event Severity="10" Time="1765001357.998092" DateTime="2025-12-06T06:09:17Z" Type="Net2TLSConfig" ID="0000000000000000" CAPath="" CertificatePath="" KeyPath="" HasPassword="0" VerifyPeers="Check.Valid=1" ThreadID="5530320114049371892" Machine="127.0.0.1:4500" LogGroup="default" />
+<Event Severity="10" Time="1765001357.998092" DateTime="2025-12-06T06:09:17Z" Type="AuthzPublicKeyFileNotSet" ID="0000000000000000" ThreadID="5530320114049371892" Machine="127.0.0.1:4500" LogGroup="default" />
+<Event Severity="10" Time="1765001357.998092" DateTime="2025-12-06T06:09:17Z" Type="Binding" ID="0000000000000000" PublicAddress="127.0.0.1:4500" ListenAddress="127.0.0.1:4500" ThreadID="5530320114049371892" Machine="127.0.0.1:4500" LogGroup="default" />
+<Event Severity="10" Time="1765001357.998092" DateTime="2025-12-06T06:09:17Z" Type="Net2ListenError" ID="0000000000000000" Error="address_in_use" ErrorDescription="Local address in use" ErrorCode="2105" Message="bind: Address already in use [system:98]" ThreadID="5530320114049371892" Machine="127.0.0.1:4500" LogGroup="default" />
+<Event Severity="10" Time="1765001357.998092" DateTime="2025-12-06T06:09:17Z" Type="BindError" ID="0000000000000000" Error="address_in_use" ErrorDescription="Local address in use" ErrorCode="2105" ThreadID="5530320114049371892" Machine="127.0.0.1:4500" LogGroup="default" />
+</Trace>

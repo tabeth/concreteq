@@ -171,14 +171,15 @@ func validateTagKey(key string) error {
 	if strings.HasPrefix(strings.ToLower(key), "aws:") {
 		return fmt.Errorf("Tag key cannot start with 'aws:'")
 	}
-	// Regex for valid characters: Unicode letters, digits, whitespace, _ . : / = + - @
-	// Ideally we would use a regex, but for simplicity/performance in this context we can check broad categories or use a regex.
-	// SQS Docs: "The key can contain only alphanumeric characters, spaces, and the following characters: _ . : / = + - @"
-	// We'll stick to a simple regex.
-	// Note: Go's regex engine doesn't support full Unicode properties in the same way Java's might, but \w covers alphanumeric.
-	// Actually, let's just use the regex provided in docs or similar.
-	// For now, let's assume standard printable ASCII + some symbols to be safe, or just check length and prefix as primary constraints.
-	// A more strict regex: ^[\p{L}\p{Z}\p{N}_.:/=+\-@]+$
+	// SQS Tag Key Regex: ^[\p{L}\p{Z}\p{N}_.:/=+\-@]*$
+	// We use a simplified check for common valid characters to avoid complex regex performance hits,
+	// but strictly speaking SQS allows unicode letters.
+	// For this implementation, we will use a regex that matches the documentation.
+	// Go's regexp package supports \p{L} (letters), \p{N} (numbers), \p{Z} (separators/spaces).
+	match, _ := regexp.MatchString(`^[\p{L}\p{Z}\p{N}_.:/=+\-@]*$`, key)
+	if !match {
+		return fmt.Errorf("Tag key contains invalid characters")
+	}
 	return nil
 }
 
@@ -186,6 +187,11 @@ func validateTagKey(key string) error {
 func validateTagValue(value string) error {
 	if len(value) > 256 {
 		return fmt.Errorf("Tag value must be no more than 256 characters")
+	}
+	// SQS Tag Value Regex: ^[\p{L}\p{Z}\p{N}_.:/=+\-@]*$
+	match, _ := regexp.MatchString(`^[\p{L}\p{Z}\p{N}_.:/=+\-@]*$`, value)
+	if !match {
+		return fmt.Errorf("Tag value contains invalid characters")
 	}
 	return nil
 }
@@ -1294,6 +1300,7 @@ func (app *App) TagQueueHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// SQS Tagging Validation
 	for k, v := range req.Tags {
 		if err := validateTagKey(k); err != nil {
 			app.sendErrorResponse(w, "InvalidParameterValue", err.Error(), http.StatusBadRequest)
@@ -1339,6 +1346,17 @@ func (app *App) UntagQueueHandler(w http.ResponseWriter, r *http.Request) {
 	if len(req.TagKeys) == 0 {
 		app.sendErrorResponse(w, "MissingParameter", "The request must contain TagKeys.", http.StatusBadRequest)
 		return
+	}
+
+	// Validate Tag Keys format even for untagging, though SQS docs are slightly ambiguous about whether it rejects invalid format or just ignores.
+	// Common SQS behavior is to validate input parameters first.
+	for _, key := range req.TagKeys {
+		// Note: validateTagKey checks for 'aws:' prefix too, but you can't untag 'aws:' tags anyway (system tags).
+		// SQS might return a specific error for untagging system tags, but InvalidParameterValue is a safe bet for invalid format.
+		if err := validateTagKey(key); err != nil {
+			app.sendErrorResponse(w, "InvalidParameterValue", err.Error(), http.StatusBadRequest)
+			return
+		}
 	}
 
 	queueName := path.Base(req.QueueUrl)
