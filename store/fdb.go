@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/md5"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
@@ -403,6 +404,30 @@ func (s *FDBStore) SendMessage(ctx context.Context, queueName string, message *m
 		messagesDir := queueDir.Sub("messages")
 		isFifo := strings.HasSuffix(queueName, ".fifo")
 
+		if isFifo {
+			// Check if ContentBasedDeduplication is enabled
+			attrsBytes, err := tr.Get(queueDir.Pack(tuple.Tuple{"attributes"})).Get()
+			if err != nil {
+				return nil, err
+			}
+			var contentBasedDedupEnabled bool
+			if len(attrsBytes) > 0 {
+				var attrs map[string]string
+				if err := json.Unmarshal(attrsBytes, &attrs); err == nil {
+					if attrs["ContentBasedDeduplication"] == "true" {
+						contentBasedDedupEnabled = true
+					}
+				}
+			}
+
+			// Auto-generate Deduplication ID if enabled and missing
+			if contentBasedDedupEnabled && (message.MessageDeduplicationId == nil || *message.MessageDeduplicationId == "") {
+				hash := sha256.Sum256([]byte(message.MessageBody))
+				dedupId := hex.EncodeToString(hash[:])
+				message.MessageDeduplicationId = &dedupId
+			}
+		}
+
 		// 2. FIFO queues: Handle content-based deduplication. If a message with the
 		//    same deduplication ID was sent recently, return the previous response.
 		if isFifo && message.MessageDeduplicationId != nil && *message.MessageDeduplicationId != "" {
@@ -696,10 +721,28 @@ func (s *FDBStore) SendMessageBatch(ctx context.Context, queueName string, req *
 		messagesDir := queueDir.Sub("messages")
 		isFifo := strings.HasSuffix(queueName, ".fifo")
 
+		var contentBasedDedupEnabled bool
+		if isFifo {
+			attrsBytes, err := tr.Get(queueDir.Pack(tuple.Tuple{"attributes"})).Get()
+			if err != nil {
+				return nil, err
+			}
+			if len(attrsBytes) > 0 {
+				var attrs map[string]string
+				if err := json.Unmarshal(attrsBytes, &attrs); err == nil {
+					if attrs["ContentBasedDeduplication"] == "true" {
+						contentBasedDedupEnabled = true
+					}
+				}
+			}
+		}
+
 		successful := []models.SendMessageBatchResultEntry{}
 		failed := []models.BatchResultErrorEntry{}
 
-		for _, entry := range req.Entries {
+		for i := range req.Entries {
+			entry := &req.Entries[i]
+
 			// Perform per-entry validation within the transaction. If a message fails
 			// validation, it's added to the `failed` list and we continue to the next.
 			if entry.DelaySeconds != nil {
@@ -715,6 +758,13 @@ func (s *FDBStore) SendMessageBatch(ctx context.Context, queueName string, req *
 			if isFifo && entry.MessageGroupId == nil {
 				failed = append(failed, models.BatchResultErrorEntry{Id: entry.Id, Code: "MissingParameter", Message: "MessageGroupId is required for FIFO queues.", SenderFault: true})
 				continue
+			}
+
+			// Auto-generate Deduplication ID if enabled and missing
+			if isFifo && contentBasedDedupEnabled && (entry.MessageDeduplicationId == nil || *entry.MessageDeduplicationId == "") {
+				hash := sha256.Sum256([]byte(entry.MessageBody))
+				dedupId := hex.EncodeToString(hash[:])
+				entry.MessageDeduplicationId = &dedupId
 			}
 
 			// The logic for each message is very similar to the single SendMessage handler.
@@ -828,10 +878,32 @@ func (s *FDBStore) SendMessageBatch(ctx context.Context, queueName string, req *
 // It iterates through randomized shards of the visibility index to find available messages.
 // This approach distributes the read load and significantly reduces transaction conflicts
 // under high contention compared to scanning the head of the queue every time.
-func (s *FDBStore) receiveStandardMessages(tr fdb.Transaction, queueDir directory.DirectorySubspace, req *models.ReceiveMessageRequest, maxMessages int, visibilityTimeout int) ([]models.ResponseMessage, error) {
+func (s *FDBStore) receiveStandardMessages(tr fdb.Transaction, queueDir directory.DirectorySubspace, req *models.ReceiveMessageRequest, maxMessages int, visibilityTimeout int, queueAttributes map[string]string) ([]models.ResponseMessage, error) {
 	messagesDir := queueDir.Sub("messages")
 	visibleIdxDir := queueDir.Sub("visible_idx")
 	inflightDir := queueDir.Sub("inflight")
+
+	// Parse RedrivePolicy once
+	var dlqName string
+	var maxReceiveCount int
+	var hasRedrivePolicy bool
+
+	if policyStr, ok := queueAttributes["RedrivePolicy"]; ok {
+		var policy struct {
+			DeadLetterTargetArn string `json:"deadLetterTargetArn"`
+			MaxReceiveCount     string `json:"maxReceiveCount"`
+		}
+		if json.Unmarshal([]byte(policyStr), &policy) == nil {
+			if count, err := strconv.Atoi(policy.MaxReceiveCount); err == nil {
+				maxReceiveCount = count
+				parts := strings.Split(policy.DeadLetterTargetArn, ":")
+				if len(parts) > 0 {
+					dlqName = parts[len(parts)-1]
+					hasRedrivePolicy = true
+				}
+			}
+		}
+	}
 
 	var receivedMessages []models.ResponseMessage
 	now := time.Now().Unix()
@@ -878,12 +950,42 @@ func (s *FDBStore) receiveStandardMessages(tr fdb.Transaction, queueDir director
 			tr.Clear(kv.Key)
 
 			// 2. Update the message's internal state.
-			newVisibilityTimeout := now + int64(visibilityTimeout)
-			msg.VisibleAfter = newVisibilityTimeout
 			msg.ReceivedCount++
 			if msg.FirstReceived == 0 {
 				msg.FirstReceived = now
 			}
+
+			// Check RedrivePolicy for DLQ
+			if hasRedrivePolicy && msg.ReceivedCount > maxReceiveCount {
+				// Move to DLQ
+				dlqExists, err := s.dir.Exists(tr, []string{dlqName})
+				if err == nil && dlqExists {
+					dlqDir, err := s.dir.Open(tr, []string{dlqName}, nil)
+					if err == nil {
+						// Delete from source queue
+						tr.Clear(messagesDir.Pack(tuple.Tuple{messageID}))
+
+						// Add to DLQ
+						dlqMessagesDir := dlqDir.Sub("messages")
+						dlqVisibleIdxDir := dlqDir.Sub("visible_idx")
+
+						// Reset visibility for DLQ (visible immediately)
+						msg.VisibleAfter = now
+
+						dlqMsgBytes, _ := json.Marshal(msg)
+						tr.Set(dlqMessagesDir.Pack(tuple.Tuple{messageID}), dlqMsgBytes)
+
+						shardID := r.Intn(numShards)
+						visKey := dlqVisibleIdxDir.Pack(tuple.Tuple{shardID, now, messageID})
+						tr.Set(visKey, []byte{})
+
+						continue
+					}
+				}
+			}
+
+			newVisibilityTimeout := now + int64(visibilityTimeout)
+			msg.VisibleAfter = newVisibilityTimeout
 
 			// 3. Write the updated message back to the main message store.
 			newMsgBytes, err := json.Marshal(msg)
@@ -949,11 +1051,34 @@ func (s *FDBStore) receiveStandardMessages(tr fdb.Transaction, queueDir director
 }
 
 // receiveFifoMessages contains the more complex logic for retrieving messages from a FIFO queue.
-func (s *FDBStore) receiveFifoMessages(tr fdb.Transaction, queueDir directory.DirectorySubspace, req *models.ReceiveMessageRequest, maxMessages int, visibilityTimeout int) ([]models.ResponseMessage, error) {
+func (s *FDBStore) receiveFifoMessages(tr fdb.Transaction, queueDir directory.DirectorySubspace, req *models.ReceiveMessageRequest, maxMessages int, visibilityTimeout int, queueAttributes map[string]string) ([]models.ResponseMessage, error) {
 	messagesDir := queueDir.Sub("messages")
 	fifoIdxDir := queueDir.Sub("fifo_idx")
 	inflightGroupsDir := queueDir.Sub("inflight_groups")
 	receiveAttemptsDir := queueDir.Sub("receive_attempts")
+
+	// Parse RedrivePolicy once
+	var dlqName string
+	var maxReceiveCount int
+	var hasRedrivePolicy bool
+
+	if policyStr, ok := queueAttributes["RedrivePolicy"]; ok {
+		var policy struct {
+			DeadLetterTargetArn string `json:"deadLetterTargetArn"`
+			MaxReceiveCount     string `json:"maxReceiveCount"`
+		}
+		if json.Unmarshal([]byte(policyStr), &policy) == nil {
+			if count, err := strconv.Atoi(policy.MaxReceiveCount); err == nil {
+				maxReceiveCount = count
+				parts := strings.Split(policy.DeadLetterTargetArn, ":")
+				if len(parts) > 0 {
+					dlqName = parts[len(parts)-1]
+					hasRedrivePolicy = true
+				}
+			}
+		}
+	}
+
 	now := time.Now().Unix()
 
 	// 1. FIFO Receive Deduplication: If the same attempt ID is used within 5 minutes,
@@ -1073,6 +1198,49 @@ func (s *FDBStore) receiveFifoMessages(tr fdb.Transaction, queueDir directory.Di
 			continue
 		}
 
+		// Update Receive Count
+		msg.ReceivedCount++
+		if msg.FirstReceived == 0 {
+			msg.FirstReceived = now
+		}
+
+		// Check RedrivePolicy for DLQ
+		if hasRedrivePolicy && msg.ReceivedCount > maxReceiveCount {
+			// Move to DLQ
+			dlqExists, err := s.dir.Exists(tr, []string{dlqName})
+			if err == nil && dlqExists {
+				dlqDir, err := s.dir.Open(tr, []string{dlqName}, nil)
+				if err == nil {
+					// Delete from source queue
+					tr.Clear(messagesDir.Pack(tuple.Tuple{messageID}))
+					tr.Clear(kv.Key) // Delete from fifo_idx
+
+					// Add to DLQ
+					dlqMessagesDir := dlqDir.Sub("messages")
+					dlqFifoIdxDir := dlqDir.Sub("fifo_idx")
+
+					// Get new sequence number for DLQ
+					seq, err := s.getNextSequenceNumber(tr, dlqDir)
+					if err == nil {
+						msg.SequenceNumber = seq
+						// Keep MessageGroupId.
+
+						dlqMsgBytes, _ := json.Marshal(msg)
+						tr.Set(dlqMessagesDir.Pack(tuple.Tuple{messageID}), dlqMsgBytes)
+
+						fifoKey := dlqFifoIdxDir.Pack(tuple.Tuple{msg.MessageGroupId, seq})
+						tr.Set(fifoKey, []byte(messageID))
+
+						continue
+					}
+				}
+			}
+		}
+
+		// Save updated message (persist receive count)
+		newMsgBytes, _ := json.Marshal(msg)
+		tr.Set(messagesDir.Pack(tuple.Tuple{messageID}), newMsgBytes)
+
 		// Create a receipt handle. For FIFO, we must store the index key so we can
 		// delete it later, which is different from Standard queues.
 		receiptHandle := uuid.New().String()
@@ -1183,9 +1351,9 @@ func (s *FDBStore) ReceiveMessage(ctx context.Context, queueName string, req *mo
 
 			// Call the appropriate receive logic based on queue type.
 			if isFifo {
-				return s.receiveFifoMessages(tr, queueDir, req, maxMessages, visibilityTimeout)
+				return s.receiveFifoMessages(tr, queueDir, req, maxMessages, visibilityTimeout, queueAttributes)
 			} else {
-				return s.receiveStandardMessages(tr, queueDir, req, maxMessages, visibilityTimeout)
+				return s.receiveStandardMessages(tr, queueDir, req, maxMessages, visibilityTimeout, queueAttributes)
 			}
 		})
 

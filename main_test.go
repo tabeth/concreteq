@@ -568,6 +568,194 @@ func TestIntegration_ListDeletePurgeQueues(t *testing.T) {
 	})
 }
 
+func TestIntegration_NewFeatures(t *testing.T) {
+	app, teardown := setupIntegrationTest(t)
+	defer teardown()
+
+	t.Run("Tagging", func(t *testing.T) {
+		queueName := "tagging-test-queue"
+		// Create queue with initial tags
+		createBody := fmt.Sprintf(`{"QueueName": "%s", "Tags": {"Environment": "Dev"}}`, queueName)
+		req, _ := http.NewRequest("POST", app.baseURL+"/", bytes.NewBufferString(createBody))
+		req.Header.Set("X-Amz-Target", "AmazonSQS.CreateQueue")
+		resp, err := http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		assert.Equal(t, http.StatusCreated, resp.StatusCode)
+		resp.Body.Close()
+
+		queueUrl := fmt.Sprintf("%s/queues/%s", app.baseURL, queueName)
+
+		// List Tags
+		listBody := fmt.Sprintf(`{"QueueUrl": "%s"}`, queueUrl)
+		req, _ = http.NewRequest("POST", app.baseURL+"/", bytes.NewBufferString(listBody))
+		req.Header.Set("X-Amz-Target", "AmazonSQS.ListQueueTags")
+		resp, err = http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+		var listResp models.ListQueueTagsResponse
+		json.NewDecoder(resp.Body).Decode(&listResp)
+		assert.Equal(t, "Dev", listResp.Tags["Environment"])
+		resp.Body.Close()
+
+		// Tag Queue
+		tagBody := fmt.Sprintf(`{"QueueUrl": "%s", "Tags": {"Project": "ConcreteQ"}}`, queueUrl)
+		req, _ = http.NewRequest("POST", app.baseURL+"/", bytes.NewBufferString(tagBody))
+		req.Header.Set("X-Amz-Target", "AmazonSQS.TagQueue")
+		resp, err = http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+		resp.Body.Close()
+
+		// List Tags Again
+		req, _ = http.NewRequest("POST", app.baseURL+"/", bytes.NewBufferString(listBody))
+		req.Header.Set("X-Amz-Target", "AmazonSQS.ListQueueTags")
+		resp, err = http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		json.NewDecoder(resp.Body).Decode(&listResp)
+		assert.Equal(t, "Dev", listResp.Tags["Environment"])
+		assert.Equal(t, "ConcreteQ", listResp.Tags["Project"])
+		resp.Body.Close()
+
+		// Untag Queue
+		untagBody := fmt.Sprintf(`{"QueueUrl": "%s", "TagKeys": ["Environment"]}`, queueUrl)
+		req, _ = http.NewRequest("POST", app.baseURL+"/", bytes.NewBufferString(untagBody))
+		req.Header.Set("X-Amz-Target", "AmazonSQS.UntagQueue")
+		resp, err = http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+		resp.Body.Close()
+
+		// Verify Untag
+		req, _ = http.NewRequest("POST", app.baseURL+"/", bytes.NewBufferString(listBody))
+		req.Header.Set("X-Amz-Target", "AmazonSQS.ListQueueTags")
+		resp, err = http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		var listRespVerify models.ListQueueTagsResponse
+		json.NewDecoder(resp.Body).Decode(&listRespVerify)
+		assert.Len(t, listRespVerify.Tags, 1)
+		assert.Equal(t, "ConcreteQ", listRespVerify.Tags["Project"])
+		resp.Body.Close()
+	})
+
+	t.Run("FIFO ContentBasedDeduplication", func(t *testing.T) {
+		queueName := "fifo-dedup-integ.fifo"
+		createBody := fmt.Sprintf(`{"QueueName": "%s", "Attributes": {"FifoQueue": "true", "ContentBasedDeduplication": "true"}}`, queueName)
+		req, _ := http.NewRequest("POST", app.baseURL+"/", bytes.NewBufferString(createBody))
+		req.Header.Set("X-Amz-Target", "AmazonSQS.CreateQueue")
+		resp, err := http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		assert.Equal(t, http.StatusCreated, resp.StatusCode)
+		resp.Body.Close()
+
+		queueUrl := fmt.Sprintf("%s/queues/%s", app.baseURL, queueName)
+		groupID := "g1"
+
+		// Send Message 1
+		msgBody := "same content"
+		sendReq := models.SendMessageRequest{
+			QueueUrl:       queueUrl,
+			MessageBody:    msgBody,
+			MessageGroupId: &groupID,
+		}
+		bodyBytes, _ := json.Marshal(sendReq)
+		req, _ = http.NewRequest("POST", app.baseURL+"/", bytes.NewBuffer(bodyBytes))
+		req.Header.Set("X-Amz-Target", "AmazonSQS.SendMessage")
+		resp, err = http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		var sendResp1 models.SendMessageResponse
+		json.NewDecoder(resp.Body).Decode(&sendResp1)
+		resp.Body.Close()
+
+		// Send Message 2 (Same content, no Dedup ID)
+		req, _ = http.NewRequest("POST", app.baseURL+"/", bytes.NewBuffer(bodyBytes))
+		req.Header.Set("X-Amz-Target", "AmazonSQS.SendMessage")
+		resp, err = http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		var sendResp2 models.SendMessageResponse
+		json.NewDecoder(resp.Body).Decode(&sendResp2)
+		resp.Body.Close()
+
+		// Check IDs are same (deduplicated)
+		assert.Equal(t, sendResp1.MessageId, sendResp2.MessageId)
+		assert.Equal(t, sendResp1.SequenceNumber, sendResp2.SequenceNumber)
+	})
+
+	t.Run("Dead Letter Queues", func(t *testing.T) {
+		dlqName := "integ-dlq"
+		srcQueueName := "integ-src-queue"
+
+		// Create DLQ
+		createDLQ := fmt.Sprintf(`{"QueueName": "%s"}`, dlqName)
+		req, _ := http.NewRequest("POST", app.baseURL+"/", bytes.NewBufferString(createDLQ))
+		req.Header.Set("X-Amz-Target", "AmazonSQS.CreateQueue")
+		resp, err := http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		resp.Body.Close()
+
+		// Create Source Queue with RedrivePolicy
+		// Note: We need to escape quotes in the JSON string for RedrivePolicy
+		redrivePolicy := fmt.Sprintf(`{\"deadLetterTargetArn\":\"arn:aws:sqs:us-east-1:123456789012:%s\",\"maxReceiveCount\":\"1\"}`, dlqName)
+		createSrc := fmt.Sprintf(`{"QueueName": "%s", "Attributes": {"RedrivePolicy": "%s"}}`, srcQueueName, redrivePolicy)
+		req, _ = http.NewRequest("POST", app.baseURL+"/", bytes.NewBufferString(createSrc))
+		req.Header.Set("X-Amz-Target", "AmazonSQS.CreateQueue")
+		resp, err = http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		assert.Equal(t, http.StatusCreated, resp.StatusCode)
+		resp.Body.Close()
+
+		srcUrl := fmt.Sprintf("%s/queues/%s", app.baseURL, srcQueueName)
+		dlqUrl := fmt.Sprintf("%s/queues/%s", app.baseURL, dlqName)
+
+		// Send Message
+		sendReq := models.SendMessageRequest{QueueUrl: srcUrl, MessageBody: "fail-msg"}
+		bodyBytes, _ := json.Marshal(sendReq)
+		req, _ = http.NewRequest("POST", app.baseURL+"/", bytes.NewBuffer(bodyBytes))
+		req.Header.Set("X-Amz-Target", "AmazonSQS.SendMessage")
+		resp, err = http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		resp.Body.Close()
+
+		// Receive 1 (Count 1)
+		recReq := models.ReceiveMessageRequest{QueueUrl: srcUrl, MaxNumberOfMessages: 1, VisibilityTimeout: 1, AttributeNames: []string{"ApproximateReceiveCount"}}
+		bodyBytes, _ = json.Marshal(recReq)
+		req, _ = http.NewRequest("POST", app.baseURL+"/", bytes.NewBuffer(bodyBytes))
+		req.Header.Set("X-Amz-Target", "AmazonSQS.ReceiveMessage")
+		resp, err = http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		var recResp1 models.ReceiveMessageResponse
+		json.NewDecoder(resp.Body).Decode(&recResp1)
+		require.Len(t, recResp1.Messages, 1)
+		assert.Equal(t, "1", recResp1.Messages[0].Attributes["ApproximateReceiveCount"])
+		resp.Body.Close()
+
+		time.Sleep(2 * time.Second)
+
+		// Receive 2 (Count 2 > 1 -> DLQ)
+		req, _ = http.NewRequest("POST", app.baseURL+"/", bytes.NewBuffer(bodyBytes))
+		req.Header.Set("X-Amz-Target", "AmazonSQS.ReceiveMessage")
+		resp, err = http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		var recResp2 models.ReceiveMessageResponse
+		json.NewDecoder(resp.Body).Decode(&recResp2)
+		assert.Empty(t, recResp2.Messages)
+		resp.Body.Close()
+
+		// Check DLQ
+		recDLQReq := models.ReceiveMessageRequest{QueueUrl: dlqUrl, MaxNumberOfMessages: 1, AttributeNames: []string{"ApproximateReceiveCount"}}
+		bodyBytes, _ = json.Marshal(recDLQReq)
+		req, _ = http.NewRequest("POST", app.baseURL+"/", bytes.NewBuffer(bodyBytes))
+		req.Header.Set("X-Amz-Target", "AmazonSQS.ReceiveMessage")
+		resp, err = http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		var recRespDLQ models.ReceiveMessageResponse
+		json.NewDecoder(resp.Body).Decode(&recRespDLQ)
+		require.Len(t, recRespDLQ.Messages, 1)
+		assert.Equal(t, "fail-msg", recRespDLQ.Messages[0].Body)
+		assert.Equal(t, "3", recRespDLQ.Messages[0].Attributes["ApproximateReceiveCount"])
+		resp.Body.Close()
+	})
+}
+
 func TestIntegration_SendMessageBatch(t *testing.T) {
 	app, teardown := setupIntegrationTest(t)
 	defer teardown()
