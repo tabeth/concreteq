@@ -1368,11 +1368,75 @@ func (app *App) ListDeadLetterSourceQueuesHandler(w http.ResponseWriter, r *http
 	json.NewEncoder(w).Encode(resp)
 }
 func (app *App) StartMessageMoveTaskHandler(w http.ResponseWriter, r *http.Request) {
-	app.sendErrorResponse(w, "NotImplemented", "The requested action is not implemented.", http.StatusNotImplemented)
+	var req models.StartMessageMoveTaskRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		app.sendErrorResponse(w, "InvalidRequest", "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if req.SourceArn == "" {
+		app.sendErrorResponse(w, "MissingParameter", "The request must contain a SourceArn.", http.StatusBadRequest)
+		return
+	}
+	// TODO: Validate SourceArn format and existence of queue?
+	// AWS usually validates ARN format. For now, assuming basic non-empty check.
+
+	resp, err := app.Store.StartMessageMoveTask(r.Context(), &req)
+	if err != nil {
+		app.sendErrorResponse(w, "InternalFailure", "Failed to start message move task", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
 }
+
 func (app *App) CancelMessageMoveTaskHandler(w http.ResponseWriter, r *http.Request) {
-	app.sendErrorResponse(w, "NotImplemented", "The requested action is not implemented.", http.StatusNotImplemented)
+	var req models.CancelMessageMoveTaskRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		app.sendErrorResponse(w, "InvalidRequest", "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if req.TaskHandle == "" {
+		app.sendErrorResponse(w, "MissingParameter", "The request must contain a TaskHandle.", http.StatusBadRequest)
+		return
+	}
+
+	resp, err := app.Store.CancelMessageMoveTask(r.Context(), &req)
+	if err != nil {
+		if err.Error() == "ResourceNotFoundException" {
+			app.sendErrorResponse(w, "ResourceNotFoundException", "The specified task does not exist.", http.StatusNotFound)
+			return
+		}
+		app.sendErrorResponse(w, "InternalFailure", "Failed to cancel message move task", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
 }
+
 func (app *App) ListMessageMoveTasksHandler(w http.ResponseWriter, r *http.Request) {
-	app.sendErrorResponse(w, "NotImplemented", "The requested action is not implemented.", http.StatusNotImplemented)
+	var req models.ListMessageMoveTasksRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		// Empty body is allowed if SourceArn is passed differently?
+		// AWS doc says SourceArn is mandatory in the request parameters.
+		app.sendErrorResponse(w, "InvalidRequest", "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if req.SourceArn == "" {
+		app.sendErrorResponse(w, "MissingParameter", "The request must contain a SourceArn.", http.StatusBadRequest)
+		return
+	}
+
+	resp, err := app.Store.ListMessageMoveTasks(r.Context(), &req)
+	if err != nil {
+		app.sendErrorResponse(w, "InternalFailure", "Failed to list message move tasks", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
 }

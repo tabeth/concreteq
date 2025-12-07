@@ -96,9 +96,9 @@ type Store interface {
 	// --- Message Move Tasks --- (Not yet implemented)
 
 	// StartMessageMoveTask starts a task to move messages from a source queue to a destination queue.
-	StartMessageMoveTask(ctx context.Context, sourceArn, destinationArn string) (string, error)
+	StartMessageMoveTask(ctx context.Context, req *models.StartMessageMoveTaskRequest) (*models.StartMessageMoveTaskResponse, error)
 	// CancelMessageMoveTask cancels a message move task.
-	CancelMessageMoveTask(ctx context.Context, taskHandle string) error
+	CancelMessageMoveTask(ctx context.Context, req *models.CancelMessageMoveTaskRequest) (*models.CancelMessageMoveTaskResponse, error)
 	// ListMessageMoveTasks lists the message move tasks for a specific source queue.
-	ListMessageMoveTasks(ctx context.Context, sourceArn string) ([]string, error)
+	ListMessageMoveTasks(ctx context.Context, req *models.ListMessageMoveTasksRequest) (*models.ListMessageMoveTasksResponse, error)
 }

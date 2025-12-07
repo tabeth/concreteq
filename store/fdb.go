@@ -1827,6 +1827,9 @@ func (s *FDBStore) ListDeadLetterSourceQueues(ctx context.Context, queueURL stri
 		return nil, "", ErrQueueDoesNotExist
 	}
 	dlqName := parts[len(parts)-1]
+	if dlqName == "" {
+		return nil, "", ErrQueueDoesNotExist
+	}
 	// Construct the ARN that we expect to find in the RedrivePolicy.
 	// This must match how we construct ARNs elsewhere (see GetQueueAttributesHandler).
 	targetArn := "arn:aws:sqs:us-east-1:123456789012:" + dlqName
@@ -1901,17 +1904,150 @@ func (s *FDBStore) ListDeadLetterSourceQueues(ctx context.Context, queueURL stri
 	return resultQueues, newNextToken, nil
 }
 
-func (s *FDBStore) StartMessageMoveTask(ctx context.Context, sourceArn, destinationArn string) (string, error) {
-	// TODO: Implement in FoundationDB.
-	return "", nil
+func (s *FDBStore) StartMessageMoveTask(ctx context.Context, req *models.StartMessageMoveTaskRequest) (*models.StartMessageMoveTaskResponse, error) {
+	// Store task state in "move_tasks" subspace.
+	// Key: taskHandle -> Task JSON
+	// Key: sourceArn -> taskHandle -> "" (for listing)
+
+	taskHandle := uuid.New().String()
+	task := models.MessageMoveTaskEntry{
+		TaskHandle:                   taskHandle,
+		Status:                       "RUNNING", // Initial status
+		SourceArn:                    req.SourceArn,
+		DestinationArn:               req.DestinationArn,
+		MaxNumberOfMessagesPerSecond: req.MaxNumberOfMessagesPerSecond,
+		StartedTimestamp:             time.Now().Unix(),
+	}
+
+	taskBytes, err := json.Marshal(task)
+	if err != nil {
+		return nil, err
+	}
+
+	_, err = s.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
+		moveTasksDir, err := s.dir.CreateOrOpen(tr, []string{"move_tasks"}, nil)
+		if err != nil {
+			return nil, err
+		}
+
+		// Store task details
+		tr.Set(moveTasksDir.Pack(tuple.Tuple{"task", taskHandle}), taskBytes)
+
+		// Store index by source ARN for listing
+		tr.Set(moveTasksDir.Pack(tuple.Tuple{"source", req.SourceArn, taskHandle}), []byte{})
+
+		return nil, nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	return &models.StartMessageMoveTaskResponse{TaskHandle: taskHandle}, nil
 }
 
-func (s *FDBStore) CancelMessageMoveTask(ctx context.Context, taskHandle string) error {
-	// TODO: Implement in FoundationDB.
-	return nil
+func (s *FDBStore) CancelMessageMoveTask(ctx context.Context, req *models.CancelMessageMoveTaskRequest) (*models.CancelMessageMoveTaskResponse, error) {
+	movedCount, err := s.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
+		moveTasksDir, err := s.dir.CreateOrOpen(tr, []string{"move_tasks"}, nil)
+		if err != nil {
+			return nil, err
+		}
+
+		taskKey := moveTasksDir.Pack(tuple.Tuple{"task", req.TaskHandle})
+		taskBytes, err := tr.Get(taskKey).Get()
+		if err != nil {
+			return nil, err
+		}
+		if taskBytes == nil {
+			return nil, errors.New("ResourceNotFoundException") // Map to proper error in handler
+		}
+
+		var task models.MessageMoveTaskEntry
+		if err := json.Unmarshal(taskBytes, &task); err != nil {
+			return nil, err
+		}
+
+		// If already terminal, do nothing
+		if task.Status == "COMPLETED" || task.Status == "CANCELLED" || task.Status == "FAILED" {
+			return task.ApproximateNumberOfMessagesMoved, nil
+		}
+
+		// Update status to CANCELLED
+		task.Status = "CANCELLED"
+		newTaskBytes, err := json.Marshal(task)
+		if err != nil {
+			return nil, err
+		}
+		tr.Set(taskKey, newTaskBytes)
+
+		return task.ApproximateNumberOfMessagesMoved, nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	return &models.CancelMessageMoveTaskResponse{ApproximateNumberOfMessagesMoved: movedCount.(int64)}, nil
 }
 
-func (s *FDBStore) ListMessageMoveTasks(ctx context.Context, sourceArn string) ([]string, error) {
-	// TODO: Implement in FoundationDB.
-	return nil, nil
+func (s *FDBStore) ListMessageMoveTasks(ctx context.Context, req *models.ListMessageMoveTasksRequest) (*models.ListMessageMoveTasksResponse, error) {
+	results, err := s.db.ReadTransact(func(tr fdb.ReadTransaction) (interface{}, error) {
+		moveTasksDir, err := s.dir.Open(tr, []string{"move_tasks"}, nil)
+		if err != nil {
+			// If the directory doesn't exist, it means no tasks have ever been created.
+			if errors.Is(err, directory.ErrDirNotExists) {
+				return []models.MessageMoveTaskEntry{}, nil
+			}
+			return nil, err
+		}
+
+		// Scan "source" index: (source, sourceArn, taskHandle)
+		// We use subspace.Sub("source", req.SourceArn) to create a prefix for the range scan.
+		// This avoids manual byte manipulation and ensures correct range definition.
+		sourceIndexDir := moveTasksDir.Sub("source", req.SourceArn)
+		rangeOpts := fdb.RangeOptions{}
+		if req.MaxResults > 0 {
+			rangeOpts.Limit = req.MaxResults
+		}
+
+		// Get task handles for this source ARN
+		// KeyRange for the subspace covers all keys starting with the subspace prefix.
+		kvs, err := tr.GetRange(sourceIndexDir, rangeOpts).GetSliceWithError()
+		if err != nil {
+			return nil, err
+		}
+
+		var tasks []models.MessageMoveTaskEntry
+		for _, kv := range kvs {
+			t, err := moveTasksDir.Unpack(kv.Key)
+			if err != nil {
+				continue
+			}
+			// t is ("source", sourceArn, taskHandle)
+			taskHandle := t[2].(string)
+
+			// Fetch task details
+			taskBytes, err := tr.Get(moveTasksDir.Pack(tuple.Tuple{"task", taskHandle})).Get()
+			if err != nil || taskBytes == nil {
+				continue
+			}
+
+			var task models.MessageMoveTaskEntry
+			if err := json.Unmarshal(taskBytes, &task); err == nil {
+				tasks = append(tasks, task)
+			}
+		}
+
+		return tasks, nil
+	})
+
+	if err != nil {
+		// Handle directory not exists error gracefully if not caught inside transaction
+		if errors.Is(err, directory.ErrDirNotExists) {
+			return &models.ListMessageMoveTasksResponse{Results: []models.MessageMoveTaskEntry{}}, nil
+		}
+		return nil, err
+	}
+
+	return &models.ListMessageMoveTasksResponse{Results: results.([]models.MessageMoveTaskEntry)}, nil
 }

@@ -134,12 +134,26 @@ func (m *MockStore) ListDeadLetterSourceQueues(ctx context.Context, queueURL str
 	}
 	return queues, args.String(1), args.Error(2)
 }
-func (m *MockStore) StartMessageMoveTask(ctx context.Context, sourceArn, destinationArn string) (string, error) {
-	return "", nil
+func (m *MockStore) StartMessageMoveTask(ctx context.Context, req *models.StartMessageMoveTaskRequest) (*models.StartMessageMoveTaskResponse, error) {
+	args := m.Called(ctx, req)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*models.StartMessageMoveTaskResponse), args.Error(1)
 }
-func (m *MockStore) CancelMessageMoveTask(ctx context.Context, taskHandle string) error { return nil }
-func (m *MockStore) ListMessageMoveTasks(ctx context.Context, sourceArn string) ([]string, error) {
-	return nil, nil
+func (m *MockStore) CancelMessageMoveTask(ctx context.Context, req *models.CancelMessageMoveTaskRequest) (*models.CancelMessageMoveTaskResponse, error) {
+	args := m.Called(ctx, req)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*models.CancelMessageMoveTaskResponse), args.Error(1)
+}
+func (m *MockStore) ListMessageMoveTasks(ctx context.Context, req *models.ListMessageMoveTasksRequest) (*models.ListMessageMoveTasksResponse, error) {
+	args := m.Called(ctx, req)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*models.ListMessageMoveTasksResponse), args.Error(1)
 }
 
 func TestCreateQueueHandler(t *testing.T) {
