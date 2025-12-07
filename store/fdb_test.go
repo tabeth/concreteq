@@ -35,10 +35,7 @@ func TestFDBStore_Unimplemented(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, store.AddPermission(ctx, "q", "l", nil))
 	assert.NoError(t, store.RemovePermission(ctx, "q", "l"))
-	_, err = store.StartMessageMoveTask(ctx, "s", "d")
-	assert.NoError(t, err)
-	assert.NoError(t, store.CancelMessageMoveTask(ctx, "t"))
-	_, err = store.ListMessageMoveTasks(ctx, "s")
+	_, err = store.ListDeadLetterSourceQueues(ctx, "q")
 	assert.NoError(t, err)
 }
 
