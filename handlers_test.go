@@ -138,7 +138,7 @@ func (m *MockStore) StartMessageMoveTask(ctx context.Context, sourceArn, destina
 	return "", nil
 }
 func (m *MockStore) CancelMessageMoveTask(ctx context.Context, taskHandle string) error { return nil }
-func (m *MockStore) ListMessageMoveTasks(ctx context.Context, sourceArn string) ([]string, error) {
+func (m *MockStore) ListMessageMoveTasks(ctx context.Context, sourceArn string) ([]models.ListMessageMoveTasksResultEntry, error) {
 	return nil, nil
 }
 
@@ -632,9 +632,7 @@ func TestUnimplementedHandlers(t *testing.T) {
 	unimplementedTargets := []string{
 		"AmazonSQS.AddPermission",
 		"AmazonSQS.RemovePermission",
-		"AmazonSQS.StartMessageMoveTask",
-		"AmazonSQS.CancelMessageMoveTask",
-		"AmazonSQS.ListMessageMoveTasks",
+		"AmazonSQS.ListDeadLetterSourceQueues",
 	}
 
 	for _, target := range unimplementedTargets {
