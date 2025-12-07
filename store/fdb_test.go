@@ -35,11 +35,50 @@ func TestFDBStore_Unimplemented(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, store.AddPermission(ctx, "q", "l", nil))
 	assert.NoError(t, store.RemovePermission(ctx, "q", "l"))
-	_, err = store.StartMessageMoveTask(ctx, "s", "d")
-	assert.NoError(t, err)
-	assert.NoError(t, store.CancelMessageMoveTask(ctx, "t"))
-	_, err = store.ListMessageMoveTasks(ctx, "s")
-	assert.NoError(t, err)
+}
+
+func TestFDBStore_MessageMoveTasks(t *testing.T) {
+	ctx := context.Background()
+	store, teardown := setupTestDB(t)
+	defer teardown()
+
+	srcArn := "arn:aws:sqs:us-east-1:123456789012:src"
+	dstArn := "arn:aws:sqs:us-east-1:123456789012:dst"
+
+	// Start Task
+	startReq := &models.StartMessageMoveTaskRequest{
+		SourceArn:      srcArn,
+		DestinationArn: dstArn,
+	}
+	startResp, err := store.StartMessageMoveTask(ctx, startReq)
+	require.NoError(t, err)
+	require.NotNil(t, startResp)
+	assert.NotEmpty(t, startResp.TaskHandle)
+
+	// List Tasks
+	listReq := &models.ListMessageMoveTasksRequest{
+		SourceArn: srcArn,
+	}
+	listResp, err := store.ListMessageMoveTasks(ctx, listReq)
+	require.NoError(t, err)
+	require.NotNil(t, listResp)
+	require.Len(t, listResp.Results, 1)
+	assert.Equal(t, startResp.TaskHandle, listResp.Results[0].TaskHandle)
+	assert.Equal(t, "RUNNING", listResp.Results[0].Status)
+
+	// Cancel Task
+	cancelReq := &models.CancelMessageMoveTaskRequest{
+		TaskHandle: startResp.TaskHandle,
+	}
+	cancelResp, err := store.CancelMessageMoveTask(ctx, cancelReq)
+	require.NoError(t, err)
+	require.NotNil(t, cancelResp)
+
+	// List again to verify status
+	listResp, err = store.ListMessageMoveTasks(ctx, listReq)
+	require.NoError(t, err)
+	require.Len(t, listResp.Results, 1)
+	assert.Equal(t, "CANCELLED", listResp.Results[0].Status)
 }
 
 func TestFDBStore_ListDeadLetterSourceQueues(t *testing.T) {

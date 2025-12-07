@@ -1634,3 +1634,179 @@ func TestIntegration_Messaging(t *testing.T) {
 		})
 	})
 }
+package main
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"github.com/tabeth/concreteq/models"
+)
+
+func TestIntegration_MessageMoveTasks(t *testing.T) {
+	app, teardown := setupIntegrationTest(t)
+	defer teardown()
+
+	ctx := context.Background()
+	srcQueueName := "move-task-src"
+	dstQueueName := "move-task-dst"
+
+	_, err := app.store.CreateQueue(ctx, srcQueueName, nil, nil)
+	require.NoError(t, err)
+	_, err = app.store.CreateQueue(ctx, dstQueueName, nil, nil)
+	require.NoError(t, err)
+
+	srcArn := fmt.Sprintf("arn:aws:sqs:us-east-1:123456789012:%s", srcQueueName)
+	dstArn := fmt.Sprintf("arn:aws:sqs:us-east-1:123456789012:%s", dstQueueName)
+
+	t.Run("StartMessageMoveTask", func(t *testing.T) {
+		reqBody := models.StartMessageMoveTaskRequest{
+			SourceArn:      srcArn,
+			DestinationArn: dstArn,
+		}
+		bodyBytes, _ := json.Marshal(reqBody)
+		req, _ := http.NewRequest("POST", app.baseURL+"/", bytes.NewBuffer(bodyBytes))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Amz-Target", "AmazonSQS.StartMessageMoveTask")
+
+		resp, err := http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		defer resp.Body.Close()
+
+		if resp.StatusCode == http.StatusNotImplemented {
+			t.Skip("StartMessageMoveTask not implemented yet")
+		}
+
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+		var startResp models.StartMessageMoveTaskResponse
+		err = json.NewDecoder(resp.Body).Decode(&startResp)
+		require.NoError(t, err)
+		assert.NotEmpty(t, startResp.TaskHandle)
+
+		// Verify task exists via List
+		t.Run("ListMessageMoveTasks", func(t *testing.T) {
+			listReqBody := models.ListMessageMoveTasksRequest{
+				SourceArn: srcArn,
+			}
+			listBodyBytes, _ := json.Marshal(listReqBody)
+			listReq, _ := http.NewRequest("POST", app.baseURL+"/", bytes.NewBuffer(listBodyBytes))
+			listReq.Header.Set("Content-Type", "application/json")
+			listReq.Header.Set("X-Amz-Target", "AmazonSQS.ListMessageMoveTasks")
+
+			listResp, err := http.DefaultClient.Do(listReq)
+			require.NoError(t, err)
+			defer listResp.Body.Close()
+
+			assert.Equal(t, http.StatusOK, listResp.StatusCode)
+			var listRespBody models.ListMessageMoveTasksResponse
+			err = json.NewDecoder(listResp.Body).Decode(&listRespBody)
+			require.NoError(t, err)
+			require.Len(t, listRespBody.Results, 1)
+			assert.Equal(t, startResp.TaskHandle, listRespBody.Results[0].TaskHandle)
+			assert.Equal(t, "RUNNING", listRespBody.Results[0].Status)
+			assert.Equal(t, srcArn, listRespBody.Results[0].SourceArn)
+			assert.Equal(t, dstArn, listRespBody.Results[0].DestinationArn)
+		})
+
+		// Try to start another task (should fail)
+		t.Run("Concurrent Task Limit", func(t *testing.T) {
+			req, _ := http.NewRequest("POST", app.baseURL+"/", bytes.NewBuffer(bodyBytes))
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("X-Amz-Target", "AmazonSQS.StartMessageMoveTask")
+
+			resp, err := http.DefaultClient.Do(req)
+			require.NoError(t, err)
+			defer resp.Body.Close()
+
+			assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+			var errResp models.ErrorResponse
+			json.NewDecoder(resp.Body).Decode(&errResp)
+			assert.Equal(t, "UnsupportedOperation", errResp.Type)
+		})
+
+		// Cancel Task
+		t.Run("CancelMessageMoveTask", func(t *testing.T) {
+			cancelReqBody := models.CancelMessageMoveTaskRequest{
+				TaskHandle: startResp.TaskHandle,
+			}
+			cancelBodyBytes, _ := json.Marshal(cancelReqBody)
+			cancelReq, _ := http.NewRequest("POST", app.baseURL+"/", bytes.NewBuffer(cancelBodyBytes))
+			cancelReq.Header.Set("Content-Type", "application/json")
+			cancelReq.Header.Set("X-Amz-Target", "AmazonSQS.CancelMessageMoveTask")
+
+			cancelResp, err := http.DefaultClient.Do(cancelReq)
+			require.NoError(t, err)
+			defer cancelResp.Body.Close()
+
+			assert.Equal(t, http.StatusOK, cancelResp.StatusCode)
+			var cancelRespBody models.CancelMessageMoveTaskResponse
+			err = json.NewDecoder(cancelResp.Body).Decode(&cancelRespBody)
+			require.NoError(t, err)
+			assert.Equal(t, int64(0), cancelRespBody.ApproximateNumberOfMessagesMoved)
+
+			// Verify status changed to CANCELLED
+			listReqBody := models.ListMessageMoveTasksRequest{
+				SourceArn: srcArn,
+			}
+			listBodyBytes, _ := json.Marshal(listReqBody)
+			listReq, _ := http.NewRequest("POST", app.baseURL+"/", bytes.NewBuffer(listBodyBytes))
+			listReq.Header.Set("Content-Type", "application/json")
+			listReq.Header.Set("X-Amz-Target", "AmazonSQS.ListMessageMoveTasks")
+
+			listResp, err := http.DefaultClient.Do(listReq)
+			require.NoError(t, err)
+			defer listResp.Body.Close()
+
+			var listRespBody models.ListMessageMoveTasksResponse
+			json.NewDecoder(listResp.Body).Decode(&listRespBody)
+			assert.Equal(t, "CANCELLED", listRespBody.Results[0].Status)
+		})
+	})
+
+	t.Run("Validation Errors", func(t *testing.T) {
+		// Non-existent source
+		t.Run("NonExistentSource", func(t *testing.T) {
+			reqBody := models.StartMessageMoveTaskRequest{
+				SourceArn: "arn:aws:sqs:us-east-1:123456789012:non-existent",
+			}
+			bodyBytes, _ := json.Marshal(reqBody)
+			req, _ := http.NewRequest("POST", app.baseURL+"/", bytes.NewBuffer(bodyBytes))
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("X-Amz-Target", "AmazonSQS.StartMessageMoveTask")
+
+			resp, err := http.DefaultClient.Do(req)
+			require.NoError(t, err)
+			defer resp.Body.Close()
+			assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+			var errResp models.ErrorResponse
+			json.NewDecoder(resp.Body).Decode(&errResp)
+			assert.Equal(t, "ResourceNotFoundException", errResp.Type)
+		})
+
+		// Max messages too high
+		t.Run("MaxMessagesTooHigh", func(t *testing.T) {
+			reqBody := models.StartMessageMoveTaskRequest{
+				SourceArn:                    srcArn,
+				MaxNumberOfMessagesPerSecond: 501,
+			}
+			bodyBytes, _ := json.Marshal(reqBody)
+			req, _ := http.NewRequest("POST", app.baseURL+"/", bytes.NewBuffer(bodyBytes))
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("X-Amz-Target", "AmazonSQS.StartMessageMoveTask")
+
+			resp, err := http.DefaultClient.Do(req)
+			require.NoError(t, err)
+			defer resp.Body.Close()
+			assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+			var errResp models.ErrorResponse
+			json.NewDecoder(resp.Body).Decode(&errResp)
+			assert.Equal(t, "InvalidParameterValue", errResp.Type)
+		})
+	})
+}

@@ -323,3 +323,48 @@ type ListDeadLetterSourceQueuesResponse struct {
 	QueueUrls []string `json:"queueUrls"`
 	NextToken string   `json:"NextToken,omitempty"`
 }
+// StartMessageMoveTaskRequest defines the parameters for the SQS StartMessageMoveTask action.
+type StartMessageMoveTaskRequest struct {
+	SourceArn                    string `json:"SourceArn"`
+	DestinationArn               string `json:"DestinationArn"`
+	MaxNumberOfMessagesPerSecond int    `json:"MaxNumberOfMessagesPerSecond,omitempty"`
+}
+
+// StartMessageMoveTaskResponse defines the structure for the SQS StartMessageMoveTask action's output.
+type StartMessageMoveTaskResponse struct {
+	TaskHandle string `json:"TaskHandle"`
+}
+
+// CancelMessageMoveTaskRequest defines the parameters for the SQS CancelMessageMoveTask action.
+type CancelMessageMoveTaskRequest struct {
+	TaskHandle string `json:"TaskHandle"`
+}
+
+// CancelMessageMoveTaskResponse defines the structure for the SQS CancelMessageMoveTask action's output.
+type CancelMessageMoveTaskResponse struct {
+	ApproximateNumberOfMessagesMoved int64 `json:"ApproximateNumberOfMessagesMoved"`
+}
+
+// ListMessageMoveTasksRequest defines the parameters for the SQS ListMessageMoveTasks action.
+type ListMessageMoveTasksRequest struct {
+	SourceArn  string `json:"SourceArn"`
+	MaxResults int    `json:"MaxResults,omitempty"`
+}
+
+// ListMessageMoveTasksResponse defines the structure for the SQS ListMessageMoveTasks action's output.
+type ListMessageMoveTasksResponse struct {
+	Results []MessageMoveTaskEntry `json:"Results"`
+}
+
+// MessageMoveTaskEntry contains the details of a message move task.
+type MessageMoveTaskEntry struct {
+	TaskHandle                       string `json:"TaskHandle"`
+	Status                           string `json:"Status"`
+	SourceArn                        string `json:"SourceArn"`
+	DestinationArn                   string `json:"DestinationArn"`
+	MaxNumberOfMessagesPerSecond     int    `json:"MaxNumberOfMessagesPerSecond,omitempty"`
+	ApproximateNumberOfMessagesMoved int64  `json:"ApproximateNumberOfMessagesMoved"`
+	ApproximateNumberOfMessagesToMove int64 `json:"ApproximateNumberOfMessagesToMove"`
+	FailureReason                    string `json:"FailureReason,omitempty"`
+	StartedTimestamp                 int64  `json:"StartedTimestamp"`
+}
