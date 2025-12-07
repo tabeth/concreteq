@@ -1905,9 +1905,31 @@ func (s *FDBStore) ListDeadLetterSourceQueues(ctx context.Context, queueURL stri
 }
 
 func (s *FDBStore) StartMessageMoveTask(ctx context.Context, req *models.StartMessageMoveTaskRequest) (*models.StartMessageMoveTaskResponse, error) {
-	// Store task state in "move_tasks" subspace.
-	// Key: taskHandle -> Task JSON
-	// Key: sourceArn -> taskHandle -> "" (for listing)
+	if req.MaxNumberOfMessagesPerSecond > 500 {
+		return nil, errors.New("InvalidParameterValue: MaxNumberOfMessagesPerSecond cannot exceed 500")
+	}
+
+	// Helper to extract queue name from ARN (arn:aws:sqs:region:account:queueName)
+	extractQueueName := func(arn string) string {
+		parts := strings.Split(arn, ":")
+		if len(parts) > 0 {
+			return parts[len(parts)-1]
+		}
+		return ""
+	}
+
+	sourceQueueName := extractQueueName(req.SourceArn)
+	if sourceQueueName == "" {
+		return nil, errors.New("ResourceNotFoundException")
+	}
+
+	var destQueueName string
+	if req.DestinationArn != "" {
+		destQueueName = extractQueueName(req.DestinationArn)
+		if destQueueName == "" {
+			return nil, errors.New("ResourceNotFoundException")
+		}
+	}
 
 	taskHandle := uuid.New().String()
 	task := models.MessageMoveTaskEntry{
@@ -1925,15 +1947,66 @@ func (s *FDBStore) StartMessageMoveTask(ctx context.Context, req *models.StartMe
 	}
 
 	_, err = s.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
+		// 1. Verify Source Queue Exists
+		exists, err := s.dir.Exists(tr, []string{sourceQueueName})
+		if err != nil {
+			return nil, err
+		}
+		if !exists {
+			return nil, errors.New("ResourceNotFoundException")
+		}
+
+		// 2. Verify Destination Queue Exists (if provided)
+		if destQueueName != "" {
+			exists, err := s.dir.Exists(tr, []string{destQueueName})
+			if err != nil {
+				return nil, err
+			}
+			if !exists {
+				return nil, errors.New("ResourceNotFoundException")
+			}
+		}
+
 		moveTasksDir, err := s.dir.CreateOrOpen(tr, []string{"move_tasks"}, nil)
 		if err != nil {
 			return nil, err
 		}
 
-		// Store task details
+		// 3. Check for existing active tasks for this SourceArn
+		// Scan "source" index: (source, sourceArn, taskHandle)
+		sourceIndexDir := moveTasksDir.Sub("source", req.SourceArn)
+		kvs, err := tr.GetRange(sourceIndexDir, fdb.RangeOptions{}).GetSliceWithError()
+		if err != nil {
+			return nil, err
+		}
+
+		for _, kv := range kvs {
+			t, err := moveTasksDir.Unpack(kv.Key)
+			if err != nil {
+				continue
+			}
+			// t is ("source", sourceArn, taskHandle)
+			existingTaskHandle := t[2].(string)
+
+			// Fetch task details to check status
+			existingTaskBytes, err := tr.Get(moveTasksDir.Pack(tuple.Tuple{"task", existingTaskHandle})).Get()
+			if err != nil {
+				return nil, err
+			}
+			if existingTaskBytes != nil {
+				var existingTask models.MessageMoveTaskEntry
+				if err := json.Unmarshal(existingTaskBytes, &existingTask); err == nil {
+					if existingTask.Status == "RUNNING" {
+						return nil, errors.New("UnsupportedOperation")
+					}
+				}
+			}
+		}
+
+		// 4. Store new task details
 		tr.Set(moveTasksDir.Pack(tuple.Tuple{"task", taskHandle}), taskBytes)
 
-		// Store index by source ARN for listing
+		// 5. Store index by source ARN
 		tr.Set(moveTasksDir.Pack(tuple.Tuple{"source", req.SourceArn, taskHandle}), []byte{})
 
 		return nil, nil

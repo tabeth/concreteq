@@ -1383,6 +1383,19 @@ func (app *App) StartMessageMoveTaskHandler(w http.ResponseWriter, r *http.Reque
 
 	resp, err := app.Store.StartMessageMoveTask(r.Context(), &req)
 	if err != nil {
+		if strings.HasPrefix(err.Error(), "InvalidParameterValue") {
+			parts := strings.SplitN(err.Error(), ": ", 2)
+			app.sendErrorResponse(w, "InvalidParameterValue", parts[1], http.StatusBadRequest)
+			return
+		}
+		if err.Error() == "ResourceNotFoundException" {
+			app.sendErrorResponse(w, "ResourceNotFoundException", "One or more specified resources don't exist.", http.StatusBadRequest)
+			return
+		}
+		if err.Error() == "UnsupportedOperation" {
+			app.sendErrorResponse(w, "UnsupportedOperation", "Only one active message movement task is supported per queue at any given time.", http.StatusBadRequest)
+			return
+		}
 		app.sendErrorResponse(w, "InternalFailure", "Failed to start message move task", http.StatusInternalServerError)
 		return
 	}
