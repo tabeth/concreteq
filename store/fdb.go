@@ -1818,9 +1818,87 @@ func (s *FDBStore) UntagQueue(ctx context.Context, queueName string, tagKeys []s
 	return err
 }
 
-func (s *FDBStore) ListDeadLetterSourceQueues(ctx context.Context, queueURL string) ([]string, error) {
-	// TODO: Implement in FoundationDB.
-	return nil, nil
+func (s *FDBStore) ListDeadLetterSourceQueues(ctx context.Context, queueURL string, maxResults int, nextToken string) ([]string, string, error) {
+	// 1. Extract the queue name from the input QueueUrl to construct the target ARN.
+	//    The input is a URL, e.g., "http://localhost:8080/queues/MyDeadLetterQueue".
+	//    The RedrivePolicy stores an ARN, e.g., "arn:aws:sqs:us-east-1:123456789012:MyDeadLetterQueue".
+	parts := strings.Split(queueURL, "/")
+	if len(parts) == 0 {
+		return nil, "", ErrQueueDoesNotExist
+	}
+	dlqName := parts[len(parts)-1]
+	// Construct the ARN that we expect to find in the RedrivePolicy.
+	// This must match how we construct ARNs elsewhere (see GetQueueAttributesHandler).
+	targetArn := "arn:aws:sqs:us-east-1:123456789012:" + dlqName
+
+	// 2. Iterate through all queues to find those that reference this DLQ.
+	//    We use ReadTransact because we are only reading data.
+	queues, err := s.db.ReadTransact(func(tr fdb.ReadTransaction) (interface{}, error) {
+		return s.dir.List(tr, []string{})
+	})
+	if err != nil {
+		return nil, "", err
+	}
+
+	allQueues := queues.([]string)
+	var matchingQueues []string
+
+	// 3. Scan all queues and check their RedrivePolicy.
+	//    This is O(N) where N is the total number of queues.
+	//    Optimizing this would require a reverse index (DLQ -> [Source Queues]).
+	for _, qName := range allQueues {
+		attrs, err := s.GetQueueAttributes(ctx, qName)
+		if err != nil {
+			continue // Skip if we can't get attributes
+		}
+
+		if policyStr, ok := attrs["RedrivePolicy"]; ok {
+			var policy struct {
+				DeadLetterTargetArn string `json:"deadLetterTargetArn"`
+			}
+			if json.Unmarshal([]byte(policyStr), &policy) == nil {
+				if policy.DeadLetterTargetArn == targetArn {
+					matchingQueues = append(matchingQueues, qName)
+				}
+			}
+		}
+	}
+
+	// 4. Implement pagination.
+	startIndex := 0
+	if nextToken != "" {
+		found := false
+		for i, q := range matchingQueues {
+			if q == nextToken {
+				startIndex = i + 1
+				found = true
+				break
+			}
+		}
+		if !found {
+			return []string{}, "", nil
+		}
+	}
+
+	if startIndex >= len(matchingQueues) {
+		return []string{}, "", nil
+	}
+
+	endIndex := len(matchingQueues)
+	if maxResults > 0 {
+		endIndex = startIndex + maxResults
+	}
+	if endIndex > len(matchingQueues) {
+		endIndex = len(matchingQueues)
+	}
+
+	resultQueues := matchingQueues[startIndex:endIndex]
+	var newNextToken string
+	if maxResults > 0 && endIndex < len(matchingQueues) {
+		newNextToken = resultQueues[len(resultQueues)-1]
+	}
+
+	return resultQueues, newNextToken, nil
 }
 
 func (s *FDBStore) StartMessageMoveTask(ctx context.Context, sourceArn, destinationArn string) (string, error) {
