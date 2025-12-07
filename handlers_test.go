@@ -628,9 +628,6 @@ func TestUnimplementedHandlers(t *testing.T) {
 		"AmazonSQS.AddPermission",
 		"AmazonSQS.RemovePermission",
 		"AmazonSQS.ListDeadLetterSourceQueues",
-		"AmazonSQS.StartMessageMoveTask",
-		"AmazonSQS.CancelMessageMoveTask",
-		"AmazonSQS.ListMessageMoveTasks",
 	}
 
 	for _, target := range unimplementedTargets {

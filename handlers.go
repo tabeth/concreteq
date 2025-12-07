@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -149,6 +150,7 @@ func (app *App) RootSQSHandler(w http.ResponseWriter, r *http.Request) {
 // For FIFO queues, the name must end with the .fifo suffix.
 var queueNameRegex = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,80}(\.fifo)?$`)
 var batchEntryIdRegex = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,80}$`)
+var arnRegex = regexp.MustCompile(`^arn:aws:sqs:[a-z0-9-]+:[0-9]+:[a-zA-Z0-9_-]{1,80}(\.fifo)?$`)
 
 // validateIntAttribute is a helper for checking if a string can be parsed as an integer
 // and falls within a specified min/max range. This is used for validating queue attributes.
@@ -1315,6 +1317,23 @@ func (app *App) UntagQueueHandler(w http.ResponseWriter, r *http.Request) {
 func (app *App) ListDeadLetterSourceQueuesHandler(w http.ResponseWriter, r *http.Request) {
 	app.sendErrorResponse(w, "NotImplemented", "The requested action is not implemented.", http.StatusNotImplemented)
 }
+func (app *App) validateSourceArn(ctx context.Context, sourceArn string) error {
+	if !arnRegex.MatchString(sourceArn) {
+		return &SqsError{Type: "InvalidParameterValue", Message: "Invalid SourceArn format."}
+	}
+	parts := strings.Split(sourceArn, ":")
+	queueName := parts[len(parts)-1]
+
+	_, err := app.Store.GetQueueAttributes(ctx, queueName)
+	if err != nil {
+		if errors.Is(err, store.ErrQueueDoesNotExist) {
+			return &SqsError{Type: "QueueDoesNotExist", Message: "The specified queue does not exist."}
+		}
+		return err
+	}
+	return nil
+}
+
 func (app *App) StartMessageMoveTaskHandler(w http.ResponseWriter, r *http.Request) {
 	var req models.StartMessageMoveTaskRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -1324,6 +1343,15 @@ func (app *App) StartMessageMoveTaskHandler(w http.ResponseWriter, r *http.Reque
 
 	if req.SourceArn == "" {
 		app.sendErrorResponse(w, "MissingParameter", "The request must contain a SourceArn.", http.StatusBadRequest)
+		return
+	}
+
+	if err := app.validateSourceArn(r.Context(), req.SourceArn); err != nil {
+		if serr, ok := err.(*SqsError); ok {
+			app.sendErrorResponse(w, serr.Type, serr.Message, http.StatusBadRequest)
+		} else {
+			app.sendErrorResponse(w, "InternalFailure", "Failed to validate SourceArn", http.StatusInternalServerError)
+		}
 		return
 	}
 
@@ -1395,6 +1423,15 @@ func (app *App) ListMessageMoveTasksHandler(w http.ResponseWriter, r *http.Reque
 
 	if req.SourceArn == "" {
 		app.sendErrorResponse(w, "MissingParameter", "The request must contain a SourceArn.", http.StatusBadRequest)
+		return
+	}
+
+	if err := app.validateSourceArn(r.Context(), req.SourceArn); err != nil {
+		if serr, ok := err.(*SqsError); ok {
+			app.sendErrorResponse(w, serr.Type, serr.Message, http.StatusBadRequest)
+		} else {
+			app.sendErrorResponse(w, "InternalFailure", "Failed to validate SourceArn", http.StatusInternalServerError)
+		}
 		return
 	}
 
