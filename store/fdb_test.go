@@ -39,6 +39,60 @@ func TestFDBStore_Unimplemented(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+func TestFDBStore_ListDeadLetterSourceQueues(t *testing.T) {
+	ctx := context.Background()
+	store, teardown := setupTestDB(t)
+	defer teardown()
+
+	// Create DLQ
+	dlqName := "MyDeadLetterQueue"
+	dlqUrl := "http://localhost:8080/queues/" + dlqName
+	_, err := store.CreateQueue(ctx, dlqName, nil, nil)
+	require.NoError(t, err)
+
+	// Create Source Queues pointing to DLQ
+	numQueues := 5
+	redrivePolicy := fmt.Sprintf(`{"deadLetterTargetArn":"arn:aws:sqs:us-east-1:123456789012:%s","maxReceiveCount":"1"}`, dlqName)
+	for i := 0; i < numQueues; i++ {
+		qName := fmt.Sprintf("src-queue-%d", i)
+		_, err := store.CreateQueue(ctx, qName, map[string]string{"RedrivePolicy": redrivePolicy}, nil)
+		require.NoError(t, err)
+	}
+
+	// Create a queue NOT pointing to DLQ
+	_, err = store.CreateQueue(ctx, "other-queue", nil, nil)
+	require.NoError(t, err)
+
+	// 1. List all source queues
+	queues, nextToken, err := store.ListDeadLetterSourceQueues(ctx, dlqUrl, 10, "")
+	require.NoError(t, err)
+	assert.Empty(t, nextToken)
+	assert.Len(t, queues, numQueues)
+	for _, q := range queues {
+		assert.Contains(t, q, "src-queue-")
+	}
+
+	// 2. Pagination
+	queues1, nextToken1, err := store.ListDeadLetterSourceQueues(ctx, dlqUrl, 2, "")
+	require.NoError(t, err)
+	assert.NotEmpty(t, nextToken1)
+	assert.Len(t, queues1, 2)
+
+	queues2, nextToken2, err := store.ListDeadLetterSourceQueues(ctx, dlqUrl, 2, nextToken1)
+	require.NoError(t, err)
+	assert.NotEmpty(t, nextToken2)
+	assert.Len(t, queues2, 2)
+
+	// Ensure no overlap
+	for _, q := range queues1 {
+		assert.NotContains(t, queues2, q)
+	}
+
+	// 3. Error if DLQ URL is invalid (no queue name)
+	_, _, err = store.ListDeadLetterSourceQueues(ctx, "", 10, "")
+	assert.ErrorIs(t, err, ErrQueueDoesNotExist)
+}
+
 func TestHashSystemAttributes(t *testing.T) {
 	sv := "value"
 	attrs := map[string]models.MessageSystemAttributeValue{

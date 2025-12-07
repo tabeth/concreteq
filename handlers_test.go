@@ -126,8 +126,13 @@ func (m *MockStore) UntagQueue(ctx context.Context, queueName string, tagKeys []
 	args := m.Called(ctx, queueName, tagKeys)
 	return args.Error(0)
 }
-func (m *MockStore) ListDeadLetterSourceQueues(ctx context.Context, queueURL string) ([]string, error) {
-	return nil, nil
+func (m *MockStore) ListDeadLetterSourceQueues(ctx context.Context, queueURL string, maxResults int, nextToken string) ([]string, string, error) {
+	args := m.Called(ctx, queueURL, maxResults, nextToken)
+	var queues []string
+	if args.Get(0) != nil {
+		queues = args.Get(0).([]string)
+	}
+	return queues, args.String(1), args.Error(2)
 }
 func (m *MockStore) StartMessageMoveTask(ctx context.Context, sourceArn, destinationArn string) (string, error) {
 	return "", nil
@@ -1754,6 +1759,85 @@ func TestChangeMessageVisibilityHandler(t *testing.T) {
 			assert.Equal(t, tc.expectedStatusCode, rr.Code)
 			if tc.expectedBody != "" {
 				require.JSONEq(t, tc.expectedBody, rr.Body.String())
+			}
+
+			mockStore.AssertExpectations(t)
+		})
+	}
+}
+func TestListDeadLetterSourceQueuesHandler(t *testing.T) {
+	tests := []struct {
+		name               string
+		inputBody          string
+		mockSetup          func(*MockStore)
+		expectedStatusCode int
+		expectedBody       string
+	}{
+		{
+			name:      "Successful Listing",
+			inputBody: `{"QueueUrl": "http://localhost:8080/queues/dlq", "MaxResults": 10}`,
+			mockSetup: func(ms *MockStore) {
+				ms.On("ListDeadLetterSourceQueues", mock.Anything, "http://localhost:8080/queues/dlq", 10, "").Return([]string{"src-q1"}, "token", nil)
+			},
+			expectedStatusCode: http.StatusOK,
+			expectedBody:       `{"queueUrls":["http://localhost:8080/queues/src-q1"],"NextToken":"token"}`,
+		},
+		{
+			name:      "Successful Listing Defaults",
+			inputBody: `{"QueueUrl": "http://localhost:8080/queues/dlq"}`,
+			mockSetup: func(ms *MockStore) {
+				ms.On("ListDeadLetterSourceQueues", mock.Anything, "http://localhost:8080/queues/dlq", 1000, "").Return([]string{"src-q1"}, "", nil)
+			},
+			expectedStatusCode: http.StatusOK,
+			expectedBody:       `{"queueUrls":["http://localhost:8080/queues/src-q1"]}`,
+		},
+		{
+			name:               "Missing QueueUrl",
+			inputBody:          `{}`,
+			mockSetup:          func(ms *MockStore) {},
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       `{"__type":"MissingParameter", "message":"The request must contain a QueueUrl."}`,
+		},
+		{
+			name:               "Invalid MaxResults",
+			inputBody:          `{"QueueUrl": "http://localhost/queues/dlq", "MaxResults": 2000}`,
+			mockSetup:          func(ms *MockStore) {},
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       `{"__type":"InvalidParameterValue", "message":"MaxResults must be an integer between 1 and 1000."}`,
+		},
+		{
+			name:      "Queue Does Not Exist",
+			inputBody: `{"QueueUrl": "http://localhost:8080/queues/non-existent"}`,
+			mockSetup: func(ms *MockStore) {
+				ms.On("ListDeadLetterSourceQueues", mock.Anything, "http://localhost:8080/queues/non-existent", 1000, "").Return(nil, "", store.ErrQueueDoesNotExist)
+			},
+			expectedStatusCode: http.StatusBadRequest,
+			expectedBody:       `{"__type":"QueueDoesNotExist", "message":"The specified queue does not exist."}`,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mockStore := new(MockStore)
+			tc.mockSetup(mockStore)
+
+			app := &App{Store: mockStore}
+			r := chi.NewRouter()
+			app.RegisterSQSHandlers(r)
+
+			req, _ := http.NewRequest("POST", "/", bytes.NewBufferString(tc.inputBody))
+			req.Host = "localhost:8080"
+			req.Header.Set("X-Amz-Target", "AmazonSQS.ListDeadLetterSourceQueues")
+			rr := httptest.NewRecorder()
+
+			r.ServeHTTP(rr, req)
+
+			assert.Equal(t, tc.expectedStatusCode, rr.Code)
+
+			if tc.expectedBody != "" {
+				if strings.HasPrefix(tc.expectedBody, "{") {
+					require.JSONEq(t, tc.expectedBody, rr.Body.String())
+				}
 			}
 
 			mockStore.AssertExpectations(t)

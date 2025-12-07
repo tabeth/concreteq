@@ -91,7 +91,7 @@ type Store interface {
 	// --- Dead-Letter Queues --- (Not yet implemented)
 
 	// ListDeadLetterSourceQueues lists queues that have the specified queue as a dead-letter queue.
-	ListDeadLetterSourceQueues(ctx context.Context, queueURL string) ([]string, error)
+	ListDeadLetterSourceQueues(ctx context.Context, queueURL string, maxResults int, nextToken string) ([]string, string, error)
 
 	// --- Message Move Tasks --- (Not yet implemented)
 

@@ -1315,7 +1315,59 @@ func (app *App) UntagQueueHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 func (app *App) ListDeadLetterSourceQueuesHandler(w http.ResponseWriter, r *http.Request) {
-	app.sendErrorResponse(w, "NotImplemented", "The requested action is not implemented.", http.StatusNotImplemented)
+	var req models.ListDeadLetterSourceQueuesRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		app.sendErrorResponse(w, "InvalidRequest", "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if req.QueueUrl == "" {
+		app.sendErrorResponse(w, "MissingParameter", "The request must contain a QueueUrl.", http.StatusBadRequest)
+		return
+	}
+
+	// Validate MaxResults.
+	if req.MaxResults < 0 || req.MaxResults > 1000 {
+		app.sendErrorResponse(w, "InvalidParameterValue", "MaxResults must be an integer between 1 and 1000.", http.StatusBadRequest)
+		return
+	}
+
+	// Determine if we need to set a default for MaxResults.
+	// If MaxResults is 0 (unspecified in JSON), we treat it as 1000 (SQS default).
+	maxResults := req.MaxResults
+	if maxResults == 0 {
+		maxResults = 1000
+	}
+
+	sourceQueues, newNextToken, err := app.Store.ListDeadLetterSourceQueues(r.Context(), req.QueueUrl, maxResults, req.NextToken)
+	if err != nil {
+		if errors.Is(err, store.ErrQueueDoesNotExist) {
+			app.sendErrorResponse(w, "QueueDoesNotExist", "The specified queue does not exist.", http.StatusBadRequest)
+			return
+		}
+		app.sendErrorResponse(w, "InternalFailure", "Failed to list dead letter source queues", http.StatusInternalServerError)
+		return
+	}
+
+	// Construct full URLs for the response.
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	queueURLs := make([]string, len(sourceQueues))
+	for i, name := range sourceQueues {
+		queueURLs[i] = fmt.Sprintf("%s://%s/queues/%s", scheme, r.Host, name)
+	}
+
+	resp := models.ListDeadLetterSourceQueuesResponse{
+		QueueUrls: queueURLs,
+	}
+	if newNextToken != "" {
+		resp.NextToken = newNextToken
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
 }
 func (app *App) validateSourceArn(ctx context.Context, sourceArn string) error {
 	if !arnRegex.MatchString(sourceArn) {
