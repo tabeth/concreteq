@@ -375,3 +375,11 @@ type ListDeadLetterSourceQueuesResponse struct {
 	QueueUrls []string `json:"queueUrls"`
 	NextToken string   `json:"NextToken,omitempty"`
 }
+
+// AddPermissionRequest defines the parameters for the SQS AddPermission action.
+type AddPermissionRequest struct {
+	QueueUrl      string   `json:"QueueUrl"`
+	Label         string   `json:"Label"`
+	AWSAccountIds []string `json:"AWSAccountIds"`
+	Actions       []string `json:"Actions"`
+}

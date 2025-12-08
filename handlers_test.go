@@ -508,7 +508,6 @@ func TestChangeMessageVisibilityBatchHandler(t *testing.T) {
 
 func TestUnimplementedHandlers(t *testing.T) {
 	unimplementedTargets := []string{
-		"AmazonSQS.AddPermission",
 		"AmazonSQS.RemovePermission",
 	}
 

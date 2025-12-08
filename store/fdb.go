@@ -1777,9 +1777,119 @@ func (s *FDBStore) ChangeMessageVisibilityBatch(ctx context.Context, queueName s
 	return resp, nil
 }
 
-func (s *FDBStore) AddPermission(ctx context.Context, queueName, label string, permissions map[string][]string) error {
-	// TODO: Implement in FoundationDB.
-	return nil
+func (s *FDBStore) AddPermission(ctx context.Context, queueName, label string, accountIds []string, actions []string) error {
+	// Policy Document Structure
+	type Statement struct {
+		Sid       string          `json:"Sid"`
+		Effect    string          `json:"Effect"`
+		Principal map[string]any  `json:"Principal"` // Usually {"AWS": ["id1", "id2"]} or {"AWS": "id"}
+		Action    any             `json:"Action"`    // String or []String
+		Resource  string          `json:"Resource"`
+	}
+
+	type Policy struct {
+		Version   string      `json:"Version"`
+		Id        string      `json:"Id"`
+		Statement []Statement `json:"Statement"`
+	}
+
+	_, err := s.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
+		exists, err := s.dir.Exists(tr, []string{queueName})
+		if err != nil {
+			return nil, err
+		}
+		if !exists {
+			return nil, ErrQueueDoesNotExist
+		}
+
+		queueDir, err := s.dir.Open(tr, []string{queueName}, nil)
+		if err != nil {
+			return nil, err
+		}
+
+		// Retrieve existing attributes to get the current Policy
+		attributesKey := queueDir.Pack(tuple.Tuple{"attributes"})
+		attrsBytes, err := tr.Get(attributesKey).Get()
+		if err != nil {
+			return nil, err
+		}
+
+		var attributes map[string]string
+		if len(attrsBytes) > 0 {
+			if err := json.Unmarshal(attrsBytes, &attributes); err != nil {
+				return nil, err
+			}
+		} else {
+			attributes = make(map[string]string)
+		}
+
+		// Parse existing policy or create new
+		var policy Policy
+		if policyStr, ok := attributes["Policy"]; ok && policyStr != "" {
+			if err := json.Unmarshal([]byte(policyStr), &policy); err != nil {
+				// If existing policy is corrupt, we overwrite it (or could return error)
+				// SQS usually behaves as if it starts fresh or fails. We'll start fresh/fix it.
+				policy = Policy{
+					Version:   "2012-10-17",
+					Id:        "QueuePolicy",
+					Statement: []Statement{},
+				}
+			}
+		} else {
+			policy = Policy{
+				Version:   "2012-10-17",
+				Id:        "QueuePolicy",
+				Statement: []Statement{},
+			}
+		}
+
+		// Construct the new statement
+		// Construct Resource ARN (Simplified, normally needs region/account)
+		// We'll use a placeholder or derived one.
+		// "arn:aws:sqs:us-east-1:123456789012:queueName"
+		resourceArn := "arn:aws:sqs:us-east-1:123456789012:" + queueName
+
+		newStatement := Statement{
+			Sid:       label,
+			Effect:    "Allow",
+			Principal: map[string]any{"AWS": accountIds},
+			Action:    actions, // Store as list
+			Resource:  resourceArn,
+		}
+		// If only one action, can be string, but list is safer for generic handling.
+		// SQS often normalizes to list or string. We'll keep as list for now since struct is `any`.
+
+		// Add or Replace statement with same Sid (Label)
+		found := false
+		for i, stmt := range policy.Statement {
+			if stmt.Sid == label {
+				policy.Statement[i] = newStatement
+				found = true
+				break
+			}
+		}
+		if !found {
+			policy.Statement = append(policy.Statement, newStatement)
+		}
+
+		// Serialize policy back to JSON
+		newPolicyBytes, err := json.Marshal(policy)
+		if err != nil {
+			return nil, err
+		}
+		attributes["Policy"] = string(newPolicyBytes)
+
+		// Save attributes
+		finalAttrsBytes, err := json.Marshal(attributes)
+		if err != nil {
+			return nil, err
+		}
+		tr.Set(attributesKey, finalAttrsBytes)
+
+		return nil, nil
+	})
+
+	return err
 }
 
 func (s *FDBStore) RemovePermission(ctx context.Context, queueName, label string) error {
