@@ -149,6 +149,8 @@ func (app *App) RootSQSHandler(w http.ResponseWriter, r *http.Request) {
 var queueNameRegex = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,80}(\.fifo)?$`)
 var batchEntryIdRegex = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,80}$`)
 var arnRegex = regexp.MustCompile(`^arn:aws:sqs:[a-z0-9-]+:[0-9]+:[a-zA-Z0-9_-]{1,80}(\.fifo)?$`)
+var labelRegex = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
+var awsAccountIdRegex = regexp.MustCompile(`^\d{12}$`)
 
 // validateIntAttribute is a helper for checking if a string can be parsed as an integer
 // and falls within a specified min/max range. This is used for validating queue attributes.
@@ -1215,7 +1217,65 @@ func (app *App) ChangeMessageVisibilityBatchHandler(w http.ResponseWriter, r *ht
 }
 
 func (app *App) AddPermissionHandler(w http.ResponseWriter, r *http.Request) {
-	app.sendErrorResponse(w, "NotImplemented", "The requested action is not implemented.", http.StatusNotImplemented)
+	var req models.AddPermissionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		app.sendErrorResponse(w, "InvalidRequest", "The request is not a valid JSON.", http.StatusBadRequest)
+		return
+	}
+
+	if req.QueueUrl == "" {
+		app.sendErrorResponse(w, "MissingParameter", "The request must contain a QueueUrl.", http.StatusBadRequest)
+		return
+	}
+	if req.Label == "" {
+		app.sendErrorResponse(w, "MissingParameter", "The request must contain a Label.", http.StatusBadRequest)
+		return
+	}
+	if len(req.AWSAccountIds) == 0 {
+		app.sendErrorResponse(w, "MissingParameter", "The request must contain AWSAccountIds.", http.StatusBadRequest)
+		return
+	}
+	if len(req.Actions) == 0 {
+		app.sendErrorResponse(w, "MissingParameter", "The request must contain Actions.", http.StatusBadRequest)
+		return
+	}
+
+	// Validate Label (alphanumeric, hyphens, underscores, up to 80 chars)
+	if len(req.Label) > 80 || !labelRegex.MatchString(req.Label) {
+		app.sendErrorResponse(w, "InvalidParameterValue", "Value for parameter Label is invalid.", http.StatusBadRequest)
+		return
+	}
+
+	// Validate Actions (SQS actions usually start with SQS: or just action name like SendMessage)
+	// We won't strictly validate the action names against a list, but they should be non-empty strings.
+	for _, action := range req.Actions {
+		if action == "" {
+			app.sendErrorResponse(w, "InvalidParameterValue", "Action names cannot be empty.", http.StatusBadRequest)
+			return
+		}
+	}
+
+	// Validate AWSAccountIds (12 digit numbers)
+	for _, id := range req.AWSAccountIds {
+		if !awsAccountIdRegex.MatchString(id) {
+			app.sendErrorResponse(w, "InvalidParameterValue", "Invalid AWS Account ID: "+id, http.StatusBadRequest)
+			return
+		}
+	}
+
+	queueName := path.Base(req.QueueUrl)
+
+	err := app.Store.AddPermission(r.Context(), queueName, req.Label, req.AWSAccountIds, req.Actions)
+	if err != nil {
+		if errors.Is(err, store.ErrQueueDoesNotExist) {
+			app.sendErrorResponse(w, "QueueDoesNotExist", "The specified queue does not exist.", http.StatusBadRequest)
+			return
+		}
+		app.sendErrorResponse(w, "InternalFailure", "Failed to add permission", http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
 }
 func (app *App) RemovePermissionHandler(w http.ResponseWriter, r *http.Request) {
 	app.sendErrorResponse(w, "NotImplemented", "The requested action is not implemented.", http.StatusNotImplemented)
