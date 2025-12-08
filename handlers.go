@@ -1215,7 +1215,53 @@ func (app *App) ChangeMessageVisibilityBatchHandler(w http.ResponseWriter, r *ht
 }
 
 func (app *App) AddPermissionHandler(w http.ResponseWriter, r *http.Request) {
-	app.sendErrorResponse(w, "NotImplemented", "The requested action is not implemented.", http.StatusNotImplemented)
+	var req models.AddPermissionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		app.sendErrorResponse(w, "InvalidRequest", "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if req.QueueUrl == "" {
+		app.sendErrorResponse(w, "MissingParameter", "The request must contain a QueueUrl.", http.StatusBadRequest)
+		return
+	}
+	if req.Label == "" {
+		app.sendErrorResponse(w, "MissingParameter", "The request must contain a Label.", http.StatusBadRequest)
+		return
+	}
+	if len(req.AWSAccountIds) == 0 {
+		app.sendErrorResponse(w, "MissingParameter", "The request must contain AWSAccountIds.", http.StatusBadRequest)
+		return
+	}
+	if len(req.Actions) == 0 {
+		app.sendErrorResponse(w, "MissingParameter", "The request must contain Actions.", http.StatusBadRequest)
+		return
+	}
+
+	// Validate Label (alphanumeric, hyphens, underscores, max 80 chars)
+	if len(req.Label) > 80 || !regexp.MustCompile(`^[a-zA-Z0-9_-]+$`).MatchString(req.Label) {
+		app.sendErrorResponse(w, "InvalidParameterValue", "Value "+req.Label+" for parameter Label is invalid. Reason: Must match pattern [a-zA-Z0-9_-]+ and be at most 80 chars.", http.StatusBadRequest)
+		return
+	}
+
+	queueName := path.Base(req.QueueUrl)
+
+	err := app.Store.AddPermission(r.Context(), queueName, req.Label, req.AWSAccountIds, req.Actions)
+	if err != nil {
+		if errors.Is(err, store.ErrQueueDoesNotExist) {
+			app.sendErrorResponse(w, "QueueDoesNotExist", "The specified queue does not exist.", http.StatusBadRequest)
+			return
+		}
+		// Check for already exists error
+		if strings.Contains(err.Error(), "Already exists") {
+			app.sendErrorResponse(w, "InvalidParameterValue", err.Error(), http.StatusBadRequest)
+			return
+		}
+		app.sendErrorResponse(w, "InternalFailure", "Failed to add permission", http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
 }
 func (app *App) RemovePermissionHandler(w http.ResponseWriter, r *http.Request) {
 	app.sendErrorResponse(w, "NotImplemented", "The requested action is not implemented.", http.StatusNotImplemented)

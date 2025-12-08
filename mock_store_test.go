@@ -97,8 +97,9 @@ func (m *MockStore) ChangeMessageVisibilityBatch(ctx context.Context, queueName 
 	}
 	return args.Get(0).(*models.ChangeMessageVisibilityBatchResponse), args.Error(1)
 }
-func (m *MockStore) AddPermission(ctx context.Context, queueName, label string, permissions map[string][]string) error {
-	return nil
+func (m *MockStore) AddPermission(ctx context.Context, queueName, label string, accountIds []string, actions []string) error {
+	args := m.Called(ctx, queueName, label, accountIds, actions)
+	return args.Error(0)
 }
 func (m *MockStore) RemovePermission(ctx context.Context, queueName, label string) error { return nil }
 func (m *MockStore) ListQueueTags(ctx context.Context, queueName string) (map[string]string, error) {

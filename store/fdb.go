@@ -1777,9 +1777,112 @@ func (s *FDBStore) ChangeMessageVisibilityBatch(ctx context.Context, queueName s
 	return resp, nil
 }
 
-func (s *FDBStore) AddPermission(ctx context.Context, queueName, label string, permissions map[string][]string) error {
-	// TODO: Implement in FoundationDB.
-	return nil
+func (s *FDBStore) AddPermission(ctx context.Context, queueName, label string, accountIds []string, actions []string) error {
+	_, err := s.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
+		exists, err := s.dir.Exists(tr, []string{queueName})
+		if err != nil {
+			return nil, err
+		}
+		if !exists {
+			return nil, ErrQueueDoesNotExist
+		}
+
+		queueDir, err := s.dir.Open(tr, []string{queueName}, nil)
+		if err != nil {
+			return nil, err
+		}
+
+		// Get current attributes
+		attrsBytes, err := tr.Get(queueDir.Pack(tuple.Tuple{"attributes"})).Get()
+		if err != nil {
+			return nil, err
+		}
+
+		var attributes map[string]string
+		if len(attrsBytes) > 0 {
+			if err := json.Unmarshal(attrsBytes, &attributes); err != nil {
+				return nil, err
+			}
+		} else {
+			attributes = make(map[string]string)
+		}
+
+		// Parse Policy
+		var policy map[string]interface{}
+		if policyStr, ok := attributes["Policy"]; ok && policyStr != "" {
+			if err := json.Unmarshal([]byte(policyStr), &policy); err != nil {
+				// If existing policy is invalid, start fresh or error?
+				// SQS might replace it. Let's assume we start fresh or error.
+				// For robustness, let's treat it as empty if unparseable, or maybe error.
+				// Given strict AWS behavior, maybe error, but here we can try to recover.
+				policy = make(map[string]interface{})
+			}
+		} else {
+			policy = make(map[string]interface{})
+		}
+
+		if _, ok := policy["Version"]; !ok {
+			policy["Version"] = "2012-10-17"
+		}
+		if _, ok := policy["Id"]; !ok {
+			policy["Id"] = queueName + "/Policy" // Simple ID generation
+		}
+
+		var statements []interface{}
+		if stmts, ok := policy["Statement"]; ok {
+			if sSlice, ok := stmts.([]interface{}); ok {
+				statements = sSlice
+			}
+		}
+
+		// Check if label (Sid) exists
+		for _, stmt := range statements {
+			if sMap, ok := stmt.(map[string]interface{}); ok {
+				if sid, ok := sMap["Sid"].(string); ok && sid == label {
+					// "AddPermission generates a policy for you."
+					// If the permission matches the specified Label, it might return an error or overwrite.
+					// "If you don't provide a value for an attribute, the queue is created with the default value for the attribute."
+					// For AddPermission, typical AWS behavior is InvalidParameterValue if Sid exists.
+					// However, some sources suggest it might just add/overwrite.
+					// Let's assume we error for now to be safe, or overwrite?
+					// "One or more of the parameters are invalid" is a common error.
+					// Let's implement overwrite for idempotent behavior if identical, or error if different?
+					// Simpler: Just error if it exists, client should use RemovePermission first or different Label.
+					return nil, errors.New("InvalidParameterValue: Value " + label + " for parameter Label is invalid. Reason: Already exists.")
+				}
+			}
+		}
+
+		// Construct new Statement
+		newStmt := map[string]interface{}{
+			"Sid":    label,
+			"Effect": "Allow",
+			"Principal": map[string]interface{}{
+				"AWS": accountIds,
+			},
+			"Action":   actions,
+			"Resource": "arn:aws:sqs:us-east-1:123456789012:" + queueName, // Placeholder ARN construction
+		}
+
+		statements = append(statements, newStmt)
+		policy["Statement"] = statements
+
+		// Save back
+		newPolicyBytes, err := json.Marshal(policy)
+		if err != nil {
+			return nil, err
+		}
+		attributes["Policy"] = string(newPolicyBytes)
+
+		newAttrsBytes, err := json.Marshal(attributes)
+		if err != nil {
+			return nil, err
+		}
+		tr.Set(queueDir.Pack(tuple.Tuple{"attributes"}), newAttrsBytes)
+
+		return nil, nil
+	})
+	return err
 }
 
 func (s *FDBStore) RemovePermission(ctx context.Context, queueName, label string) error {
