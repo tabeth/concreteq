@@ -1278,7 +1278,38 @@ func (app *App) AddPermissionHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 func (app *App) RemovePermissionHandler(w http.ResponseWriter, r *http.Request) {
-	app.sendErrorResponse(w, "NotImplemented", "The requested action is not implemented.", http.StatusNotImplemented)
+	var req models.RemovePermissionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		app.sendErrorResponse(w, "InvalidRequest", "The request is not a valid JSON.", http.StatusBadRequest)
+		return
+	}
+
+	if req.QueueUrl == "" {
+		app.sendErrorResponse(w, "MissingParameter", "The request must contain a QueueUrl.", http.StatusBadRequest)
+		return
+	}
+	if req.Label == "" {
+		app.sendErrorResponse(w, "MissingParameter", "The request must contain a Label.", http.StatusBadRequest)
+		return
+	}
+
+	queueName := path.Base(req.QueueUrl)
+
+	err := app.Store.RemovePermission(r.Context(), queueName, req.Label)
+	if err != nil {
+		if errors.Is(err, store.ErrQueueDoesNotExist) {
+			app.sendErrorResponse(w, "QueueDoesNotExist", "The specified queue does not exist.", http.StatusBadRequest)
+			return
+		}
+		if errors.Is(err, store.ErrLabelDoesNotExist) {
+			app.sendErrorResponse(w, "InvalidParameterValue", "Value for parameter Label is invalid. Reason: The specified label does not exist.", http.StatusBadRequest)
+			return
+		}
+		app.sendErrorResponse(w, "InternalFailure", "Failed to remove permission", http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
 }
 func (app *App) ListQueueTagsHandler(w http.ResponseWriter, r *http.Request) {
 	var req models.ListQueueTagsRequest
