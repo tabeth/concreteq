@@ -68,9 +68,7 @@ func (app *App) RegisterSQSHandlers(r *chi.Mux) {
 	r.Post("/queues/{queueName}/tags", app.TagQueueHandler)
 	r.Delete("/queues/{queueName}/tags", app.UntagQueueHandler)
 	r.Get("/dead-letter-source-queues", app.ListDeadLetterSourceQueuesHandler)
-	r.Post("/message-move-tasks", app.StartMessageMoveTaskHandler)
 	r.Post("/message-move-tasks/{taskHandle}/cancel", app.CancelMessageMoveTaskHandler)
-	r.Get("/message-move-tasks", app.ListMessageMoveTasksHandler)
 }
 
 // RootSQSHandler acts as a dispatcher for the primary SQS RPC-style endpoint.

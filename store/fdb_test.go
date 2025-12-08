@@ -35,8 +35,8 @@ func TestFDBStore_Unimplemented(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, store.AddPermission(ctx, "q", "l", nil))
 	assert.NoError(t, store.RemovePermission(ctx, "q", "l"))
-	_, err = store.ListDeadLetterSourceQueues(ctx, "q")
-	assert.NoError(t, err)
+	_, _, err = store.ListDeadLetterSourceQueues(ctx, "q", 0, "")
+	assert.Error(t, err)
 }
 
 func TestFDBStore_ListDeadLetterSourceQueues(t *testing.T) {

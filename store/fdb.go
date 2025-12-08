@@ -139,6 +139,11 @@ func (s *FDBStore) CreateQueue(ctx context.Context, name string, attributes map[
 			tr.Set(queueDir.Pack(tuple.Tuple{"tags"}), tagsBytes)
 		}
 
+		// Update the DLQ index.
+		if err := s.updateDLQIndex(tr, name, nil, attributes); err != nil {
+			return nil, err
+		}
+
 		// Return nil to indicate the queue was newly created.
 		return nil, nil
 	})
@@ -162,6 +167,26 @@ func (s *FDBStore) DeleteQueue(ctx context.Context, name string) error {
 		}
 		if !exists {
 			return nil, ErrQueueDoesNotExist
+		}
+
+		queueDir, err := s.dir.Open(tr, []string{name}, nil)
+		if err != nil {
+			return nil, err
+		}
+
+		// Clean up the DLQ index before deleting the queue.
+		var oldAttributes map[string]string
+		oldAttrsBytes, err := tr.Get(queueDir.Pack(tuple.Tuple{"attributes"})).Get()
+		if err != nil {
+			return nil, err
+		}
+		if len(oldAttrsBytes) > 0 {
+			if err := json.Unmarshal(oldAttrsBytes, &oldAttributes); err != nil {
+				return nil, err
+			}
+		}
+		if err := s.updateDLQIndex(tr, name, oldAttributes, nil); err != nil {
+			return nil, err
 		}
 
 		// `dir.Remove` deletes the directory and all its contents (keys and subdirectories).
@@ -309,6 +334,23 @@ func (s *FDBStore) SetQueueAttributes(ctx context.Context, name string, attribut
 
 		queueDir, err := s.dir.Open(tr, []string{name}, nil)
 		if err != nil {
+			return nil, err
+		}
+
+		// Get the old attributes to compare for DLQ index changes.
+		var oldAttributes map[string]string
+		oldAttrsBytes, err := tr.Get(queueDir.Pack(tuple.Tuple{"attributes"})).Get()
+		if err != nil {
+			return nil, err
+		}
+		if len(oldAttrsBytes) > 0 {
+			if err := json.Unmarshal(oldAttrsBytes, &oldAttributes); err != nil {
+				return nil, err
+			}
+		}
+
+		// Update the DLQ index before setting the new attributes.
+		if err := s.updateDLQIndex(tr, name, oldAttributes, attributes); err != nil {
 			return nil, err
 		}
 
@@ -629,6 +671,56 @@ func (s *FDBStore) getNextSequenceNumber(tr fdb.Transaction, queueDir directory.
 		return 0, err
 	}
 	return int64(binary.LittleEndian.Uint64(valBytes)), nil
+}
+
+// updateDLQIndex maintains the reverse index for dead-letter queue sources.
+// It should be called within a transaction whenever a queue's RedrivePolicy might change.
+func (s *FDBStore) updateDLQIndex(tr fdb.Transaction, sourceQueueName string, oldAttributes, newAttributes map[string]string) error {
+	// Helper to parse the DLQ name from a RedrivePolicy string.
+	getDLQName := func(policyStr string) string {
+		if policyStr == "" {
+			return ""
+		}
+		var policy struct {
+			DeadLetterTargetArn string `json:"deadLetterTargetArn"`
+		}
+		if json.Unmarshal([]byte(policyStr), &policy) != nil {
+			return ""
+		}
+		parts := strings.Split(policy.DeadLetterTargetArn, ":")
+		if len(parts) > 0 {
+			return parts[len(parts)-1]
+		}
+		return ""
+	}
+
+	oldPolicy, _ := oldAttributes["RedrivePolicy"]
+	newPolicy, _ := newAttributes["RedrivePolicy"]
+
+	oldDLQName := getDLQName(oldPolicy)
+	newDLQName := getDLQName(newPolicy)
+
+	// If the DLQ target hasn't changed, there's nothing to do.
+	if oldDLQName == newDLQName {
+		return nil
+	}
+
+	dlqIndexDir, err := s.dir.CreateOrOpen(tr, []string{"dlq_sources"}, nil)
+	if err != nil {
+		return err
+	}
+
+	// If there was an old DLQ, remove the old index entry.
+	if oldDLQName != "" {
+		tr.Clear(dlqIndexDir.Pack(tuple.Tuple{oldDLQName, sourceQueueName}))
+	}
+
+	// If there is a new DLQ, add the new index entry.
+	if newDLQName != "" {
+		tr.Set(dlqIndexDir.Pack(tuple.Tuple{newDLQName, sourceQueueName}), []byte{})
+	}
+
+	return nil
 }
 
 // hashAttributes creates a deterministic byte representation of message attributes for hashing.
@@ -1819,86 +1911,78 @@ func (s *FDBStore) UntagQueue(ctx context.Context, queueName string, tagKeys []s
 }
 
 func (s *FDBStore) ListDeadLetterSourceQueues(ctx context.Context, queueURL string, maxResults int, nextToken string) ([]string, string, error) {
-	// 1. Extract the queue name from the input QueueUrl to construct the target ARN.
-	//    The input is a URL, e.g., "http://localhost:8080/queues/MyDeadLetterQueue".
-	//    The RedrivePolicy stores an ARN, e.g., "arn:aws:sqs:us-east-1:123456789012:MyDeadLetterQueue".
 	parts := strings.Split(queueURL, "/")
 	if len(parts) == 0 {
 		return nil, "", ErrQueueDoesNotExist
 	}
 	dlqName := parts[len(parts)-1]
-	// Construct the ARN that we expect to find in the RedrivePolicy.
-	// This must match how we construct ARNs elsewhere (see GetQueueAttributesHandler).
-	targetArn := "arn:aws:sqs:us-east-1:123456789012:" + dlqName
+	if dlqName == "" {
+		return nil, "", ErrQueueDoesNotExist
+	}
 
-	// 2. Iterate through all queues to find those that reference this DLQ.
-	//    We use ReadTransact because we are only reading data.
-	queues, err := s.db.ReadTransact(func(tr fdb.ReadTransaction) (interface{}, error) {
-		return s.dir.List(tr, []string{})
+	// Verify the DLQ actually exists.
+	_, err := s.GetQueueAttributes(ctx, dlqName)
+	if err != nil {
+		return nil, "", err // Returns ErrQueueDoesNotExist if applicable
+	}
+
+	resp, err := s.db.ReadTransact(func(tr fdb.ReadTransaction) (interface{}, error) {
+		dlqIndexDir, err := s.dir.Open(tr, []string{"dlq_sources"}, nil)
+		if err != nil {
+			if e, ok := err.(fdb.Error); ok && e.Code == 2125 { // Directory does not exist
+				return []string{}, nil // No DLQs configured anywhere, so return empty.
+			}
+			return nil, err
+		}
+
+		// Define the range for the scan.
+		// The key is `(dlq_name, source_queue_name)`.
+		beginTuple := tuple.Tuple{dlqName}
+		if nextToken != "" {
+			beginTuple = tuple.Tuple{dlqName, nextToken + "\x00"} // Start after the nextToken
+		}
+		pr, err := fdb.PrefixRange(dlqIndexDir.Pack(tuple.Tuple{dlqName}))
+		if err != nil {
+			return nil, err
+		}
+		keyRange := fdb.KeyRange{Begin: dlqIndexDir.Pack(beginTuple), End: pr.End}
+
+		// Perform the range read.
+		rangeOpts := fdb.RangeOptions{}
+		if maxResults > 0 {
+			rangeOpts.Limit = maxResults
+		}
+		kvs, err := tr.GetRange(keyRange, rangeOpts).GetSliceWithError()
+		if err != nil {
+			return nil, err
+		}
+
+		var sourceQueues []string
+		for _, kv := range kvs {
+			t, err := dlqIndexDir.Unpack(kv.Key)
+			if err != nil || len(t) < 2 {
+				continue
+			}
+			sourceQueueName, ok := t[1].(string)
+			if !ok {
+				continue
+			}
+			sourceQueues = append(sourceQueues, sourceQueueName)
+		}
+		return sourceQueues, nil
 	})
+
 	if err != nil {
 		return nil, "", err
 	}
 
-	allQueues := queues.([]string)
-	var matchingQueues []string
-
-	// 3. Scan all queues and check their RedrivePolicy.
-	//    This is O(N) where N is the total number of queues.
-	//    Optimizing this would require a reverse index (DLQ -> [Source Queues]).
-	for _, qName := range allQueues {
-		attrs, err := s.GetQueueAttributes(ctx, qName)
-		if err != nil {
-			continue // Skip if we can't get attributes
-		}
-
-		if policyStr, ok := attrs["RedrivePolicy"]; ok {
-			var policy struct {
-				DeadLetterTargetArn string `json:"deadLetterTargetArn"`
-			}
-			if json.Unmarshal([]byte(policyStr), &policy) == nil {
-				if policy.DeadLetterTargetArn == targetArn {
-					matchingQueues = append(matchingQueues, qName)
-				}
-			}
-		}
-	}
-
-	// 4. Implement pagination.
-	startIndex := 0
-	if nextToken != "" {
-		found := false
-		for i, q := range matchingQueues {
-			if q == nextToken {
-				startIndex = i + 1
-				found = true
-				break
-			}
-		}
-		if !found {
-			return []string{}, "", nil
-		}
-	}
-
-	if startIndex >= len(matchingQueues) {
-		return []string{}, "", nil
-	}
-
-	endIndex := len(matchingQueues)
-	if maxResults > 0 {
-		endIndex = startIndex + maxResults
-	}
-	if endIndex > len(matchingQueues) {
-		endIndex = len(matchingQueues)
-	}
-
-	resultQueues := matchingQueues[startIndex:endIndex]
+	sourceQueues := resp.([]string)
 	var newNextToken string
-	if maxResults > 0 && endIndex < len(matchingQueues) {
-		newNextToken = resultQueues[len(resultQueues)-1]
+	if maxResults > 0 && len(sourceQueues) == maxResults {
+		newNextToken = sourceQueues[len(sourceQueues)-1]
 	}
 
-	return resultQueues, newNextToken, nil
+	return sourceQueues, newNextToken, nil
 }
 
 // StartMessageMoveTask initiates a task to move messages from a source queue to a destination queue.

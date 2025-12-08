@@ -753,6 +753,20 @@ func TestIntegration_NewFeatures(t *testing.T) {
 		assert.Equal(t, "fail-msg", recRespDLQ.Messages[0].Body)
 		assert.Equal(t, "3", recRespDLQ.Messages[0].Attributes["ApproximateReceiveCount"])
 		resp.Body.Close()
+
+		// List Dead Letter Source Queues
+		listDLQReqBody := fmt.Sprintf(`{"QueueUrl": "%s"}`, dlqUrl)
+		req, _ = http.NewRequest("POST", app.baseURL+"/", bytes.NewBufferString(listDLQReqBody))
+		req.Header.Set("X-Amz-Target", "AmazonSQS.ListDeadLetterSourceQueues")
+		resp, err = http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+		var listDLQResp models.ListDeadLetterSourceQueuesResponse
+		err = json.NewDecoder(resp.Body).Decode(&listDLQResp)
+		require.NoError(t, err)
+		assert.Len(t, listDLQResp.QueueUrls, 1)
+		assert.Equal(t, srcUrl, listDLQResp.QueueUrls[0])
+		resp.Body.Close()
 	})
 }
 
