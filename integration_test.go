@@ -1953,3 +1953,95 @@ func TestAddPermission(t *testing.T) {
 		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
 	})
 }
+
+func TestRemovePermission(t *testing.T) {
+	app, teardown := setupIntegrationTest(t)
+	defer teardown()
+
+	queueName := "test-remove-permission-queue"
+
+	// Create Queue
+	createBody := `{"QueueName": "` + queueName + `"}`
+	req, _ := http.NewRequest("POST", app.baseURL+"/", bytes.NewBufferString(createBody))
+	req.Header.Set("X-Amz-Target", "AmazonSQS.CreateQueue")
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
+	resp.Body.Close()
+
+	queueURL := app.baseURL + "/queues/" + queueName
+
+	// Add Permission
+	addReq := models.AddPermissionRequest{
+		QueueUrl:      queueURL,
+		Label:         "remove-me",
+		AWSAccountIds: []string{"123456789012"},
+		Actions:       []string{"SendMessage"},
+	}
+	addBody, _ := json.Marshal(addReq)
+	req, _ = http.NewRequest("POST", app.baseURL+"/", bytes.NewBuffer(addBody))
+	req.Header.Set("X-Amz-Target", "AmazonSQS.AddPermission")
+	resp, err = http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	resp.Body.Close()
+
+	t.Run("RemovePermission Success", func(t *testing.T) {
+		removeReq := models.RemovePermissionRequest{
+			QueueUrl: queueURL,
+			Label:    "remove-me",
+		}
+		removeBody, _ := json.Marshal(removeReq)
+		req, _ = http.NewRequest("POST", app.baseURL+"/", bytes.NewBuffer(removeBody))
+		req.Header.Set("X-Amz-Target", "AmazonSQS.RemovePermission")
+		resp, err = http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+		resp.Body.Close()
+
+		// Verify it's gone
+		getAttrsReq := models.GetQueueAttributesRequest{
+			QueueUrl:       queueURL,
+			AttributeNames: []string{"Policy"},
+		}
+		getAttrsBytes, _ := json.Marshal(getAttrsReq)
+		req, _ = http.NewRequest("POST", app.baseURL+"/", bytes.NewBuffer(getAttrsBytes))
+		req.Header.Set("X-Amz-Target", "AmazonSQS.GetQueueAttributes")
+		getAttrsResp, err := http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		defer getAttrsResp.Body.Close()
+
+		var result models.GetQueueAttributesResponse
+		json.NewDecoder(getAttrsResp.Body).Decode(&result)
+		policyStr := result.Attributes["Policy"]
+
+		// Unmarshal policy and check statements
+		var policy struct {
+			Statement []struct {
+				Sid string
+			}
+		}
+		if policyStr != "" {
+			json.Unmarshal([]byte(policyStr), &policy)
+			for _, stmt := range policy.Statement {
+				if stmt.Sid == "remove-me" {
+					t.Errorf("Policy statement with label 'remove-me' should have been removed")
+				}
+			}
+		}
+	})
+
+	t.Run("Remove Non-Existent Permission", func(t *testing.T) {
+		removeReq := models.RemovePermissionRequest{
+			QueueUrl: queueURL,
+			Label:    "non-existent-label",
+		}
+		removeBody, _ := json.Marshal(removeReq)
+		req, _ = http.NewRequest("POST", app.baseURL+"/", bytes.NewBuffer(removeBody))
+		req.Header.Set("X-Amz-Target", "AmazonSQS.RemovePermission")
+		resp, err := http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		// Expecting error per SQS behavior
+		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	})
+}

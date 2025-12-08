@@ -29,6 +29,9 @@ var (
 	// ErrMessageNotInflight is returned when trying to change the visibility of a message
 	// that is not currently in-flight.
 	ErrMessageNotInflight = errors.New("message not in flight")
+
+	// ErrLabelDoesNotExist is returned when a permission label does not exist.
+	ErrLabelDoesNotExist = errors.New("label does not exist")
 )
 
 // Store is the central interface for all data persistence operations.
