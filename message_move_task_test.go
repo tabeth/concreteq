@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"context"
 	"github.com/stretchr/testify/require"
 	"github.com/tabeth/concreteq/models"
 )
@@ -16,8 +17,16 @@ func TestIntegration_MessageMoveTasks(t *testing.T) {
 	app, teardown := setupIntegrationTest(t)
 	defer teardown()
 
-	sourceArn := "arn:aws:sqs:us-east-1:123456789012:source-queue"
-	destinationArn := "arn:aws:sqs:us-east-1:123456789012:destination-queue"
+	// Setup: Create the source and destination queues required for the tests.
+	sourceQueueName := "source-queue"
+	destinationQueueName := "destination-queue"
+	_, err := app.store.CreateQueue(context.Background(), sourceQueueName, nil, nil)
+	require.NoError(t, err)
+	_, err = app.store.CreateQueue(context.Background(), destinationQueueName, nil, nil)
+	require.NoError(t, err)
+
+	sourceArn := "arn:aws:sqs:us-east-1:123456789012:" + sourceQueueName
+	destinationArn := "arn:aws:sqs:us-east-1:123456789012:" + destinationQueueName
 
 	var taskHandle string
 
@@ -28,7 +37,6 @@ func TestIntegration_MessageMoveTasks(t *testing.T) {
 		}
 		body, _ := json.Marshal(reqBody)
 		req, _ := http.NewRequest("POST", app.baseURL+"/message-move-tasks", bytes.NewBuffer(body))
-		req.Header.Set("X-Amz-Target", "AmazonSQS.StartMessageMoveTask")
 		req.Header.Set("Content-Type", "application/json")
 
 		resp, err := http.DefaultClient.Do(req)
@@ -49,8 +57,7 @@ func TestIntegration_MessageMoveTasks(t *testing.T) {
 			SourceArn: sourceArn,
 		}
 		body, _ := json.Marshal(reqBody)
-		req, _ := http.NewRequest("GET", app.baseURL+"/message-move-tasks", bytes.NewBuffer(body))
-		req.Header.Set("X-Amz-Target", "AmazonSQS.ListMessageMoveTasks")
+		req, _ := http.NewRequest("POST", app.baseURL+"/message-move-tasks", bytes.NewBuffer(body))
 		req.Header.Set("Content-Type", "application/json")
 
 		resp, err := http.DefaultClient.Do(req)
@@ -94,7 +101,6 @@ func TestIntegration_MessageMoveTasks(t *testing.T) {
 		url := fmt.Sprintf("%s/message-move-tasks/%s/cancel", app.baseURL, taskHandle)
 
 		req, _ := http.NewRequest("POST", url, bytes.NewBuffer(body))
-		req.Header.Set("X-Amz-Target", "AmazonSQS.CancelMessageMoveTask")
 		req.Header.Set("Content-Type", "application/json")
 
 		resp, err := http.DefaultClient.Do(req)
@@ -115,8 +121,7 @@ func TestIntegration_MessageMoveTasks(t *testing.T) {
 			SourceArn: sourceArn,
 		}
 		body, _ := json.Marshal(reqBody)
-		req, _ := http.NewRequest("GET", app.baseURL+"/message-move-tasks", bytes.NewBuffer(body))
-		req.Header.Set("X-Amz-Target", "AmazonSQS.ListMessageMoveTasks")
+		req, _ := http.NewRequest("POST", app.baseURL+"/message-move-tasks", bytes.NewBuffer(body))
 		req.Header.Set("Content-Type", "application/json")
 
 		resp, err := http.DefaultClient.Do(req)

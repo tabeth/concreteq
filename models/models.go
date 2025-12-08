@@ -361,6 +361,8 @@ type ListMessageMoveTasksResultEntry struct {
 // ListMessageMoveTasksResponse defines the structure for the SQS ListMessageMoveTasks action's output.
 type ListMessageMoveTasksResponse struct {
 	Results []ListMessageMoveTasksResultEntry `json:"Results"`
+}
+
 // ListDeadLetterSourceQueuesRequest defines the parameters for the SQS ListDeadLetterSourceQueues action.
 type ListDeadLetterSourceQueuesRequest struct {
 	QueueUrl   string `json:"QueueUrl"`
