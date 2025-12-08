@@ -1648,3 +1648,118 @@ func TestIntegration_Messaging(t *testing.T) {
 		})
 	})
 }
+func TestIntegration_MessageMoveTasks(t *testing.T) {
+	app, teardown := setupIntegrationTest(t)
+	defer teardown()
+
+	// Setup: Create the source and destination queues required for the tests.
+	sourceQueueName := "source-queue"
+	destinationQueueName := "destination-queue"
+	_, err := app.store.CreateQueue(context.Background(), sourceQueueName, nil, nil)
+	require.NoError(t, err)
+	_, err = app.store.CreateQueue(context.Background(), destinationQueueName, nil, nil)
+	require.NoError(t, err)
+
+	sourceArn := "arn:aws:sqs:us-east-1:123456789012:" + sourceQueueName
+	destinationArn := "arn:aws:sqs:us-east-1:123456789012:" + destinationQueueName
+
+	var taskHandle string
+
+	t.Run("StartMessageMoveTask", func(t *testing.T) {
+		reqBody := models.StartMessageMoveTaskRequest{
+			SourceArn:      sourceArn,
+			DestinationArn: destinationArn,
+		}
+		body, _ := json.Marshal(reqBody)
+		req, _ := http.NewRequest("POST", app.baseURL+"/", bytes.NewBuffer(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Amz-Target", "AmazonSQS.StartMessageMoveTask")
+
+		resp, err := http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		defer resp.Body.Close()
+
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+		var respData models.StartMessageMoveTaskResponse
+		err = json.NewDecoder(resp.Body).Decode(&respData)
+		assert.NoError(t, err)
+		assert.NotEmpty(t, respData.TaskHandle)
+		taskHandle = respData.TaskHandle
+	})
+
+	t.Run("ListMessageMoveTasks", func(t *testing.T) {
+		reqBody := models.ListMessageMoveTasksRequest{
+			SourceArn: sourceArn,
+		}
+		body, _ := json.Marshal(reqBody)
+		req, _ := http.NewRequest("POST", app.baseURL+"/", bytes.NewBuffer(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Amz-Target", "AmazonSQS.ListMessageMoveTasks")
+
+		resp, err := http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		defer resp.Body.Close()
+
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+		var respData models.ListMessageMoveTasksResponse
+		err = json.NewDecoder(resp.Body).Decode(&respData)
+		assert.NoError(t, err)
+		require.NotEmpty(t, respData.Results)
+		assert.Equal(t, taskHandle, respData.Results[0].TaskHandle)
+		assert.Equal(t, sourceArn, respData.Results[0].SourceArn)
+		assert.Equal(t, "RUNNING", respData.Results[0].Status)
+	})
+
+	t.Run("CancelMessageMoveTask", func(t *testing.T) {
+		reqBody := models.CancelMessageMoveTaskRequest{
+			TaskHandle: taskHandle,
+		}
+		body, _ := json.Marshal(reqBody)
+		req, _ := http.NewRequest("POST", app.baseURL+"/", bytes.NewBuffer(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Amz-Target", "AmazonSQS.CancelMessageMoveTask")
+
+		resp, err := http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		defer resp.Body.Close()
+
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+		var respData models.CancelMessageMoveTaskResponse
+		err = json.NewDecoder(resp.Body).Decode(&respData)
+		assert.NoError(t, err)
+		assert.Equal(t, taskHandle, respData.TaskHandle)
+		assert.Equal(t, "CANCELLED", respData.Status)
+	})
+
+	t.Run("ListMessageMoveTasks_AfterCancel", func(t *testing.T) {
+		reqBody := models.ListMessageMoveTasksRequest{
+			SourceArn: sourceArn,
+		}
+		body, _ := json.Marshal(reqBody)
+		req, _ := http.NewRequest("POST", app.baseURL+"/", bytes.NewBuffer(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Amz-Target", "AmazonSQS.ListMessageMoveTasks")
+
+		resp, err := http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		defer resp.Body.Close()
+
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+		var respData models.ListMessageMoveTasksResponse
+		err = json.NewDecoder(resp.Body).Decode(&respData)
+		assert.NoError(t, err)
+		require.NotEmpty(t, respData.Results)
+		found := false
+		for _, task := range respData.Results {
+			if task.TaskHandle == taskHandle {
+				assert.Equal(t, "CANCELLED", task.Status)
+				found = true
+			}
+		}
+		assert.True(t, found)
+	})
+}
