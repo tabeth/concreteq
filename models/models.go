@@ -312,6 +312,14 @@ type UntagQueueRequest struct {
 // UntagQueueResponse defines the structure for the SQS UntagQueue action's output.
 type UntagQueueResponse struct{}
 
+// AddPermissionRequest defines the parameters for the SQS AddPermission action.
+type AddPermissionRequest struct {
+	QueueUrl      string   `json:"QueueUrl"`
+	Label         string   `json:"Label"`
+	AWSAccountIds []string `json:"AWSAccountIds"`
+	Actions       []string `json:"Actions"`
+}
+
 // StartMessageMoveTaskRequest defines the parameters for the SQS StartMessageMoveTask action.
 type StartMessageMoveTaskRequest struct {
 	SourceArn      string `json:"SourceArn"`

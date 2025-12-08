@@ -1763,3 +1763,67 @@ func TestIntegration_MessageMoveTasks(t *testing.T) {
 		assert.True(t, found)
 	})
 }
+
+func TestIntegration_AddPermission(t *testing.T) {
+	app, teardown := setupIntegrationTest(t)
+	defer teardown()
+
+	ctx := context.Background()
+	queueName := "permission-queue"
+	queueURL := fmt.Sprintf("%s/queues/%s", app.baseURL, queueName)
+
+	// 1. Create a queue
+	_, err := app.store.CreateQueue(ctx, queueName, nil, nil)
+	require.NoError(t, err)
+
+	t.Run("Successful AddPermission", func(t *testing.T) {
+		reqBody := models.AddPermissionRequest{
+			QueueUrl:      queueURL,
+			Label:         "MyLabel",
+			AWSAccountIds: []string{"123456789012"},
+			Actions:       []string{"SendMessage"},
+		}
+		bodyBytes, _ := json.Marshal(reqBody)
+		req, _ := http.NewRequest("POST", app.baseURL+"/", bytes.NewBuffer(bodyBytes))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Amz-Target", "AmazonSQS.AddPermission")
+
+		resp, err := http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		defer resp.Body.Close()
+
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+		// Verify by fetching queue attributes (Policy)
+		attrs, err := app.store.GetQueueAttributes(ctx, queueName)
+		require.NoError(t, err)
+		policyStr := attrs["Policy"]
+		assert.NotEmpty(t, policyStr)
+		assert.Contains(t, policyStr, "MyLabel")
+		assert.Contains(t, policyStr, "123456789012")
+		assert.Contains(t, policyStr, "SendMessage")
+	})
+
+	t.Run("AddPermission Duplicate Label", func(t *testing.T) {
+		reqBody := models.AddPermissionRequest{
+			QueueUrl:      queueURL,
+			Label:         "MyLabel", // Same label as before
+			AWSAccountIds: []string{"999999999999"},
+			Actions:       []string{"ReceiveMessage"},
+		}
+		bodyBytes, _ := json.Marshal(reqBody)
+		req, _ := http.NewRequest("POST", app.baseURL+"/", bytes.NewBuffer(bodyBytes))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Amz-Target", "AmazonSQS.AddPermission")
+
+		resp, err := http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		defer resp.Body.Close()
+
+		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+		var errResp models.ErrorResponse
+		json.NewDecoder(resp.Body).Decode(&errResp)
+		assert.Equal(t, "InvalidParameterValue", errResp.Type)
+		assert.Contains(t, errResp.Message, "Already exists")
+	})
+}

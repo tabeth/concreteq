@@ -33,7 +33,6 @@ func TestFDBStore_Unimplemented(t *testing.T) {
 
 	_, err := store.GetQueueURL(ctx, "q")
 	assert.NoError(t, err)
-	assert.NoError(t, store.AddPermission(ctx, "q", "l", nil))
 	assert.NoError(t, store.RemovePermission(ctx, "q", "l"))
 	_, _, err = store.ListDeadLetterSourceQueues(ctx, "q", 0, "")
 	assert.Error(t, err)
