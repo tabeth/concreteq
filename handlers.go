@@ -149,6 +149,8 @@ func (app *App) RootSQSHandler(w http.ResponseWriter, r *http.Request) {
 var queueNameRegex = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,80}(\.fifo)?$`)
 var batchEntryIdRegex = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,80}$`)
 var arnRegex = regexp.MustCompile(`^arn:aws:sqs:[a-z0-9-]+:[0-9]+:[a-zA-Z0-9_-]{1,80}(\.fifo)?$`)
+var labelRegex = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
+var awsAccountIdRegex = regexp.MustCompile(`^\d{12}$`)
 
 // validateIntAttribute is a helper for checking if a string can be parsed as an integer
 // and falls within a specified min/max range. This is used for validating queue attributes.
@@ -1239,7 +1241,7 @@ func (app *App) AddPermissionHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Validate Label (alphanumeric, hyphens, underscores, up to 80 chars)
-	if len(req.Label) > 80 || !regexp.MustCompile(`^[a-zA-Z0-9_-]+$`).MatchString(req.Label) {
+	if len(req.Label) > 80 || !labelRegex.MatchString(req.Label) {
 		app.sendErrorResponse(w, "InvalidParameterValue", "Value for parameter Label is invalid.", http.StatusBadRequest)
 		return
 	}
@@ -1255,7 +1257,7 @@ func (app *App) AddPermissionHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Validate AWSAccountIds (12 digit numbers)
 	for _, id := range req.AWSAccountIds {
-		if !regexp.MustCompile(`^\d{12}$`).MatchString(id) {
+		if !awsAccountIdRegex.MatchString(id) {
 			app.sendErrorResponse(w, "InvalidParameterValue", "Invalid AWS Account ID: "+id, http.StatusBadRequest)
 			return
 		}
