@@ -383,3 +383,8 @@ type AddPermissionRequest struct {
 	AWSAccountIds []string `json:"AWSAccountIds"`
 	Actions       []string `json:"Actions"`
 }
+// RemovePermissionRequest defines the parameters for the SQS RemovePermission action.
+type RemovePermissionRequest struct {
+	QueueUrl string `json:"QueueUrl"`
+	Label    string `json:"Label"`
+}
