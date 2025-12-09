@@ -2165,11 +2165,7 @@ func (s *FDBStore) ListDeadLetterSourceQueues(ctx context.Context, queueURL stri
 }
 
 // StartMessageMoveTask initiates a task to move messages from a source queue to a destination queue.
-// For this implementation, we will store the task details but won't spawn an asynchronous background worker
-// because FDB itself doesn't support persistent background tasks and we don't have a separate worker service.
-// This means the task will be accepted but might not make progress in this environment, or we could
-// implement a synchronous move if the number of messages is small (not ideal for real SQS).
-// For now, we focus on persisting the task state to satisfy the API contract.
+// It persists the task state and spawns a background goroutine to perform the message movement.
 func (s *FDBStore) StartMessageMoveTask(ctx context.Context, sourceArn, destinationArn string) (string, error) {
 	taskHandle := uuid.New().String()
 	now := time.Now().UnixNano() / int64(time.Millisecond)
@@ -2211,7 +2207,184 @@ func (s *FDBStore) StartMessageMoveTask(ctx context.Context, sourceArn, destinat
 		return "", err
 	}
 
+	// spawn background worker
+	go s.runMessageMoveTask(taskHandle, sourceArn, destinationArn)
+
 	return taskHandle, nil
+}
+
+func getQueueNameFromArn(arn string) string {
+	parts := strings.Split(arn, ":")
+	if len(parts) > 0 {
+		return parts[len(parts)-1]
+	}
+	return ""
+}
+
+func (s *FDBStore) updateTaskStatus(taskHandle, status, failureReason string, moved int64) {
+	s.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
+		tasksDir, err := s.dir.CreateOrOpen(tr, []string{"move_tasks"}, nil)
+		if err != nil {
+			return nil, err
+		}
+		taskKey := tasksDir.Pack(tuple.Tuple{taskHandle})
+		taskBytes, err := tr.Get(taskKey).Get()
+		if err != nil || taskBytes == nil {
+			return nil, nil
+		}
+
+		var task models.ListMessageMoveTasksResultEntry
+		if err := json.Unmarshal(taskBytes, &task); err != nil {
+			return nil, err
+		}
+
+		task.Status = status
+		if failureReason != "" {
+			task.FailureReason = failureReason
+		}
+		task.ApproximateNumberOfMessagesMoved = moved
+
+		newBytes, err := json.Marshal(task)
+		if err != nil {
+			return nil, err
+		}
+		tr.Set(taskKey, newBytes)
+		return nil, nil
+	})
+}
+
+func (s *FDBStore) runMessageMoveTask(taskHandle, sourceArn, destinationArn string) {
+	ctx := context.Background()
+	sourceQueueName := getQueueNameFromArn(sourceArn)
+	destQueueName := getQueueNameFromArn(destinationArn)
+	if destQueueName == "" {
+		destQueueName = sourceQueueName
+	}
+
+	totalMoved := int64(0)
+
+	for {
+		// 1. Check for cancellation
+		var currentStatus string
+		_, err := s.db.ReadTransact(func(tr fdb.ReadTransaction) (interface{}, error) {
+			tasksDir, err := s.dir.Open(tr, []string{"move_tasks"}, nil)
+			if err != nil {
+				return nil, err
+			}
+			taskBytes, err := tr.Get(tasksDir.Pack(tuple.Tuple{taskHandle})).Get()
+			if err != nil || taskBytes == nil {
+				return nil, errors.New("task not found")
+			}
+			var task models.ListMessageMoveTasksResultEntry
+			if err := json.Unmarshal(taskBytes, &task); err != nil {
+				return nil, err
+			}
+			currentStatus = task.Status
+			return nil, nil
+		})
+
+		if err != nil || currentStatus == "CANCELLED" {
+			return
+		}
+
+		// 2. Receive messages
+		receiveReq := &models.ReceiveMessageRequest{
+			QueueUrl:              sourceQueueName,
+			MaxNumberOfMessages:   10,
+			WaitTimeSeconds:       1,
+			VisibilityTimeout:     30,
+			AttributeNames:        []string{"All"},
+			MessageAttributeNames: []string{"All"},
+		}
+
+		resp, err := s.ReceiveMessage(ctx, sourceQueueName, receiveReq)
+		if err != nil {
+			s.updateTaskStatus(taskHandle, "FAILED", err.Error(), totalMoved)
+			return
+		}
+
+		if len(resp.Messages) == 0 {
+			s.updateTaskStatus(taskHandle, "COMPLETED", "", totalMoved)
+			return
+		}
+
+		// 3. Send Batch
+		sendEntries := make([]models.SendMessageBatchRequestEntry, 0, len(resp.Messages))
+		deleteEntries := make([]models.DeleteMessageBatchRequestEntry, 0, len(resp.Messages))
+
+		for _, msg := range resp.Messages {
+			msgAttrs := make(map[string]models.MessageAttributeValue)
+			for k, v := range msg.MessageAttributes {
+				msgAttrs[k] = v
+			}
+
+			entry := models.SendMessageBatchRequestEntry{
+				Id:                msg.MessageId,
+				MessageBody:       msg.Body,
+				MessageAttributes: msgAttrs,
+			}
+			// Check for FIFO attributes in Attributes map
+			if val, ok := msg.Attributes["MessageGroupId"]; ok {
+				groupId := val
+				entry.MessageGroupId = &groupId
+			}
+			if val, ok := msg.Attributes["MessageDeduplicationId"]; ok {
+				dedupId := val
+				entry.MessageDeduplicationId = &dedupId
+			}
+			sendEntries = append(sendEntries, entry)
+
+			deleteEntries = append(deleteEntries, models.DeleteMessageBatchRequestEntry{
+				Id:            msg.MessageId,
+				ReceiptHandle: msg.ReceiptHandle,
+			})
+		}
+
+		sendReq := &models.SendMessageBatchRequest{
+			QueueUrl: destQueueName,
+			Entries:  sendEntries,
+		}
+
+		sendResp, err := s.SendMessageBatch(ctx, destQueueName, sendReq)
+		if err != nil {
+			s.updateTaskStatus(taskHandle, "FAILED", "Failed to send messages: "+err.Error(), totalMoved)
+			return
+		}
+
+		// Only delete messages that were successfully sent.
+		successIds := make(map[string]bool)
+		for _, success := range sendResp.Successful {
+			successIds[success.Id] = true
+		}
+
+		var successfulDeleteEntries []models.DeleteMessageBatchRequestEntry
+		for _, entry := range deleteEntries {
+			if successIds[entry.Id] {
+				successfulDeleteEntries = append(successfulDeleteEntries, entry)
+			}
+		}
+
+		if len(successfulDeleteEntries) > 0 {
+			_, err = s.DeleteMessageBatch(ctx, sourceQueueName, successfulDeleteEntries)
+			if err != nil {
+				s.updateTaskStatus(taskHandle, "FAILED", "Failed to delete messages: "+err.Error(), totalMoved)
+				return
+			}
+			totalMoved += int64(len(successfulDeleteEntries))
+		}
+
+		if len(sendResp.Failed) > 0 {
+			if len(successfulDeleteEntries) == 0 {
+				s.updateTaskStatus(taskHandle, "FAILED", "All messages in batch failed to send", totalMoved)
+				return
+			}
+			// Some failed, but some succeeded. Continue, but maybe log failure?
+			// The status update below effectively updates the count.
+		}
+
+		// Update progress
+		s.updateTaskStatus(taskHandle, "RUNNING", "", totalMoved)
+	}
 }
 
 // CancelMessageMoveTask cancels a running message move task.

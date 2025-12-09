@@ -2045,3 +2045,93 @@ func TestRemovePermission(t *testing.T) {
 		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
 	})
 }
+
+func TestIntegration_StartMessageMoveTask_BackgroundProcessing(t *testing.T) {
+	app, teardown := setupIntegrationTest(t)
+	defer teardown()
+
+	sourceQueueName := "source-queue-move"
+	destinationQueueName := "destination-queue-move"
+	sourceArn := "arn:aws:sqs:us-east-1:123456789012:" + sourceQueueName
+	destinationArn := "arn:aws:sqs:us-east-1:123456789012:" + destinationQueueName
+
+	ctx := context.Background()
+	_, err := app.store.CreateQueue(ctx, sourceQueueName, nil, nil)
+	require.NoError(t, err)
+	_, err = app.store.CreateQueue(ctx, destinationQueueName, nil, nil)
+	require.NoError(t, err)
+
+	// Send messages to source queue
+	messageCount := 5
+	for i := 0; i < messageCount; i++ {
+		_, err := app.store.SendMessage(ctx, sourceQueueName, &models.SendMessageRequest{MessageBody: "msg"})
+		require.NoError(t, err)
+	}
+
+	// Start Move Task
+	reqBody := models.StartMessageMoveTaskRequest{
+		SourceArn:      sourceArn,
+		DestinationArn: destinationArn,
+	}
+	body, _ := json.Marshal(reqBody)
+	req, _ := http.NewRequest("POST", app.baseURL+"/", bytes.NewBuffer(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Amz-Target", "AmazonSQS.StartMessageMoveTask")
+
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var respData models.StartMessageMoveTaskResponse
+	err = json.NewDecoder(resp.Body).Decode(&respData)
+	assert.NoError(t, err)
+	taskHandle := respData.TaskHandle
+
+	// Poll for completion
+	maxRetries := 20
+	completed := false
+	for i := 0; i < maxRetries; i++ {
+		time.Sleep(500 * time.Millisecond)
+
+		reqBodyList := models.ListMessageMoveTasksRequest{
+			SourceArn: sourceArn,
+		}
+		bodyList, _ := json.Marshal(reqBodyList)
+		reqList, _ := http.NewRequest("POST", app.baseURL+"/", bytes.NewBuffer(bodyList))
+		reqList.Header.Set("Content-Type", "application/json")
+		reqList.Header.Set("X-Amz-Target", "AmazonSQS.ListMessageMoveTasks")
+
+		respList, err := http.DefaultClient.Do(reqList)
+		require.NoError(t, err)
+		defer respList.Body.Close()
+
+		var listResp models.ListMessageMoveTasksResponse
+		json.NewDecoder(respList.Body).Decode(&listResp)
+
+		for _, task := range listResp.Results {
+			if task.TaskHandle == taskHandle {
+				if task.Status == "COMPLETED" {
+					completed = true
+					assert.Equal(t, int64(messageCount), task.ApproximateNumberOfMessagesMoved)
+				} else if task.Status == "FAILED" {
+					t.Fatalf("Task failed: %s", task.FailureReason)
+				}
+			}
+		}
+		if completed {
+			break
+		}
+	}
+	assert.True(t, completed, "Task did not complete in time")
+
+	// Verify messages are in destination
+	recResp, err := app.store.ReceiveMessage(ctx, destinationQueueName, &models.ReceiveMessageRequest{MaxNumberOfMessages: 10})
+	require.NoError(t, err)
+	assert.Len(t, recResp.Messages, messageCount)
+
+	// Verify messages are gone from source
+	recRespSrc, err := app.store.ReceiveMessage(ctx, sourceQueueName, &models.ReceiveMessageRequest{MaxNumberOfMessages: 10, WaitTimeSeconds: 1})
+	require.NoError(t, err)
+	assert.Len(t, recRespSrc.Messages, 0)
+}
