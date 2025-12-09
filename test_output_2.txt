@@ -1,0 +1,303 @@
+=== RUN   TestSendMessage_MessageSizeLimit_WithAttributes
+2025/12/09 22:33:47 "GET http://localhost:40165/non-existent-health-check HTTP/1.1" from [::1]:57404 - 404 19B in 13.283µs
+2025/12/09 22:33:47 "POST http://localhost:40165/ HTTP/1.1" from [::1]:57410 - 201 69B in 5.77248ms
+2025/12/09 22:33:47 "POST http://localhost:40165/ HTTP/1.1" from [::1]:57410 - 400 105B in 4.065195ms
+    reproduction_test.go:67: Got error: InvalidParameterValue - The message body must be between 1 and 262144 bytes long.
+--- PASS: TestSendMessage_MessageSizeLimit_WithAttributes (0.03s)
+=== RUN   TestIntegration_ServerLifecycle
+2025/12/09 22:33:47 "GET http://localhost:43813/non-existent-health-check HTTP/1.1" from [::1]:56676 - 404 19B in 7.982µs
+2025/12/09 22:33:47 "POST http://localhost:43813/ HTTP/1.1" from [::1]:56682 - 400 67B in 71.313µs
+--- PASS: TestIntegration_ServerLifecycle (0.01s)
+=== RUN   TestIntegration_CreateQueue
+2025/12/09 22:33:47 "GET http://localhost:36019/non-existent-health-check HTTP/1.1" from [::1]:42490 - 404 19B in 7.176µs
+=== RUN   TestIntegration_CreateQueue/Successful_Queue_Creation
+2025/12/09 22:33:47 "POST http://localhost:36019/ HTTP/1.1" from [::1]:42492 - 201 65B in 6.249316ms
+=== RUN   TestIntegration_CreateQueue/QueueNameExists_with_different_attributes
+2025/12/09 22:33:47 "POST http://localhost:36019/ HTTP/1.1" from [::1]:42492 - 400 106B in 2.975597ms
+=== RUN   TestIntegration_CreateQueue/Invalid_Queue_Name
+2025/12/09 22:33:47 "POST http://localhost:36019/ HTTP/1.1" from [::1]:42492 - 400 154B in 57.608µs
+=== RUN   TestIntegration_CreateQueue/FIFO_Name_Mismatch
+2025/12/09 22:33:47 "POST http://localhost:36019/ HTTP/1.1" from [::1]:42492 - 400 110B in 39.402µs
+=== RUN   TestIntegration_CreateQueue/Invalid_Attribute_Value
+2025/12/09 22:33:47 "POST http://localhost:36019/ HTTP/1.1" from [::1]:42492 - 400 104B in 58.178µs
+=== RUN   TestIntegration_CreateQueue/Successful_FIFO_Queue_Creation
+2025/12/09 22:33:47 "POST http://localhost:36019/ HTTP/1.1" from [::1]:42492 - 201 64B in 6.561322ms
+=== RUN   TestIntegration_CreateQueue/Successful_FIFO_Queue_with_ContentBasedDeduplication
+2025/12/09 22:33:47 "POST http://localhost:36019/ HTTP/1.1" from [::1]:42492 - 201 62B in 6.667752ms
+=== RUN   TestIntegration_CreateQueue/Successful_Queue_with_RedrivePolicy
+2025/12/09 22:33:47 "POST http://localhost:36019/ HTTP/1.1" from [::1]:42492 - 201 67B in 8.787049ms
+--- PASS: TestIntegration_CreateQueue (0.08s)
+    --- PASS: TestIntegration_CreateQueue/Successful_Queue_Creation (0.01s)
+    --- PASS: TestIntegration_CreateQueue/QueueNameExists_with_different_attributes (0.01s)
+    --- PASS: TestIntegration_CreateQueue/Invalid_Queue_Name (0.01s)
+    --- PASS: TestIntegration_CreateQueue/FIFO_Name_Mismatch (0.00s)
+    --- PASS: TestIntegration_CreateQueue/Invalid_Attribute_Value (0.00s)
+    --- PASS: TestIntegration_CreateQueue/Successful_FIFO_Queue_Creation (0.01s)
+    --- PASS: TestIntegration_CreateQueue/Successful_FIFO_Queue_with_ContentBasedDeduplication (0.01s)
+    --- PASS: TestIntegration_CreateQueue/Successful_Queue_with_RedrivePolicy (0.02s)
+=== RUN   TestIntegration_GetQueueAttributes
+2025/12/09 22:33:47 "GET http://localhost:40437/non-existent-health-check HTTP/1.1" from [::1]:48204 - 404 19B in 7.669µs
+=== RUN   TestIntegration_GetQueueAttributes/Get_All_Attributes
+2025/12/09 22:33:47 "POST http://localhost:40437/ HTTP/1.1" from [::1]:48214 - 200 265B in 2.282269ms
+=== RUN   TestIntegration_GetQueueAttributes/Get_Specific_Attributes
+2025/12/09 22:33:47 "POST http://localhost:40437/ HTTP/1.1" from [::1]:48214 - 200 112B in 2.087432ms
+=== RUN   TestIntegration_GetQueueAttributes/Queue_Not_Found
+2025/12/09 22:33:47 "POST http://localhost:40437/ HTTP/1.1" from [::1]:48214 - 400 79B in 1.268471ms
+--- PASS: TestIntegration_GetQueueAttributes (0.02s)
+    --- PASS: TestIntegration_GetQueueAttributes/Get_All_Attributes (0.00s)
+    --- PASS: TestIntegration_GetQueueAttributes/Get_Specific_Attributes (0.00s)
+    --- PASS: TestIntegration_GetQueueAttributes/Queue_Not_Found (0.00s)
+=== RUN   TestIntegration_ListDeletePurgeQueues
+2025/12/09 22:33:47 "GET http://localhost:35695/non-existent-health-check HTTP/1.1" from [::1]:34440 - 404 19B in 7.269µs
+=== RUN   TestIntegration_ListDeletePurgeQueues/ListQueues
+=== RUN   TestIntegration_ListDeletePurgeQueues/ListQueues/With_Prefix
+2025/12/09 22:33:47 "POST http://localhost:35695/ HTTP/1.1" from [::1]:34456 - 200 110B in 1.927301ms
+=== RUN   TestIntegration_ListDeletePurgeQueues/ListQueues/Pagination
+2025/12/09 22:33:47 "POST http://localhost:35695/ HTTP/1.1" from [::1]:34456 - 200 182B in 1.647183ms
+2025/12/09 22:33:47 "POST http://localhost:35695/ HTTP/1.1" from [::1]:34456 - 200 109B in 1.522245ms
+=== RUN   TestIntegration_ListDeletePurgeQueues/ListQueues/Invalid_NextToken
+2025/12/09 22:33:48 "POST http://localhost:35695/ HTTP/1.1" from [::1]:34456 - 200 17B in 1.327797ms
+=== RUN   TestIntegration_ListDeletePurgeQueues/DeleteQueue
+=== RUN   TestIntegration_ListDeletePurgeQueues/DeleteQueue/Successful
+2025/12/09 22:33:48 "POST http://localhost:35695/ HTTP/1.1" from [::1]:34456 - 200 0B in 5.241481ms
+=== RUN   TestIntegration_ListDeletePurgeQueues/DeleteQueue/Non-Existent
+2025/12/09 22:33:48 "POST http://localhost:35695/ HTTP/1.1" from [::1]:34456 - 400 79B in 1.417716ms
+=== RUN   TestIntegration_ListDeletePurgeQueues/PurgeQueue
+=== RUN   TestIntegration_ListDeletePurgeQueues/PurgeQueue/Successful
+2025/12/09 22:33:48 "POST http://localhost:35695/ HTTP/1.1" from [::1]:34470 - 200 0B in 4.158455ms
+=== RUN   TestIntegration_ListDeletePurgeQueues/PurgeQueue/In_Progress
+2025/12/09 22:33:48 "POST http://localhost:35695/ HTTP/1.1" from [::1]:34470 - 400 150B in 2.568671ms
+--- PASS: TestIntegration_ListDeletePurgeQueues (0.07s)
+    --- PASS: TestIntegration_ListDeletePurgeQueues/ListQueues (0.01s)
+        --- PASS: TestIntegration_ListDeletePurgeQueues/ListQueues/With_Prefix (0.00s)
+        --- PASS: TestIntegration_ListDeletePurgeQueues/ListQueues/Pagination (0.00s)
+        --- PASS: TestIntegration_ListDeletePurgeQueues/ListQueues/Invalid_NextToken (0.00s)
+    --- PASS: TestIntegration_ListDeletePurgeQueues/DeleteQueue (0.01s)
+        --- PASS: TestIntegration_ListDeletePurgeQueues/DeleteQueue/Successful (0.01s)
+        --- PASS: TestIntegration_ListDeletePurgeQueues/DeleteQueue/Non-Existent (0.00s)
+    --- PASS: TestIntegration_ListDeletePurgeQueues/PurgeQueue (0.01s)
+        --- PASS: TestIntegration_ListDeletePurgeQueues/PurgeQueue/Successful (0.01s)
+        --- PASS: TestIntegration_ListDeletePurgeQueues/PurgeQueue/In_Progress (0.00s)
+=== RUN   TestIntegration_NewFeatures
+2025/12/09 22:33:48 "GET http://localhost:39795/non-existent-health-check HTTP/1.1" from [::1]:39808 - 404 19B in 7.458µs
+=== RUN   TestIntegration_NewFeatures/Tagging
+2025/12/09 22:33:48 "POST http://localhost:39795/ HTTP/1.1" from [::1]:39814 - 201 64B in 5.857841ms
+2025/12/09 22:33:48 "POST http://localhost:39795/ HTTP/1.1" from [::1]:39816 - 200 31B in 2.169186ms
+2025/12/09 22:33:48 "POST http://localhost:39795/ HTTP/1.1" from [::1]:39816 - 200 0B in 3.882662ms
+2025/12/09 22:33:48 "POST http://localhost:39795/ HTTP/1.1" from [::1]:39816 - 200 53B in 2.135001ms
+2025/12/09 22:33:48 "POST http://localhost:39795/ HTTP/1.1" from [::1]:39816 - 200 0B in 4.670653ms
+2025/12/09 22:33:48 "POST http://localhost:39795/ HTTP/1.1" from [::1]:39816 - 200 33B in 2.462511ms
+=== RUN   TestIntegration_NewFeatures/FIFO_ContentBasedDeduplication
+2025/12/09 22:33:48 "POST http://localhost:39795/ HTTP/1.1" from [::1]:39816 - 201 67B in 5.792452ms
+2025/12/09 22:33:48 "POST http://localhost:39795/ HTTP/1.1" from [::1]:39830 - 200 144B in 5.082857ms
+2025/12/09 22:33:48 "POST http://localhost:39795/ HTTP/1.1" from [::1]:39830 - 200 144B in 2.741262ms
+=== RUN   TestIntegration_NewFeatures/Dead_Letter_Queues
+2025/12/09 22:33:48 "POST http://localhost:39795/ HTTP/1.1" from [::1]:39830 - 201 55B in 5.526126ms
+2025/12/09 22:33:48 "POST http://localhost:39795/ HTTP/1.1" from [::1]:39846 - 201 61B in 7.54932ms
+2025/12/09 22:33:48 "POST http://localhost:39795/ HTTP/1.1" from [::1]:39862 - 200 107B in 4.002716ms
+2025/12/09 22:33:48 "POST http://localhost:39795/ HTTP/1.1" from [::1]:39872 - 200 233B in 6.5059ms
+2025/12/09 22:33:50 "POST http://localhost:39795/ HTTP/1.1" from [::1]:39872 - 200 16B in 13.51817ms
+2025/12/09 22:33:50 "POST http://localhost:39795/ HTTP/1.1" from [::1]:39872 - 200 233B in 8.63835ms
+2025/12/09 22:33:50 "POST http://localhost:39795/ HTTP/1.1" from [::1]:39872 - 200 64B in 6.118085ms
+--- PASS: TestIntegration_NewFeatures (2.11s)
+    --- PASS: TestIntegration_NewFeatures/Tagging (0.02s)
+    --- PASS: TestIntegration_NewFeatures/FIFO_ContentBasedDeduplication (0.02s)
+    --- PASS: TestIntegration_NewFeatures/Dead_Letter_Queues (2.06s)
+=== RUN   TestIntegration_SendMessageBatch
+2025/12/09 22:33:50 "GET http://localhost:33155/non-existent-health-check HTTP/1.1" from [::1]:42622 - 404 19B in 7.528µs
+=== RUN   TestIntegration_SendMessageBatch/BatchRequestTooLong
+2025/12/09 22:33:50 "POST http://localhost:33155/queues/batch-integ-std/messages/batch HTTP/1.1" from [::1]:42632 - 400 95B in 3.323995ms
+    integration_test.go:901:
+		Error Trace:	/app/integration_test.go:901
+		Error:      	Not equal:
+				expected: map[string]interface {}{"__type":"BatchRequestTooLong", "message":"The length of all the messages put together is more than the limit."}
+				actual  : map[string]interface {}{"__type":"InvalidParameterValue", "message":"Message body for entry with Id '1' is too long."}
+
+				Diff:
+				--- Expected
+				+++ Actual
+				@@ -1,4 +1,4 @@
+				 (map[string]interface {}) (len=2) {
+				- (string) (len=6) "__type": (string) (len=19) "BatchRequestTooLong",
+				- (string) (len=7) "message": (string) (len=67) "The length of all the messages put together is more than the limit."
+				+ (string) (len=6) "__type": (string) (len=21) "InvalidParameterValue",
+				+ (string) (len=7) "message": (string) (len=47) "Message body for entry with Id '1' is too long."
+				 }
+		Test:       	TestIntegration_SendMessageBatch/BatchRequestTooLong
+=== RUN   TestIntegration_SendMessageBatch/PartialSuccess
+2025/12/09 22:33:50 "POST http://localhost:33155/queues/batch-integ-fifo.fifo/messages/batch HTTP/1.1" from [::1]:42632 - 200 304B in 5.671906ms
+=== RUN   TestIntegration_SendMessageBatch/QueueDoesNotExist
+2025/12/09 22:33:50 "POST http://localhost:33155/queues/non-existent-queue/messages/batch HTTP/1.1" from [::1]:42632 - 400 79B in 1.779565ms
+=== RUN   TestIntegration_SendMessageBatch/BatchEntryIdsNotDistinct
+2025/12/09 22:33:50 "POST http://localhost:33155/queues/batch-integ-std/messages/batch HTTP/1.1" from [::1]:42632 - 400 109B in 40.936µs
+=== RUN   TestIntegration_SendMessageBatch/EmptyBatchRequest
+2025/12/09 22:33:50 "POST http://localhost:33155/queues/batch-integ-std/messages/batch HTTP/1.1" from [::1]:42632 - 400 90B in 72.877µs
+=== RUN   TestIntegration_SendMessageBatch/InvalidBatchEntryId
+2025/12/09 22:33:50 "POST http://localhost:33155/queues/batch-integ-std/messages/batch HTTP/1.1" from [::1]:42632 - 400 124B in 35.351µs
+=== RUN   TestIntegration_SendMessageBatch/TooManyEntriesInBatchRequest
+2025/12/09 22:33:50 "POST http://localhost:33155/queues/batch-integ-std/messages/batch HTTP/1.1" from [::1]:42632 - 400 112B in 51.248µs
+--- FAIL: TestIntegration_SendMessageBatch (0.04s)
+    --- FAIL: TestIntegration_SendMessageBatch/BatchRequestTooLong (0.00s)
+    --- PASS: TestIntegration_SendMessageBatch/PartialSuccess (0.01s)
+    --- PASS: TestIntegration_SendMessageBatch/QueueDoesNotExist (0.00s)
+    --- PASS: TestIntegration_SendMessageBatch/BatchEntryIdsNotDistinct (0.00s)
+    --- PASS: TestIntegration_SendMessageBatch/EmptyBatchRequest (0.00s)
+    --- PASS: TestIntegration_SendMessageBatch/InvalidBatchEntryId (0.00s)
+    --- PASS: TestIntegration_SendMessageBatch/TooManyEntriesInBatchRequest (0.00s)
+=== RUN   TestIntegration_FifoFairness
+2025/12/09 22:33:50 "GET http://localhost:44909/non-existent-health-check HTTP/1.1" from [::1]:39348 - 404 19B in 7.563µs
+2025/12/09 22:33:50 "POST http://localhost:44909/ HTTP/1.1" from [::1]:39356 - 201 65B in 6.670681ms
+2025/12/09 22:33:50 "POST http://localhost:44909/ HTTP/1.1" from [::1]:39358 - 200 144B in 4.241337ms
+2025/12/09 22:33:50 "POST http://localhost:44909/ HTTP/1.1" from [::1]:39374 - 200 145B in 4.594758ms
+2025/12/09 22:33:50 "POST http://localhost:44909/ HTTP/1.1" from [::1]:39388 - 200 145B in 5.045182ms
+2025/12/09 22:33:50 "POST http://localhost:44909/ HTTP/1.1" from [::1]:39398 - 200 145B in 4.750211ms
+2025/12/09 22:33:50 "POST http://localhost:44909/ HTTP/1.1" from [::1]:39402 - 200 145B in 5.269548ms
+2025/12/09 22:33:50 "POST http://localhost:44909/ HTTP/1.1" from [::1]:39416 - 200 145B in 4.821022ms
+2025/12/09 22:33:50 "POST http://localhost:44909/ HTTP/1.1" from [::1]:39432 - 200 145B in 5.041839ms
+2025/12/09 22:33:50 "POST http://localhost:44909/ HTTP/1.1" from [::1]:39438 - 200 145B in 4.981382ms
+2025/12/09 22:33:50 "POST http://localhost:44909/ HTTP/1.1" from [::1]:39446 - 200 145B in 4.375084ms
+2025/12/09 22:33:50 "POST http://localhost:44909/ HTTP/1.1" from [::1]:39448 - 200 145B in 4.168096ms
+2025/12/09 22:33:50 "POST http://localhost:44909/ HTTP/1.1" from [::1]:39456 - 200 145B in 4.736091ms
+2025/12/09 22:33:50 "POST http://localhost:44909/ HTTP/1.1" from [::1]:39470 - 200 145B in 4.343883ms
+2025/12/09 22:33:50 "POST http://localhost:44909/ HTTP/1.1" from [::1]:39484 - 200 405B in 4.918843ms
+2025/12/09 22:33:50 "POST http://localhost:44909/ HTTP/1.1" from [::1]:39484 - 200 0B in 4.180545ms
+2025/12/09 22:33:50 "POST http://localhost:44909/ HTTP/1.1" from [::1]:39484 - 200 412B in 5.673013ms
+2025/12/09 22:33:50 "POST http://localhost:44909/ HTTP/1.1" from [::1]:39484 - 200 0B in 5.937701ms
+2025/12/09 22:33:50 "POST http://localhost:44909/ HTTP/1.1" from [::1]:39484 - 200 412B in 5.281656ms
+2025/12/09 22:33:50 "POST http://localhost:44909/ HTTP/1.1" from [::1]:39484 - 200 0B in 4.945888ms
+    integration_test.go:1002: Received group IDs via HTTP: [group-a group-b group-c]
+--- PASS: TestIntegration_FifoFairness (0.12s)
+=== RUN   TestIntegration_ChangeMessageVisibility
+2025/12/09 22:33:50 "GET http://localhost:34631/non-existent-health-check HTTP/1.1" from [::1]:56648 - 404 19B in 7.64µs
+2025/12/09 22:33:50 "POST http://localhost:34631/ HTTP/1.1" from [::1]:56664 - 200 0B in 3.479452ms
+--- PASS: TestIntegration_ChangeMessageVisibility (3.04s)
+=== RUN   TestIntegration_ReceiveMessage_Validation
+2025/12/09 22:33:53 "GET http://localhost:43055/non-existent-health-check HTTP/1.1" from [::1]:43392 - 404 19B in 8.589µs
+=== RUN   TestIntegration_ReceiveMessage_Validation/Invalid_ReceiveRequestAttemptId
+2025/12/09 22:33:53 "POST http://localhost:43055/ HTTP/1.1" from [::1]:43394 - 400 129B in 67.75µs
+=== RUN   TestIntegration_ReceiveMessage_Validation/Too_long_ReceiveRequestAttemptId
+2025/12/09 22:33:53 "POST http://localhost:43055/ HTTP/1.1" from [::1]:43402 - 400 105B in 71.047µs
+=== RUN   TestIntegration_ReceiveMessage_Validation/Invalid_MessageSystemAttributeNames
+2025/12/09 22:33:53 "POST http://localhost:43055/ HTTP/1.1" from [::1]:43404 - 400 88B in 81.905µs
+=== RUN   TestIntegration_ReceiveMessage_Validation/Invalid_MessageAttributeNames
+2025/12/09 22:33:53 "POST http://localhost:43055/ HTTP/1.1" from [::1]:43406 - 400 83B in 83.421µs
+--- PASS: TestIntegration_ReceiveMessage_Validation (0.02s)
+    --- PASS: TestIntegration_ReceiveMessage_Validation/Invalid_ReceiveRequestAttemptId (0.00s)
+    --- PASS: TestIntegration_ReceiveMessage_Validation/Too_long_ReceiveRequestAttemptId (0.00s)
+    --- PASS: TestIntegration_ReceiveMessage_Validation/Invalid_MessageSystemAttributeNames (0.00s)
+    --- PASS: TestIntegration_ReceiveMessage_Validation/Invalid_MessageAttributeNames (0.00s)
+=== RUN   TestMain
+--- PASS: TestMain (0.50s)
+=== RUN   TestIntegration_DeleteMessageBatch
+2025/12/09 22:33:53 "GET http://localhost:34217/non-existent-health-check HTTP/1.1" from [::1]:58484 - 404 19B in 13.944µs
+=== RUN   TestIntegration_DeleteMessageBatch/Successful_Batch_Deletion
+2025/12/09 22:33:53 "POST http://localhost:34217/ HTTP/1.1" from [::1]:58490 - 200 53B in 5.444923ms
+=== RUN   TestIntegration_DeleteMessageBatch/Partial_Failure
+2025/12/09 22:33:53 "POST http://localhost:34217/ HTTP/1.1" from [::1]:58490 - 200 162B in 5.750592ms
+=== RUN   TestIntegration_DeleteMessageBatch/Invalid_Batch_Entry_Id
+2025/12/09 22:33:53 "POST http://localhost:34217/ HTTP/1.1" from [::1]:58490 - 400 124B in 68.882µs
+--- PASS: TestIntegration_DeleteMessageBatch (0.06s)
+    --- PASS: TestIntegration_DeleteMessageBatch/Successful_Batch_Deletion (0.02s)
+    --- PASS: TestIntegration_DeleteMessageBatch/Partial_Failure (0.03s)
+    --- PASS: TestIntegration_DeleteMessageBatch/Invalid_Batch_Entry_Id (0.00s)
+=== RUN   TestIntegration_DeleteMessage
+2025/12/09 22:33:53 "GET http://localhost:36733/non-existent-health-check HTTP/1.1" from [::1]:44426 - 404 19B in 6.384µs
+=== RUN   TestIntegration_DeleteMessage/Successful_Deletion
+2025/12/09 22:33:53 "POST http://localhost:36733/ HTTP/1.1" from [::1]:44436 - 200 0B in 3.837966ms
+=== RUN   TestIntegration_DeleteMessage/ReceiptHandleIsInvalid
+2025/12/09 22:33:53 "POST http://localhost:36733/ HTTP/1.1" from [::1]:44436 - 200 0B in 2.216084ms
+=== RUN   TestIntegration_DeleteMessage/QueueDoesNotExist
+2025/12/09 22:33:53 "POST http://localhost:36733/ HTTP/1.1" from [::1]:44436 - 400 79B in 1.482819ms
+--- PASS: TestIntegration_DeleteMessage (0.04s)
+    --- PASS: TestIntegration_DeleteMessage/Successful_Deletion (0.01s)
+    --- PASS: TestIntegration_DeleteMessage/ReceiptHandleIsInvalid (0.00s)
+    --- PASS: TestIntegration_DeleteMessage/QueueDoesNotExist (0.00s)
+=== RUN   TestIntegration_Messaging
+2025/12/09 22:33:53 "GET http://localhost:33563/non-existent-health-check HTTP/1.1" from [::1]:39132 - 404 19B in 6.86µs
+=== RUN   TestIntegration_Messaging/SendAndReceiveStandard
+2025/12/09 22:33:53 "POST http://localhost:33563/ HTTP/1.1" from [::1]:39134 - 200 107B in 3.289502ms
+2025/12/09 22:33:53 "POST http://localhost:33563/ HTTP/1.1" from [::1]:39134 - 200 207B in 5.074736ms
+=== RUN   TestIntegration_Messaging/SendMessageFailures
+=== RUN   TestIntegration_Messaging/SendMessageFailures/FIFO_Missing_MessageGroupId
+2025/12/09 22:33:53 "POST http://localhost:33563/ HTTP/1.1" from [::1]:39134 - 400 85B in 36.405µs
+=== RUN   TestIntegration_Messaging/FIFO_Ordering
+2025/12/09 22:33:53 "POST http://localhost:33563/ HTTP/1.1" from [::1]:39144 - 200 144B in 3.949286ms
+2025/12/09 22:33:53 "POST http://localhost:33563/ HTTP/1.1" from [::1]:39150 - 200 145B in 3.700817ms
+2025/12/09 22:33:54 "POST http://localhost:33563/ HTTP/1.1" from [::1]:39154 - 200 145B in 3.552619ms
+2025/12/09 22:33:54 "POST http://localhost:33563/ HTTP/1.1" from [::1]:39158 - 200 582B in 4.921438ms
+=== RUN   TestIntegration_Messaging/FIFO_Deduplication
+2025/12/09 22:33:54 "POST http://localhost:33563/ HTTP/1.1" from [::1]:39158 - 200 144B in 4.023721ms
+2025/12/09 22:33:54 "POST http://localhost:33563/ HTTP/1.1" from [::1]:39158 - 200 144B in 2.828939ms
+=== RUN   TestIntegration_Messaging/ReceiveMessageLogic
+=== RUN   TestIntegration_Messaging/ReceiveMessageLogic/AtLeastOnceDelivery_(Visibility_Timeout)
+2025/12/09 22:33:54 "POST http://localhost:33563/ HTTP/1.1" from [::1]:39158 - 200 211B in 7.449268ms
+2025/12/09 22:33:54 "POST http://localhost:33563/ HTTP/1.1" from [::1]:39158 - 200 16B in 6.109315ms
+2025/12/09 22:33:55 "POST http://localhost:33563/ HTTP/1.1" from [::1]:39158 - 200 211B in 7.07079ms
+=== RUN   TestIntegration_Messaging/ReceiveMessageLogic/Message_Delay
+2025/12/09 22:33:55 "POST http://localhost:33563/ HTTP/1.1" from [::1]:39158 - 200 107B in 4.364127ms
+2025/12/09 22:33:55 "POST http://localhost:33563/ HTTP/1.1" from [::1]:39170 - 200 16B in 6.187132ms
+2025/12/09 22:33:57 "POST http://localhost:33563/ HTTP/1.1" from [::1]:39170 - 200 211B in 6.705033ms
+--- PASS: TestIntegration_Messaging (3.34s)
+    --- PASS: TestIntegration_Messaging/SendAndReceiveStandard (0.01s)
+    --- PASS: TestIntegration_Messaging/SendMessageFailures (0.00s)
+        --- PASS: TestIntegration_Messaging/SendMessageFailures/FIFO_Missing_MessageGroupId (0.00s)
+    --- PASS: TestIntegration_Messaging/FIFO_Ordering (0.03s)
+    --- PASS: TestIntegration_Messaging/FIFO_Deduplication (0.02s)
+    --- PASS: TestIntegration_Messaging/ReceiveMessageLogic (3.27s)
+        --- PASS: TestIntegration_Messaging/ReceiveMessageLogic/AtLeastOnceDelivery_(Visibility_Timeout) (1.13s)
+        --- PASS: TestIntegration_Messaging/ReceiveMessageLogic/Message_Delay (2.13s)
+=== RUN   TestIntegration_MessageMoveTasks
+2025/12/09 22:33:57 "GET http://localhost:43595/non-existent-health-check HTTP/1.1" from [::1]:47952 - 404 19B in 7.588µs
+=== RUN   TestIntegration_MessageMoveTasks/StartMessageMoveTask
+2025/12/09 22:33:57 "POST http://localhost:43595/ HTTP/1.1" from [::1]:47968 - 200 54B in 6.989222ms
+=== RUN   TestIntegration_MessageMoveTasks/ListMessageMoveTasks
+2025/12/09 22:33:57 "POST http://localhost:43595/ HTTP/1.1" from [::1]:47968 - 200 329B in 5.18602ms
+=== RUN   TestIntegration_MessageMoveTasks/CancelMessageMoveTask
+2025/12/09 22:33:57 "POST http://localhost:43595/ HTTP/1.1" from [::1]:47968 - 200 165B in 3.482666ms
+=== RUN   TestIntegration_MessageMoveTasks/ListMessageMoveTasks_AfterCancel
+2025/12/09 22:33:57 "POST http://localhost:43595/ HTTP/1.1" from [::1]:47968 - 200 367B in 4.886584ms
+--- PASS: TestIntegration_MessageMoveTasks (0.04s)
+    --- PASS: TestIntegration_MessageMoveTasks/StartMessageMoveTask (0.01s)
+    --- PASS: TestIntegration_MessageMoveTasks/ListMessageMoveTasks (0.01s)
+    --- PASS: TestIntegration_MessageMoveTasks/CancelMessageMoveTask (0.00s)
+    --- PASS: TestIntegration_MessageMoveTasks/ListMessageMoveTasks_AfterCancel (0.01s)
+=== RUN   TestAddPermission
+2025/12/09 22:33:57 "GET http://localhost:46019/non-existent-health-check HTTP/1.1" from [::1]:38580 - 404 19B in 6.236µs
+2025/12/09 22:33:57 "POST http://localhost:46019/ HTTP/1.1" from [::1]:38590 - 201 67B in 4.69377ms
+=== RUN   TestAddPermission/AddPermission_Success
+2025/12/09 22:33:57 "POST http://localhost:46019/ HTTP/1.1" from [::1]:38598 - 200 0B in 3.426422ms
+2025/12/09 22:33:57 "POST http://localhost:46019/ HTTP/1.1" from [::1]:38598 - 200 307B in 2.280065ms
+=== RUN   TestAddPermission/AddPermission_Overwrite
+2025/12/09 22:33:57 "POST http://localhost:46019/ HTTP/1.1" from [::1]:38598 - 200 0B in 3.834334ms
+2025/12/09 22:33:57 "POST http://localhost:46019/ HTTP/1.1" from [::1]:38598 - 200 290B in 2.39497ms
+=== RUN   TestAddPermission/AddPermission_Invalid_Account_ID
+2025/12/09 22:33:57 "POST http://localhost:46019/ HTTP/1.1" from [::1]:38598 - 400 78B in 36.418µs
+=== RUN   TestAddPermission/AddPermission_Missing_Queue
+2025/12/09 22:33:57 "POST http://localhost:46019/ HTTP/1.1" from [::1]:38600 - 400 79B in 1.457784ms
+--- PASS: TestAddPermission (0.03s)
+    --- PASS: TestAddPermission/AddPermission_Success (0.01s)
+    --- PASS: TestAddPermission/AddPermission_Overwrite (0.01s)
+    --- PASS: TestAddPermission/AddPermission_Invalid_Account_ID (0.00s)
+    --- PASS: TestAddPermission/AddPermission_Missing_Queue (0.00s)
+=== RUN   TestRemovePermission
+2025/12/09 22:33:57 "GET http://localhost:40875/non-existent-health-check HTTP/1.1" from [::1]:59024 - 404 19B in 5.361µs
+2025/12/09 22:33:57 "POST http://localhost:40875/ HTTP/1.1" from [::1]:59032 - 201 74B in 4.706183ms
+2025/12/09 22:33:57 "POST http://localhost:40875/ HTTP/1.1" from [::1]:59046 - 200 0B in 3.587005ms
+=== RUN   TestRemovePermission/RemovePermission_Success
+2025/12/09 22:33:57 "POST http://localhost:40875/ HTTP/1.1" from [::1]:59046 - 200 0B in 3.398384ms
+2025/12/09 22:33:57 "POST http://localhost:40875/ HTTP/1.1" from [::1]:59046 - 200 18B in 2.587407ms
+=== RUN   TestRemovePermission/Remove_Non-Existent_Permission
+2025/12/09 22:33:57 "POST http://localhost:40875/ HTTP/1.1" from [::1]:59046 - 400 129B in 2.229538ms
+--- PASS: TestRemovePermission (0.03s)
+    --- PASS: TestRemovePermission/RemovePermission_Success (0.01s)
+    --- PASS: TestRemovePermission/Remove_Non-Existent_Permission (0.00s)
+=== RUN   TestIntegration_StartMessageMoveTask_BackgroundProcessing
+2025/12/09 22:33:57 "GET http://localhost:32851/non-existent-health-check HTTP/1.1" from [::1]:46020 - 404 19B in 6.23µs
+2025/12/09 22:33:57 "POST http://localhost:32851/ HTTP/1.1" from [::1]:46022 - 200 54B in 7.055548ms
+2025/12/09 22:33:57 "POST http://localhost:32851/ HTTP/1.1" from [::1]:46022 - 200 339B in 6.783742ms
+2025/12/09 22:33:58 "POST http://localhost:32851/ HTTP/1.1" from [::1]:46022 - 200 339B in 5.941793ms
+2025/12/09 22:33:58 "POST http://localhost:32851/ HTTP/1.1" from [::1]:46022 - 200 341B in 6.315643ms
+--- PASS: TestIntegration_StartMessageMoveTask_BackgroundProcessing (2.67s)
+FAIL
+FAIL	command-line-arguments	12.308s
+FAIL

@@ -797,7 +797,7 @@ func TestIntegration_SendMessageBatch(t *testing.T) {
 		{
 			name:     "BatchRequestTooLong",
 			queueURL: stdQueueURL,
-			inputBody:          `{"QueueUrl": "` + stdQueueURL + `", "Entries": [{"Id": "1", "MessageBody": "` + string(make([]byte, 256*1024)) + `"}]}`,
+			inputBody:          `{"QueueUrl": "` + stdQueueURL + `", "Entries": [{"Id": "1", "MessageBody": "` + strings.Repeat("a", 150*1024) + `"}, {"Id": "2", "MessageBody": "` + strings.Repeat("b", 150*1024) + `"}]}`,
 			expectedStatusCode: http.StatusBadRequest,
 			expectedBody:       `{"__type":"BatchRequestTooLong", "message":"The length of all the messages put together is more than the limit."}`,
 		},
