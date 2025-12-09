@@ -2118,11 +2118,16 @@ func (s *FDBStore) ListDeadLetterSourceQueues(ctx context.Context, queueURL stri
 	}
 
 	resp, err := s.db.ReadTransact(func(tr fdb.ReadTransaction) (interface{}, error) {
+		exists, err := s.dir.Exists(tr, []string{"dlq_sources"})
+		if err != nil {
+			return nil, err
+		}
+		if !exists {
+			return []string{}, nil
+		}
+
 		dlqIndexDir, err := s.dir.Open(tr, []string{"dlq_sources"}, nil)
 		if err != nil {
-			if e, ok := err.(fdb.Error); ok && e.Code == 2125 { // Directory does not exist
-				return []string{}, nil // No DLQs configured anywhere, so return empty.
-			}
 			return nil, err
 		}
 

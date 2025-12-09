@@ -204,6 +204,203 @@ func TestEP_SetQueueAttributes(t *testing.T) {
 	}
 }
 
+// --- BVA: ListQueues ---
+
+func TestBVA_ListQueues_MaxResults(t *testing.T) {
+	app, _ := setupHandlerTest(t)
+
+	tests := []struct {
+		name       string
+		maxResults int
+		wantCode   int
+	}{
+		// 0 is "not specified" -> Valid (Defaults to 1000)
+		// But in JSON, if we send "MaxResults": 0, it is 0.
+		// Handler logic: if req.MaxResults < 0 || req.MaxResults > 1000 { Error }
+		// So 0 is Valid in code.
+		{"Valid Min", 0, http.StatusOK},
+		{"Valid", 500, http.StatusOK},
+		{"Valid Max", 1000, http.StatusOK},
+		{"Invalid Max", 1001, http.StatusBadRequest},
+		{"Invalid Min", -1, http.StatusBadRequest},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			reqBody, _ := json.Marshal(models.ListQueuesRequest{
+				MaxResults: tc.maxResults,
+			})
+			req := httptest.NewRequest("POST", "/", bytes.NewReader(reqBody))
+			req.Header.Set("X-Amz-Target", "AmazonSQS.ListQueues")
+			w := httptest.NewRecorder()
+			app.RootSQSHandler(w, req)
+			assert.Equal(t, tc.wantCode, w.Code)
+		})
+	}
+}
+
+// --- BVA: DeleteMessageBatch ---
+
+func TestBVA_DeleteMessageBatch_Size(t *testing.T) {
+	app, s := setupHandlerTest(t)
+	s.CreateQueue(context.Background(), "del-batch-queue", nil, nil)
+
+	tests := []struct {
+		name      string
+		entryCount int
+		wantCode  int
+	}{
+		{"Invalid Empty", 0, http.StatusBadRequest},
+		{"Valid Min", 1, http.StatusOK},
+		{"Valid Max", 10, http.StatusOK},
+		{"Invalid Max", 11, http.StatusBadRequest},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			entries := make([]models.DeleteMessageBatchRequestEntry, tc.entryCount)
+			for i := 0; i < tc.entryCount; i++ {
+				entries[i] = models.DeleteMessageBatchRequestEntry{
+					Id:            randomString(10),
+					ReceiptHandle: "dummy",
+				}
+			}
+			reqBody, _ := json.Marshal(models.DeleteMessageBatchRequest{
+				QueueUrl: "http://localhost/queues/del-batch-queue",
+				Entries:  entries,
+			})
+			req := httptest.NewRequest("POST", "/", bytes.NewReader(reqBody))
+			req.Header.Set("X-Amz-Target", "AmazonSQS.DeleteMessageBatch")
+			w := httptest.NewRecorder()
+			app.RootSQSHandler(w, req)
+			assert.Equal(t, tc.wantCode, w.Code)
+		})
+	}
+}
+
+// --- BVA: ChangeMessageVisibility ---
+
+func TestBVA_ChangeMessageVisibility_Timeout(t *testing.T) {
+	app, s := setupHandlerTest(t)
+	s.CreateQueue(context.Background(), "vis-queue", nil, nil)
+
+	tests := []struct {
+		name      string
+		timeout   int
+		wantCode  int
+	}{
+		{"Valid Min", 0, http.StatusOK},
+		{"Valid Max", 43200, http.StatusOK}, // 12 hours
+		{"Invalid Min", -1, http.StatusBadRequest},
+		{"Invalid Max", 43201, http.StatusBadRequest},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			// We might get QueueDoesNotExist or InvalidReceiptHandle if we pass valid timeout
+			// but dummy handle. But InvalidParameterValue (400) comes first if timeout is wrong.
+			// However, InvalidReceiptHandle is ALSO 400.
+			// So we need to distinguish.
+			// If timeout is invalid, we get "InvalidParameterValue".
+			// If timeout is valid, we get "ReceiptHandleIsInvalid" (400) or 200.
+
+			reqBody, _ := json.Marshal(models.ChangeMessageVisibilityRequest{
+				QueueUrl:          "http://localhost/queues/vis-queue",
+				ReceiptHandle:     "dummy",
+				VisibilityTimeout: tc.timeout,
+			})
+			req := httptest.NewRequest("POST", "/", bytes.NewReader(reqBody))
+			req.Header.Set("X-Amz-Target", "AmazonSQS.ChangeMessageVisibility")
+			w := httptest.NewRecorder()
+			app.RootSQSHandler(w, req)
+
+			if tc.wantCode == http.StatusBadRequest {
+				// If we expect invalid param, we check for that error type if possible,
+				// or just 400. But since valid input also returns 400 (InvalidHandle),
+				// checking for 400 is ambiguous.
+				// However, if we pass invalid timeout, it MUST be 400.
+				assert.Equal(t, http.StatusBadRequest, w.Code)
+
+				// Optional: Check error message for "VisibilityTimeout" if it's the invalid case
+				if tc.timeout > 43200 || tc.timeout < 0 {
+					assert.Contains(t, w.Body.String(), "VisibilityTimeout")
+				}
+			} else {
+				// If valid timeout, we expect 400 (InvalidHandle) or 200.
+				// Basically, ensure it's NOT an "InvalidParameterValue" error about timeout.
+				if w.Code == http.StatusBadRequest {
+					assert.NotContains(t, w.Body.String(), "VisibilityTimeout")
+				}
+			}
+		})
+	}
+}
+
+// --- BVA: ListDeadLetterSourceQueues ---
+
+func TestBVA_ListDLQ_MaxResults(t *testing.T) {
+	app, s := setupHandlerTest(t)
+	s.CreateQueue(context.Background(), "dlq-queue", nil, nil)
+
+	tests := []struct {
+		name       string
+		maxResults int
+		wantCode   int
+	}{
+		{"Valid Min", 1, http.StatusOK},
+		{"Valid Max", 1000, http.StatusOK},
+		{"Invalid Min", -1, http.StatusBadRequest}, // 0 becomes default 1000
+		{"Invalid Max", 1001, http.StatusBadRequest},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			reqBody, _ := json.Marshal(models.ListDeadLetterSourceQueuesRequest{
+				QueueUrl:   "http://localhost/queues/dlq-queue",
+				MaxResults: tc.maxResults,
+			})
+			req := httptest.NewRequest("POST", "/", bytes.NewReader(reqBody))
+			req.Header.Set("X-Amz-Target", "AmazonSQS.ListDeadLetterSourceQueues")
+			w := httptest.NewRecorder()
+			app.RootSQSHandler(w, req)
+			assert.Equal(t, tc.wantCode, w.Code)
+		})
+	}
+}
+
+// --- EP: TagQueue / UntagQueue ---
+
+func TestEP_Tags_Validation(t *testing.T) {
+	app, s := setupHandlerTest(t)
+	s.CreateQueue(context.Background(), "tag-queue", nil, nil)
+
+	// TagQueue: Empty tags -> 400
+	t.Run("TagQueue Empty", func(t *testing.T) {
+		reqBody, _ := json.Marshal(models.TagQueueRequest{
+			QueueUrl: "http://localhost/queues/tag-queue",
+			Tags:     map[string]string{},
+		})
+		req := httptest.NewRequest("POST", "/", bytes.NewReader(reqBody))
+		req.Header.Set("X-Amz-Target", "AmazonSQS.TagQueue")
+		w := httptest.NewRecorder()
+		app.RootSQSHandler(w, req)
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+	})
+
+	// UntagQueue: Empty keys -> 400
+	t.Run("UntagQueue Empty", func(t *testing.T) {
+		reqBody, _ := json.Marshal(models.UntagQueueRequest{
+			QueueUrl: "http://localhost/queues/tag-queue",
+			TagKeys:  []string{},
+		})
+		req := httptest.NewRequest("POST", "/", bytes.NewReader(reqBody))
+		req.Header.Set("X-Amz-Target", "AmazonSQS.UntagQueue")
+		w := httptest.NewRecorder()
+		app.RootSQSHandler(w, req)
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+	})
+}
+
 // --- FUZZ TESTING: SendMessage Body ---
 
 func TestFuzz_SendMessage_Body(t *testing.T) {
