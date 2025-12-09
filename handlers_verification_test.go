@@ -204,6 +204,194 @@ func TestEP_SetQueueAttributes(t *testing.T) {
 	}
 }
 
+// --- BVA: Batch Operations Limits ---
+
+func TestBVA_BatchOperations_Limits(t *testing.T) {
+	app, s := setupHandlerTest(t)
+	s.CreateQueue(context.Background(), "batch-limit-queue", nil, nil)
+
+	// SendMessageBatch Limits
+	t.Run("SendMessageBatch", func(t *testing.T) {
+		tests := []struct {
+			count    int
+			wantCode int
+		}{
+			{0, http.StatusBadRequest}, // Empty
+			{1, http.StatusOK},
+			{10, http.StatusOK},
+			{11, http.StatusBadRequest}, // Too many
+		}
+		for _, tc := range tests {
+			entries := make([]models.SendMessageBatchRequestEntry, tc.count)
+			for i := 0; i < tc.count; i++ {
+				entries[i] = models.SendMessageBatchRequestEntry{Id: randomString(5), MessageBody: "test"}
+			}
+			reqBody, _ := json.Marshal(models.SendMessageBatchRequest{QueueUrl: "http://localhost/queues/batch-limit-queue", Entries: entries})
+			req := httptest.NewRequest("POST", "/", bytes.NewReader(reqBody))
+			req.Header.Set("X-Amz-Target", "AmazonSQS.SendMessageBatch")
+			w := httptest.NewRecorder()
+			app.RootSQSHandler(w, req)
+			assert.Equal(t, tc.wantCode, w.Code, "Count: %d", tc.count)
+		}
+	})
+
+	// ChangeMessageVisibilityBatch Limits
+	t.Run("ChangeMessageVisibilityBatch", func(t *testing.T) {
+		tests := []struct {
+			count    int
+			wantCode int
+		}{
+			{10, http.StatusOK},
+			{11, http.StatusBadRequest},
+		}
+		for _, tc := range tests {
+			entries := make([]models.ChangeMessageVisibilityBatchRequestEntry, tc.count)
+			for i := 0; i < tc.count; i++ {
+				entries[i] = models.ChangeMessageVisibilityBatchRequestEntry{Id: randomString(5), ReceiptHandle: "h", VisibilityTimeout: 10}
+			}
+			reqBody, _ := json.Marshal(models.ChangeMessageVisibilityBatchRequest{QueueUrl: "http://localhost/queues/batch-limit-queue", Entries: entries})
+			req := httptest.NewRequest("POST", "/", bytes.NewReader(reqBody))
+			req.Header.Set("X-Amz-Target", "AmazonSQS.ChangeMessageVisibilityBatch")
+			w := httptest.NewRecorder()
+			app.RootSQSHandler(w, req)
+			assert.Equal(t, tc.wantCode, w.Code, "Count: %d", tc.count)
+		}
+	})
+}
+
+// --- EP: GetQueueAttributes Validation ---
+
+func TestEP_GetQueueAttributes_Validation(t *testing.T) {
+	app, s := setupHandlerTest(t)
+	s.CreateQueue(context.Background(), "get-attr-queue", nil, nil)
+
+	tests := []struct {
+		name      string
+		attrs     []string
+		wantCode  int
+	}{
+		{"Valid All", []string{"All"}, http.StatusOK},
+		{"Valid Specific", []string{"VisibilityTimeout", "DelaySeconds"}, http.StatusOK},
+		{"Invalid Name", []string{"InvalidAttributeName"}, http.StatusBadRequest},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			reqBody, _ := json.Marshal(models.GetQueueAttributesRequest{
+				QueueUrl:       "http://localhost/queues/get-attr-queue",
+				AttributeNames: tc.attrs,
+			})
+			req := httptest.NewRequest("POST", "/", bytes.NewReader(reqBody))
+			req.Header.Set("X-Amz-Target", "AmazonSQS.GetQueueAttributes")
+			w := httptest.NewRecorder()
+			app.RootSQSHandler(w, req)
+			assert.Equal(t, tc.wantCode, w.Code)
+		})
+	}
+}
+
+// --- BVA: Simple Handlers (URL/Validation) ---
+
+func TestBVA_SimpleHandlers(t *testing.T) {
+	app, _ := setupHandlerTest(t)
+	// We don't create queue, just check validation of missing params or bad input
+
+	// DeleteQueue: Missing URL
+	t.Run("DeleteQueue Missing URL", func(t *testing.T) {
+		reqBody, _ := json.Marshal(models.DeleteQueueRequest{QueueUrl: ""})
+		req := httptest.NewRequest("POST", "/", bytes.NewReader(reqBody))
+		req.Header.Set("X-Amz-Target", "AmazonSQS.DeleteQueue")
+		w := httptest.NewRecorder()
+		app.RootSQSHandler(w, req)
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+	})
+
+	// PurgeQueue: Missing URL
+	t.Run("PurgeQueue Missing URL", func(t *testing.T) {
+		reqBody, _ := json.Marshal(models.PurgeQueueRequest{QueueUrl: ""})
+		req := httptest.NewRequest("POST", "/", bytes.NewReader(reqBody))
+		req.Header.Set("X-Amz-Target", "AmazonSQS.PurgeQueue")
+		w := httptest.NewRecorder()
+		app.RootSQSHandler(w, req)
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+	})
+
+	// GetQueueUrl: Missing Name
+	t.Run("GetQueueUrl Missing Name", func(t *testing.T) {
+		reqBody, _ := json.Marshal(models.GetQueueURLRequest{QueueName: ""})
+		req := httptest.NewRequest("POST", "/", bytes.NewReader(reqBody))
+		req.Header.Set("X-Amz-Target", "AmazonSQS.GetQueueUrl")
+		w := httptest.NewRecorder()
+		app.RootSQSHandler(w, req)
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+	})
+
+	// ListQueueTags: Missing URL
+	t.Run("ListQueueTags Missing URL", func(t *testing.T) {
+		reqBody, _ := json.Marshal(models.ListQueueTagsRequest{QueueUrl: ""})
+		req := httptest.NewRequest("POST", "/", bytes.NewReader(reqBody))
+		req.Header.Set("X-Amz-Target", "AmazonSQS.ListQueueTags")
+		w := httptest.NewRecorder()
+		app.RootSQSHandler(w, req)
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+	})
+
+	// RemovePermission: Missing Label
+	t.Run("RemovePermission Missing Label", func(t *testing.T) {
+		reqBody, _ := json.Marshal(models.RemovePermissionRequest{QueueUrl: "q", Label: ""})
+		req := httptest.NewRequest("POST", "/", bytes.NewReader(reqBody))
+		req.Header.Set("X-Amz-Target", "AmazonSQS.RemovePermission")
+		w := httptest.NewRecorder()
+		app.RootSQSHandler(w, req)
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+	})
+
+	// CancelMessageMoveTask: Missing Handle
+	t.Run("CancelMessageMoveTask Missing Handle", func(t *testing.T) {
+		reqBody, _ := json.Marshal(models.CancelMessageMoveTaskRequest{TaskHandle: ""})
+		req := httptest.NewRequest("POST", "/", bytes.NewReader(reqBody))
+		req.Header.Set("X-Amz-Target", "AmazonSQS.CancelMessageMoveTask")
+		w := httptest.NewRecorder()
+		app.RootSQSHandler(w, req)
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+	})
+
+	// ListMessageMoveTasks: Missing SourceArn
+	t.Run("ListMessageMoveTasks Missing SourceArn", func(t *testing.T) {
+		reqBody, _ := json.Marshal(models.ListMessageMoveTasksRequest{SourceArn: ""})
+		req := httptest.NewRequest("POST", "/", bytes.NewReader(reqBody))
+		req.Header.Set("X-Amz-Target", "AmazonSQS.ListMessageMoveTasks")
+		w := httptest.NewRecorder()
+		app.RootSQSHandler(w, req)
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+	})
+}
+
+// --- BVA: SendMessage Attributes ---
+
+func TestBVA_SendMessage_Attributes(t *testing.T) {
+	app, s := setupHandlerTest(t)
+	s.CreateQueue(context.Background(), "msg-attr-queue", nil, nil)
+
+	// Max 10 attributes
+	t.Run("Max Attributes", func(t *testing.T) {
+		attrs := make(map[string]models.MessageAttributeValue)
+		for i := 0; i < 11; i++ {
+			attrs[randomString(5)] = models.MessageAttributeValue{DataType: "String", StringValue: new(string)} // Value doesn't matter for this check
+		}
+		reqBody, _ := json.Marshal(models.SendMessageRequest{
+			QueueUrl: "http://localhost/queues/msg-attr-queue",
+			MessageBody: "b",
+			MessageAttributes: attrs,
+		})
+		req := httptest.NewRequest("POST", "/", bytes.NewReader(reqBody))
+		req.Header.Set("X-Amz-Target", "AmazonSQS.SendMessage")
+		w := httptest.NewRecorder()
+		app.RootSQSHandler(w, req)
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+	})
+}
+
 // --- BVA: ListQueues ---
 
 func TestBVA_ListQueues_MaxResults(t *testing.T) {
