@@ -345,12 +345,21 @@ func (s *FDBStore) SetQueueAttributes(ctx context.Context, name string, attribut
 			}
 		}
 
-		// Update the DLQ index before setting the new attributes.
-		if err := s.updateDLQIndex(tr, name, oldAttributes, attributes); err != nil {
+		// Merge new attributes with old attributes.
+		mergedAttributes := make(map[string]string)
+		for k, v := range oldAttributes {
+			mergedAttributes[k] = v
+		}
+		for k, v := range attributes {
+			mergedAttributes[k] = v
+		}
+
+		// Update the DLQ index using the merged attributes as the new state.
+		if err := s.updateDLQIndex(tr, name, oldAttributes, mergedAttributes); err != nil {
 			return nil, err
 		}
 
-		attrsBytes, err := json.Marshal(attributes)
+		attrsBytes, err := json.Marshal(mergedAttributes)
 		if err != nil {
 			return nil, err
 		}
