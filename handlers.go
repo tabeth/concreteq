@@ -750,12 +750,35 @@ func isSqsMessageBodyValid(body string) bool {
 	return true
 }
 
+// calculateMessageSize calculates the total size of the message including
+// body and attributes, as per SQS limits.
+func calculateMessageSize(body string, attributes map[string]models.MessageAttributeValue) int {
+	totalSize := len(body)
+	for name, attr := range attributes {
+		totalSize += len(name)
+		totalSize += len(attr.DataType)
+		if attr.StringValue != nil {
+			totalSize += len(*attr.StringValue)
+		}
+		if attr.BinaryValue != nil {
+			totalSize += len(attr.BinaryValue)
+		}
+	}
+	return totalSize
+}
+
 func (app *App) validateSendMessageRequest(req *models.SendMessageRequest, queueName string) error {
 	if req.QueueUrl == "" {
 		return errors.New("MissingParameter: The request must contain a QueueUrl.")
 	}
 
-	if len(req.MessageBody) < 1 || len(req.MessageBody) > 256*1024 { // 1 char to 256 KiB
+	if len(req.MessageBody) < 1 {
+		return errors.New("InvalidParameterValue: The message body must be between 1 and 262144 bytes long.")
+	}
+
+	// Validate total message size (body + attributes)
+	totalSize := calculateMessageSize(req.MessageBody, req.MessageAttributes)
+	if totalSize > 262144 {
 		return errors.New("InvalidParameterValue: The message body must be between 1 and 262144 bytes long.")
 	}
 
@@ -864,10 +887,9 @@ func (app *App) SendMessageBatchHandler(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// Validate the total size of the batch request payload.
-	if len(bodyBytes) > 256*1024 {
-		app.sendErrorResponse(w, "BatchRequestTooLong", "The length of all the messages put together is more than the limit.", http.StatusBadRequest)
-		return
-	}
+	// Note: We can't strictly validate the payload size just by len(bodyBytes) here because
+	// the SQS limit applies to sum of (Body + Attributes) for all messages, not the JSON request size.
+	// However, a sanity check is fine.
 
 	var req models.SendMessageBatchRequest
 	if err := json.Unmarshal(bodyBytes, &req); err != nil {
@@ -907,18 +929,21 @@ func (app *App) SendMessageBatchHandler(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 
-		if len(entry.MessageBody) > 256*1024 {
+		// Calculate individual message size (Body + Attributes)
+		msgSize := calculateMessageSize(entry.MessageBody, entry.MessageAttributes)
+
+		if msgSize > 262144 {
 			app.sendErrorResponse(w, "InvalidParameterValue", fmt.Sprintf("Message body for entry with Id '%s' is too long.", entry.Id), http.StatusBadRequest)
 			return
 		}
-		totalPayloadSize += len(entry.MessageBody)
+		totalPayloadSize += msgSize
 
 		// Note: More complex per-entry validation (like checking DelaySeconds for a FIFO queue)
 		// is delegated to the store layer, which can produce partial success/failure responses.
 		// The handler only performs validations that would cause the entire batch to fail.
 	}
 
-	if totalPayloadSize > 256*1024 {
+	if totalPayloadSize > 262144 {
 		app.sendErrorResponse(w, "BatchRequestTooLong", "The length of all the messages put together is more than the limit.", http.StatusBadRequest)
 		return
 	}
