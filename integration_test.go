@@ -2135,3 +2135,68 @@ func TestIntegration_StartMessageMoveTask_BackgroundProcessing(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, recRespSrc.Messages, 0)
 }
+
+func TestIntegration_Encryption_EndToEnd(t *testing.T) {
+	// Setup a clean FDB store for this test
+	s, err := store.NewFDBStoreAtPath("test-encryption-" + time.Now().Format("20060102150405"))
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	queueName := "encrypted-queue-integ"
+
+	// 1. Create a Queue with Encryption Enabled
+	masterKeyID := "my-master-key-integ"
+	attrs := map[string]string{
+		"KmsMasterKeyId": masterKeyID,
+	}
+	_, err = s.CreateQueue(ctx, queueName, attrs, nil)
+	require.NoError(t, err)
+
+	// 2. Send a Message
+	msgBody := "This is a secret message integration"
+	sendReq := &models.SendMessageRequest{
+		MessageBody: msgBody,
+		MessageAttributes: map[string]models.MessageAttributeValue{
+			"SecretAttr": {
+				DataType:    "String",
+				StringValue: strPtr("secret-value-integ"),
+			},
+		},
+	}
+	sendResp, err := s.SendMessage(ctx, queueName, sendReq)
+	require.NoError(t, err)
+	assert.NotEmpty(t, sendResp.MessageId)
+
+	// 3. Receive Message (Should be transparently decrypted)
+	receiveReq := &models.ReceiveMessageRequest{
+		MaxNumberOfMessages:   1,
+		VisibilityTimeout:     10,
+		AttributeNames:        []string{"All"},
+		MessageAttributeNames: []string{"All"},
+	}
+	recvResp, err := s.ReceiveMessage(ctx, queueName, receiveReq)
+	require.NoError(t, err)
+	require.Len(t, recvResp.Messages, 1)
+
+	msg := recvResp.Messages[0]
+	assert.Equal(t, msgBody, msg.Body)
+	assert.Equal(t, "secret-value-integ", *msg.MessageAttributes["SecretAttr"].StringValue)
+
+	// 4. Verify Message is Still Encrypted in DB (by receiving it again)
+	// We wait for the visibility timeout to expire so we can receive it again.
+	// If the previous receive corrupted the message (overwrote with plaintext but kept IsEncrypted=true),
+	// this second receive would fail or return garbage.
+	time.Sleep(11 * time.Second)
+
+	recvResp2, err := s.ReceiveMessage(ctx, queueName, receiveReq)
+	require.NoError(t, err)
+	require.Len(t, recvResp2.Messages, 1)
+
+	msg2 := recvResp2.Messages[0]
+	assert.Equal(t, msgBody, msg2.Body)
+	assert.Equal(t, "secret-value-integ", *msg2.MessageAttributes["SecretAttr"].StringValue)
+}
+
+func strPtr(s string) *string {
+	return &s
+}
