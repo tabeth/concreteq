@@ -1108,6 +1108,7 @@ func (app *App) DeleteMessageBatchHandler(w http.ResponseWriter, r *http.Request
 
 // --- Unimplemented Handlers ---
 
+// ChangeMessageVisibilityHandler handles requests to change the visibility timeout of a message.
 func (app *App) ChangeMessageVisibilityHandler(w http.ResponseWriter, r *http.Request) {
 	var req models.ChangeMessageVisibilityRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -1154,6 +1155,7 @@ func (app *App) ChangeMessageVisibilityHandler(w http.ResponseWriter, r *http.Re
 	w.WriteHeader(http.StatusOK)
 }
 
+// ChangeMessageVisibilityBatchHandler handles requests to change the visibility timeout of multiple messages.
 func (app *App) ChangeMessageVisibilityBatchHandler(w http.ResponseWriter, r *http.Request) {
 	var req models.ChangeMessageVisibilityBatchRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -1216,6 +1218,7 @@ func (app *App) ChangeMessageVisibilityBatchHandler(w http.ResponseWriter, r *ht
 	json.NewEncoder(w).Encode(resp)
 }
 
+// AddPermissionHandler handles requests to add permissions to a queue.
 func (app *App) AddPermissionHandler(w http.ResponseWriter, r *http.Request) {
 	var req models.AddPermissionRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -1277,6 +1280,7 @@ func (app *App) AddPermissionHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(http.StatusOK)
 }
+// RemovePermissionHandler handles requests to remove permissions from a queue.
 func (app *App) RemovePermissionHandler(w http.ResponseWriter, r *http.Request) {
 	var req models.RemovePermissionRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -1311,6 +1315,7 @@ func (app *App) RemovePermissionHandler(w http.ResponseWriter, r *http.Request) 
 
 	w.WriteHeader(http.StatusOK)
 }
+// ListQueueTagsHandler handles requests to list tags for a queue.
 func (app *App) ListQueueTagsHandler(w http.ResponseWriter, r *http.Request) {
 	var req models.ListQueueTagsRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -1342,6 +1347,7 @@ func (app *App) ListQueueTagsHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(resp)
 }
 
+// TagQueueHandler handles requests to add tags to a queue.
 func (app *App) TagQueueHandler(w http.ResponseWriter, r *http.Request) {
 	var req models.TagQueueRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -1373,6 +1379,7 @@ func (app *App) TagQueueHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
+// UntagQueueHandler handles requests to remove tags from a queue.
 func (app *App) UntagQueueHandler(w http.ResponseWriter, r *http.Request) {
 	var req models.UntagQueueRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -1403,6 +1410,7 @@ func (app *App) UntagQueueHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(http.StatusOK)
 }
+// ListDeadLetterSourceQueuesHandler handles requests to list queues that use a specific queue as a DLQ.
 func (app *App) ListDeadLetterSourceQueuesHandler(w http.ResponseWriter, r *http.Request) {
 	var req models.ListDeadLetterSourceQueuesRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -1475,6 +1483,7 @@ func (app *App) validateSourceArn(ctx context.Context, sourceArn string) error {
 	return nil
 }
 
+// StartMessageMoveTaskHandler handles requests to start a task that moves messages between queues.
 func (app *App) StartMessageMoveTaskHandler(w http.ResponseWriter, r *http.Request) {
 	var req models.StartMessageMoveTaskRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -1516,6 +1525,7 @@ func (app *App) StartMessageMoveTaskHandler(w http.ResponseWriter, r *http.Reque
 	json.NewEncoder(w).Encode(resp)
 }
 
+// CancelMessageMoveTaskHandler handles requests to cancel a running message move task.
 func (app *App) CancelMessageMoveTaskHandler(w http.ResponseWriter, r *http.Request) {
 	var req models.CancelMessageMoveTaskRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -1555,6 +1565,7 @@ func (app *App) CancelMessageMoveTaskHandler(w http.ResponseWriter, r *http.Requ
 	json.NewEncoder(w).Encode(resp)
 }
 
+// ListMessageMoveTasksHandler handles requests to list message move tasks for a source queue.
 func (app *App) ListMessageMoveTasksHandler(w http.ResponseWriter, r *http.Request) {
 	var req models.ListMessageMoveTasksRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {

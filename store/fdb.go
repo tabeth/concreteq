@@ -1641,6 +1641,8 @@ func (s *FDBStore) DeleteMessageBatch(ctx context.Context, queueName string, ent
 
 // --- Unimplemented Methods ---
 
+// ChangeMessageVisibility changes the visibility timeout of a specified message in a queue to a new value.
+// This is typically used to extend the amount of time a consumer has to process a message.
 func (s *FDBStore) ChangeMessageVisibility(ctx context.Context, queueName string, receiptHandle string, visibilityTimeout int) error {
 	_, err := s.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
 		return nil, s.changeMessageVisibility(tr, queueName, receiptHandle, visibilityTimeout)
@@ -1720,6 +1722,8 @@ func (s *FDBStore) changeMessageVisibility(tr fdb.Transaction, queueName string,
 	return nil
 }
 
+// ChangeMessageVisibilityBatch changes the visibility timeout of multiple messages in a single call.
+// This reduces the number of API requests required to manage message visibility.
 func (s *FDBStore) ChangeMessageVisibilityBatch(ctx context.Context, queueName string, entries []models.ChangeMessageVisibilityBatchRequestEntry) (*models.ChangeMessageVisibilityBatchResponse, error) {
 	resp := &models.ChangeMessageVisibilityBatchResponse{
 		Successful: []models.ChangeMessageVisibilityBatchResultEntry{},
@@ -1777,6 +1781,8 @@ func (s *FDBStore) ChangeMessageVisibilityBatch(ctx context.Context, queueName s
 	return resp, nil
 }
 
+// AddPermission adds a permission to a queue for a specific principal.
+// This allows sharing access to the queue with other AWS accounts.
 func (s *FDBStore) AddPermission(ctx context.Context, queueName, label string, accountIds []string, actions []string) error {
 	// Use generic map for Statement to preserve all fields
 	type Policy struct {
@@ -1876,6 +1882,8 @@ func (s *FDBStore) AddPermission(ctx context.Context, queueName, label string, a
 	return err
 }
 
+// RemovePermission removes a permission from a queue.
+// It looks for a policy statement with the specified label and deletes it.
 func (s *FDBStore) RemovePermission(ctx context.Context, queueName, label string) error {
 	// Use generic map for Statement to preserve all fields
 	type Policy struct {
@@ -1966,6 +1974,8 @@ func (s *FDBStore) RemovePermission(ctx context.Context, queueName, label string
 	return err
 }
 
+// ListQueueTags lists the tags for a specified queue.
+// Tags are key-value pairs used for organizing and tracking resources.
 func (s *FDBStore) ListQueueTags(ctx context.Context, queueName string) (map[string]string, error) {
 	tags, err := s.db.ReadTransact(func(tr fdb.ReadTransaction) (interface{}, error) {
 		exists, err := s.dir.Exists(tr, []string{queueName})
@@ -2001,6 +2011,8 @@ func (s *FDBStore) ListQueueTags(ctx context.Context, queueName string) (map[str
 	return tags.(map[string]string), nil
 }
 
+// TagQueue adds tags to a queue.
+// If a tag with the same key already exists, its value is overwritten.
 func (s *FDBStore) TagQueue(ctx context.Context, queueName string, tags map[string]string) error {
 	_, err := s.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
 		exists, err := s.dir.Exists(tr, []string{queueName})
@@ -2046,6 +2058,8 @@ func (s *FDBStore) TagQueue(ctx context.Context, queueName string, tags map[stri
 	return err
 }
 
+// UntagQueue removes tags from a queue.
+// It takes a list of tag keys to be removed.
 func (s *FDBStore) UntagQueue(ctx context.Context, queueName string, tagKeys []string) error {
 	_, err := s.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
 		exists, err := s.dir.Exists(tr, []string{queueName})
@@ -2089,6 +2103,8 @@ func (s *FDBStore) UntagQueue(ctx context.Context, queueName string, tagKeys []s
 	return err
 }
 
+// ListDeadLetterSourceQueues lists queues that have the specified queue configured as their dead-letter queue.
+// This is useful for identifying which queues are sending failed messages to a particular DLQ.
 func (s *FDBStore) ListDeadLetterSourceQueues(ctx context.Context, queueURL string, maxResults int, nextToken string) ([]string, string, error) {
 	parts := strings.Split(queueURL, "/")
 	if len(parts) == 0 {
