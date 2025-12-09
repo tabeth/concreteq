@@ -35,10 +35,6 @@ const (
 	numShards = 16
 )
 
-var (
-	r = rand.New(rand.NewSource(time.Now().UnixNano()))
-)
-
 // FDBStore is a concrete implementation of the Store interface using FoundationDB.
 // It holds a connection to the database and a directory subspace for this application
 // to keep its data separate from other applications in the same FDB cluster.
@@ -536,7 +532,7 @@ func (s *FDBStore) SendMessage(ctx context.Context, queueName string, message *m
 			// The index is ordered by (shard, visibility_time, messageId).
 			// Sharding distributes the dequeue load across multiple prefixes,
 			// preventing hot spots on the head of the queue.
-			shardID := r.Intn(numShards)
+			shardID := rand.Intn(numShards)
 			visKey := visibleIdxDir.Pack(tuple.Tuple{shardID, visibleAfter, messageID})
 			tr.Set(visKey, []byte{})
 		}
@@ -916,7 +912,7 @@ func (s *FDBStore) SendMessageBatch(ctx context.Context, queueName string, req *
 				}
 				internalMessage.VisibleAfter = visibleAfter
 				// Use the same sharding logic as the single send.
-				shardID := r.Intn(numShards)
+				shardID := rand.Intn(numShards)
 				visKey := visibleIdxDir.Pack(tuple.Tuple{shardID, visibleAfter, messageID})
 				tr.Set(visKey, []byte{})
 			}
@@ -1002,7 +998,7 @@ func (s *FDBStore) receiveStandardMessages(tr fdb.Transaction, queueDir director
 
 	// Start scanning from a random shard to ensure consumers are distributed
 	// across the keyspace and not all hitting shard 0 simultaneously.
-	startShard := r.Intn(numShards)
+	startShard := rand.Intn(numShards)
 
 	// Iterate through all shards, wrapping around, until we've collected
 	// enough messages or checked all shards.
@@ -1067,7 +1063,7 @@ func (s *FDBStore) receiveStandardMessages(tr fdb.Transaction, queueDir director
 						dlqMsgBytes, _ := json.Marshal(msg)
 						tr.Set(dlqMessagesDir.Pack(tuple.Tuple{messageID}), dlqMsgBytes)
 
-						shardID := r.Intn(numShards)
+						shardID := rand.Intn(numShards)
 						visKey := dlqVisibleIdxDir.Pack(tuple.Tuple{shardID, now, messageID})
 						tr.Set(visKey, []byte{})
 
@@ -1090,7 +1086,7 @@ func (s *FDBStore) receiveStandardMessages(tr fdb.Transaction, queueDir director
 			//    again if it's not deleted. This entry is placed in a *new random shard*
 			//    to prevent a thundering herd problem on a single shard if many
 			//    messages time out simultaneously.
-			newShardID := r.Intn(numShards)
+			newShardID := rand.Intn(numShards)
 			newVisKey := visibleIdxDir.Pack(tuple.Tuple{newShardID, newVisibilityTimeout, messageID})
 			tr.Set(newVisKey, []byte{})
 
@@ -1708,7 +1704,7 @@ func (s *FDBStore) changeMessageVisibility(tr fdb.Transaction, queueName string,
 	}
 	tr.Set(messagesDir.Pack(tuple.Tuple{messageID}), newMsgBytes)
 
-	newShardID := r.Intn(numShards)
+	newShardID := rand.Intn(numShards)
 	newVisKey := visibleIdxDir.Pack(tuple.Tuple{newShardID, newVisibilityTimeout, messageID})
 	tr.Set(newVisKey, []byte{})
 
