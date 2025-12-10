@@ -492,6 +492,14 @@ type ListMessageMoveTasksResponse struct {
 	Results []ListMessageMoveTasksResultEntry `json:"Results"`
 }
 
+type CreateTokenRequest struct {
+	AccountId string `json:"AccountId"`
+}
+
+type CreateTokenResponse struct {
+	Token string `json:"Token"`
+}
+
 // ListDeadLetterSourceQueuesRequest defines the parameters for the SQS ListDeadLetterSourceQueues action.
 type ListDeadLetterSourceQueuesRequest struct {
 	// QueueUrl is the URL of the dead-letter queue.
