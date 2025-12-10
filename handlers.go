@@ -210,6 +210,28 @@ func validateAttributes(attributes map[string]string) error {
 			if val != "perQueue" && val != "perMessageGroupId" {
 				err = fmt.Errorf("must be 'perQueue' or 'perMessageGroupId'")
 			}
+		case "RedriveAllowPolicy":
+			var policy struct {
+				RedrivePermission string   `json:"redrivePermission"`
+				SourceQueueArns   []string `json:"sourceQueueArns"`
+			}
+			if jsonErr := json.Unmarshal([]byte(val), &policy); jsonErr != nil {
+				err = errors.New("must be a valid JSON object")
+			} else {
+				if policy.RedrivePermission != "allowAll" && policy.RedrivePermission != "denyAll" && policy.RedrivePermission != "byQueue" {
+					err = errors.New("redrivePermission must be one of: allowAll, denyAll, byQueue")
+				} else if policy.RedrivePermission == "byQueue" {
+					if len(policy.SourceQueueArns) == 0 {
+						err = errors.New("sourceQueueArns is required when redrivePermission is byQueue")
+					}
+					for _, arn := range policy.SourceQueueArns {
+						if !arnRegex.MatchString(arn) {
+							err = fmt.Errorf("invalid sourceQueueArn: %s", arn)
+							break
+						}
+					}
+				}
+			}
 		}
 		if err != nil {
 			return fmt.Errorf("invalid value for %s: %w", key, err)
