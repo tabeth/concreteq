@@ -220,6 +220,75 @@ func validateAttributes(attributes map[string]string) error {
 
 // --- Queue Management Handlers ---
 
+// checkRedrivePolicy verifies if a source queue is allowed to use the target dead letter queue
+// according to the DLQ's RedriveAllowPolicy.
+func (app *App) checkRedrivePolicy(ctx context.Context, sourceQueueName string, redrivePolicyJson string) error {
+	var policy struct {
+		DeadLetterTargetArn string `json:"deadLetterTargetArn"`
+	}
+	if err := json.Unmarshal([]byte(redrivePolicyJson), &policy); err != nil {
+		return errors.New("invalid RedrivePolicy JSON")
+	}
+
+	if policy.DeadLetterTargetArn == "" {
+		return nil
+	}
+
+	parts := strings.Split(policy.DeadLetterTargetArn, ":")
+	targetQueueName := parts[len(parts)-1]
+
+	targetAttrs, err := app.Store.GetQueueAttributes(ctx, targetQueueName)
+	if err != nil {
+		if errors.Is(err, store.ErrQueueDoesNotExist) {
+			return &SqsError{Type: "AWS.SimpleQueueService.NonExistentQueue", Message: "The dead letter queue does not exist"}
+		}
+		return err
+	}
+
+	allowPolicyStr, ok := targetAttrs["RedriveAllowPolicy"]
+	if !ok {
+		// Default to allowAll if not specified
+		return nil
+	}
+
+	var allowPolicy struct {
+		RedrivePermission string   `json:"redrivePermission"`
+		SourceQueueArns   []string `json:"sourceQueueArns"`
+	}
+	if err := json.Unmarshal([]byte(allowPolicyStr), &allowPolicy); err != nil {
+		// Assume allowAll if parsing fails, or log error
+		return nil
+	}
+
+	if allowPolicy.RedrivePermission == "allowAll" {
+		return nil
+	}
+
+	if allowPolicy.RedrivePermission == "denyAll" {
+		return &SqsError{Type: "InvalidParameterValue", Message: fmt.Sprintf("Queue %s does not allow this queue to use it as a dead letter queue.", policy.DeadLetterTargetArn)}
+	}
+
+	if allowPolicy.RedrivePermission == "byQueue" {
+		// Construct the source queue ARN.
+		// NOTE: In a real environment, we would get the account ID from the context or configuration.
+		// For this project, we are using the hardcoded account ID 123456789012 found elsewhere in handlers.go
+		sourceArn := fmt.Sprintf("arn:aws:sqs:us-east-1:123456789012:%s", sourceQueueName)
+
+		allowed := false
+		for _, arn := range allowPolicy.SourceQueueArns {
+			if arn == sourceArn {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			return &SqsError{Type: "InvalidParameterValue", Message: fmt.Sprintf("Queue %s does not allow this queue to use it as a dead letter queue.", policy.DeadLetterTargetArn)}
+		}
+	}
+
+	return nil
+}
+
 // CreateQueueHandler handles requests to create a new queue.
 // It performs extensive validation on the queue name and attributes before
 // calling the storage layer to persist the queue.
@@ -253,6 +322,17 @@ func (app *App) CreateQueueHandler(w http.ResponseWriter, r *http.Request) {
 	if err := validateAttributes(req.Attributes); err != nil {
 		app.sendErrorResponse(w, "InvalidAttributeName", err.Error(), http.StatusBadRequest)
 		return
+	}
+
+	if val, ok := req.Attributes["RedrivePolicy"]; ok {
+		if err := app.checkRedrivePolicy(r.Context(), req.QueueName, val); err != nil {
+			if serr, ok := err.(*SqsError); ok {
+				app.sendErrorResponse(w, serr.Type, serr.Message, http.StatusBadRequest)
+			} else {
+				app.sendErrorResponse(w, "InternalFailure", err.Error(), http.StatusInternalServerError)
+			}
+			return
+		}
 	}
 
 	// Ensure that FIFO-specific attributes are only used with FIFO queues.
@@ -519,6 +599,17 @@ func (app *App) SetQueueAttributesHandler(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	if val, ok := req.Attributes["RedrivePolicy"]; ok {
+		if err := app.checkRedrivePolicy(r.Context(), queueName, val); err != nil {
+			if serr, ok := err.(*SqsError); ok {
+				app.sendErrorResponse(w, serr.Type, serr.Message, http.StatusBadRequest)
+			} else {
+				app.sendErrorResponse(w, "InternalFailure", err.Error(), http.StatusInternalServerError)
+			}
+			return
+		}
+	}
+
 	err := app.Store.SetQueueAttributes(r.Context(), queueName, req.Attributes)
 	if err != nil {
 		if errors.Is(err, store.ErrQueueDoesNotExist) {
@@ -626,6 +717,7 @@ var settableQueueAttributes = map[string]bool{
 	"KmsMasterKeyId":                true,
 	"KmsDataKeyReusePeriodSeconds":  true,
 	"SqsManagedSseEnabled":          true,
+	"RedriveAllowPolicy":            true,
 	// Note: FIFO-related attributes like ContentBasedDeduplication are often settable,
 	// but depend on the queue type. For simplicity, we assume they are settable if validated.
 	"ContentBasedDeduplication": true,

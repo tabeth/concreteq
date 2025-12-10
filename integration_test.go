@@ -2135,3 +2135,77 @@ func TestIntegration_StartMessageMoveTask_BackgroundProcessing(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, recRespSrc.Messages, 0)
 }
+func TestIntegration_RedriveAllowPolicy(t *testing.T) {
+	app, teardown := setupIntegrationTest(t)
+	defer teardown()
+
+	ctx := context.Background()
+	dlqName := "redrive-allow-dlq"
+	srcQueueName := "redrive-allow-src"
+
+	// 1. Create DLQ with default (implicit allowAll)
+	_, err := app.store.CreateQueue(ctx, dlqName, nil, nil)
+	require.NoError(t, err)
+
+	// 2. Create Source Queue pointing to DLQ - Should Succeed
+	redrivePolicy := fmt.Sprintf(`{"deadLetterTargetArn":"arn:aws:sqs:us-east-1:123456789012:%s","maxReceiveCount":"1"}`, dlqName)
+	createBody := fmt.Sprintf(`{"QueueName": "%s", "Attributes": {"RedrivePolicy": %q}}`, srcQueueName, redrivePolicy)
+	req, _ := http.NewRequest("POST", app.baseURL+"/", bytes.NewBufferString(createBody))
+	req.Header.Set("X-Amz-Target", "AmazonSQS.CreateQueue")
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusCreated, resp.StatusCode)
+	resp.Body.Close()
+
+	// 3. Update DLQ to denyAll
+	denyPolicy := `{"redrivePermission": "denyAll"}`
+	updateBody := fmt.Sprintf(`{"QueueUrl": "%s/queues/%s", "Attributes": {"RedriveAllowPolicy": %q}}`, app.baseURL, dlqName, denyPolicy)
+	req, _ = http.NewRequest("POST", app.baseURL+"/", bytes.NewBufferString(updateBody))
+	req.Header.Set("X-Amz-Target", "AmazonSQS.SetQueueAttributes")
+	resp, err = http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	resp.Body.Close()
+
+	// 4. Try to create another source queue pointing to DLQ - Should Fail
+	srcQueue2 := "redrive-allow-src-2"
+	createBody2 := fmt.Sprintf(`{"QueueName": "%s", "Attributes": {"RedrivePolicy": %q}}`, srcQueue2, redrivePolicy)
+	req, _ = http.NewRequest("POST", app.baseURL+"/", bytes.NewBufferString(createBody2))
+	req.Header.Set("X-Amz-Target", "AmazonSQS.CreateQueue")
+	resp, err = http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	var errResp models.ErrorResponse
+	json.NewDecoder(resp.Body).Decode(&errResp)
+	assert.Equal(t, "InvalidParameterValue", errResp.Type)
+	resp.Body.Close()
+
+	// 5. Update DLQ to allow specific queue (byQueue)
+	// We allow srcQueue2
+	byQueuePolicy := fmt.Sprintf(`{"redrivePermission": "byQueue", "sourceQueueArns": ["arn:aws:sqs:us-east-1:123456789012:%s"]}`, srcQueue2)
+	updateBody2 := fmt.Sprintf(`{"QueueUrl": "%s/queues/%s", "Attributes": {"RedriveAllowPolicy": %q}}`, app.baseURL, dlqName, byQueuePolicy)
+	req, _ = http.NewRequest("POST", app.baseURL+"/", bytes.NewBufferString(updateBody2))
+	req.Header.Set("X-Amz-Target", "AmazonSQS.SetQueueAttributes")
+	resp, err = http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	resp.Body.Close()
+
+	// 6. Create srcQueue2 again - Should Succeed now
+	req, _ = http.NewRequest("POST", app.baseURL+"/", bytes.NewBufferString(createBody2))
+	req.Header.Set("X-Amz-Target", "AmazonSQS.CreateQueue")
+	resp, err = http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusCreated, resp.StatusCode)
+	resp.Body.Close()
+
+	// 7. Try to create srcQueue3 - Should Fail (not in allowed list)
+	srcQueue3 := "redrive-allow-src-3"
+	createBody3 := fmt.Sprintf(`{"QueueName": "%s", "Attributes": {"RedrivePolicy": %q}}`, srcQueue3, redrivePolicy)
+	req, _ = http.NewRequest("POST", app.baseURL+"/", bytes.NewBufferString(createBody3))
+	req.Header.Set("X-Amz-Target", "AmazonSQS.CreateQueue")
+	resp, err = http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	resp.Body.Close()
+}
