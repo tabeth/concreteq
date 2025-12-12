@@ -210,6 +210,28 @@ func validateAttributes(attributes map[string]string) error {
 			if val != "perQueue" && val != "perMessageGroupId" {
 				err = fmt.Errorf("must be 'perQueue' or 'perMessageGroupId'")
 			}
+		case "RedriveAllowPolicy":
+			var policy struct {
+				RedrivePermission string   `json:"redrivePermission"`
+				SourceQueueArns   []string `json:"sourceQueueArns"`
+			}
+			if jsonErr := json.Unmarshal([]byte(val), &policy); jsonErr != nil {
+				err = errors.New("must be a valid JSON object")
+			} else {
+				if policy.RedrivePermission != "allowAll" && policy.RedrivePermission != "denyAll" && policy.RedrivePermission != "byQueue" {
+					err = errors.New("redrivePermission must be one of: allowAll, denyAll, byQueue")
+				} else if policy.RedrivePermission == "byQueue" {
+					if len(policy.SourceQueueArns) == 0 {
+						err = errors.New("sourceQueueArns is required when redrivePermission is byQueue")
+					}
+					for _, arn := range policy.SourceQueueArns {
+						if !arnRegex.MatchString(arn) {
+							err = fmt.Errorf("invalid sourceQueueArn: %s", arn)
+							break
+						}
+					}
+				}
+			}
 		}
 		if err != nil {
 			return fmt.Errorf("invalid value for %s: %w", key, err)
@@ -219,6 +241,75 @@ func validateAttributes(attributes map[string]string) error {
 }
 
 // --- Queue Management Handlers ---
+
+// checkRedrivePolicy verifies if a source queue is allowed to use the target dead letter queue
+// according to the DLQ's RedriveAllowPolicy.
+func (app *App) checkRedrivePolicy(ctx context.Context, sourceQueueName string, redrivePolicyJson string) error {
+	var policy struct {
+		DeadLetterTargetArn string `json:"deadLetterTargetArn"`
+	}
+	if err := json.Unmarshal([]byte(redrivePolicyJson), &policy); err != nil {
+		return errors.New("invalid RedrivePolicy JSON")
+	}
+
+	if policy.DeadLetterTargetArn == "" {
+		return nil
+	}
+
+	parts := strings.Split(policy.DeadLetterTargetArn, ":")
+	targetQueueName := parts[len(parts)-1]
+
+	targetAttrs, err := app.Store.GetQueueAttributes(ctx, targetQueueName)
+	if err != nil {
+		if errors.Is(err, store.ErrQueueDoesNotExist) {
+			return &SqsError{Type: "AWS.SimpleQueueService.NonExistentQueue", Message: "The dead letter queue does not exist"}
+		}
+		return err
+	}
+
+	allowPolicyStr, ok := targetAttrs["RedriveAllowPolicy"]
+	if !ok {
+		// Default to allowAll if not specified
+		return nil
+	}
+
+	var allowPolicy struct {
+		RedrivePermission string   `json:"redrivePermission"`
+		SourceQueueArns   []string `json:"sourceQueueArns"`
+	}
+	if err := json.Unmarshal([]byte(allowPolicyStr), &allowPolicy); err != nil {
+		// Assume allowAll if parsing fails, or log error
+		return nil
+	}
+
+	if allowPolicy.RedrivePermission == "allowAll" {
+		return nil
+	}
+
+	if allowPolicy.RedrivePermission == "denyAll" {
+		return &SqsError{Type: "InvalidParameterValue", Message: fmt.Sprintf("Queue %s does not allow this queue to use it as a dead letter queue.", policy.DeadLetterTargetArn)}
+	}
+
+	if allowPolicy.RedrivePermission == "byQueue" {
+		// Construct the source queue ARN.
+		// NOTE: In a real environment, we would get the account ID from the context or configuration.
+		// For this project, we are using the hardcoded account ID 123456789012 found elsewhere in handlers.go
+		sourceArn := fmt.Sprintf("arn:aws:sqs:us-east-1:123456789012:%s", sourceQueueName)
+
+		allowed := false
+		for _, arn := range allowPolicy.SourceQueueArns {
+			if arn == sourceArn {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			return &SqsError{Type: "InvalidParameterValue", Message: fmt.Sprintf("Queue %s does not allow this queue to use it as a dead letter queue.", policy.DeadLetterTargetArn)}
+		}
+	}
+
+	return nil
+}
 
 // CreateQueueHandler handles requests to create a new queue.
 // It performs extensive validation on the queue name and attributes before
@@ -253,6 +344,17 @@ func (app *App) CreateQueueHandler(w http.ResponseWriter, r *http.Request) {
 	if err := validateAttributes(req.Attributes); err != nil {
 		app.sendErrorResponse(w, "InvalidAttributeName", err.Error(), http.StatusBadRequest)
 		return
+	}
+
+	if val, ok := req.Attributes["RedrivePolicy"]; ok {
+		if err := app.checkRedrivePolicy(r.Context(), req.QueueName, val); err != nil {
+			if serr, ok := err.(*SqsError); ok {
+				app.sendErrorResponse(w, serr.Type, serr.Message, http.StatusBadRequest)
+			} else {
+				app.sendErrorResponse(w, "InternalFailure", err.Error(), http.StatusInternalServerError)
+			}
+			return
+		}
 	}
 
 	// Ensure that FIFO-specific attributes are only used with FIFO queues.
@@ -519,6 +621,17 @@ func (app *App) SetQueueAttributesHandler(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	if val, ok := req.Attributes["RedrivePolicy"]; ok {
+		if err := app.checkRedrivePolicy(r.Context(), queueName, val); err != nil {
+			if serr, ok := err.(*SqsError); ok {
+				app.sendErrorResponse(w, serr.Type, serr.Message, http.StatusBadRequest)
+			} else {
+				app.sendErrorResponse(w, "InternalFailure", err.Error(), http.StatusInternalServerError)
+			}
+			return
+		}
+	}
+
 	err := app.Store.SetQueueAttributes(r.Context(), queueName, req.Attributes)
 	if err != nil {
 		if errors.Is(err, store.ErrQueueDoesNotExist) {
@@ -626,6 +739,7 @@ var settableQueueAttributes = map[string]bool{
 	"KmsMasterKeyId":                true,
 	"KmsDataKeyReusePeriodSeconds":  true,
 	"SqsManagedSseEnabled":          true,
+	"RedriveAllowPolicy":            true,
 	// Note: FIFO-related attributes like ContentBasedDeduplication are often settable,
 	// but depend on the queue type. For simplicity, we assume they are settable if validated.
 	"ContentBasedDeduplication": true,
@@ -750,12 +864,35 @@ func isSqsMessageBodyValid(body string) bool {
 	return true
 }
 
+// calculateMessageSize calculates the total size of the message including
+// body and attributes, as per SQS limits.
+func calculateMessageSize(body string, attributes map[string]models.MessageAttributeValue) int {
+	totalSize := len(body)
+	for name, attr := range attributes {
+		totalSize += len(name)
+		totalSize += len(attr.DataType)
+		if attr.StringValue != nil {
+			totalSize += len(*attr.StringValue)
+		}
+		if attr.BinaryValue != nil {
+			totalSize += len(attr.BinaryValue)
+		}
+	}
+	return totalSize
+}
+
 func (app *App) validateSendMessageRequest(req *models.SendMessageRequest, queueName string) error {
 	if req.QueueUrl == "" {
 		return errors.New("MissingParameter: The request must contain a QueueUrl.")
 	}
 
-	if len(req.MessageBody) < 1 || len(req.MessageBody) > 256*1024 { // 1 char to 256 KiB
+	if len(req.MessageBody) < 1 {
+		return errors.New("InvalidParameterValue: The message body must be between 1 and 262144 bytes long.")
+	}
+
+	// Validate total message size (body + attributes)
+	totalSize := calculateMessageSize(req.MessageBody, req.MessageAttributes)
+	if totalSize > 262144 {
 		return errors.New("InvalidParameterValue: The message body must be between 1 and 262144 bytes long.")
 	}
 
@@ -864,10 +1001,9 @@ func (app *App) SendMessageBatchHandler(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// Validate the total size of the batch request payload.
-	if len(bodyBytes) > 256*1024 {
-		app.sendErrorResponse(w, "BatchRequestTooLong", "The length of all the messages put together is more than the limit.", http.StatusBadRequest)
-		return
-	}
+	// Note: We can't strictly validate the payload size just by len(bodyBytes) here because
+	// the SQS limit applies to sum of (Body + Attributes) for all messages, not the JSON request size.
+	// However, a sanity check is fine.
 
 	var req models.SendMessageBatchRequest
 	if err := json.Unmarshal(bodyBytes, &req); err != nil {
@@ -907,18 +1043,21 @@ func (app *App) SendMessageBatchHandler(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 
-		if len(entry.MessageBody) > 256*1024 {
+		// Calculate individual message size (Body + Attributes)
+		msgSize := calculateMessageSize(entry.MessageBody, entry.MessageAttributes)
+
+		if msgSize > 262144 {
 			app.sendErrorResponse(w, "InvalidParameterValue", fmt.Sprintf("Message body for entry with Id '%s' is too long.", entry.Id), http.StatusBadRequest)
 			return
 		}
-		totalPayloadSize += len(entry.MessageBody)
+		totalPayloadSize += msgSize
 
 		// Note: More complex per-entry validation (like checking DelaySeconds for a FIFO queue)
 		// is delegated to the store layer, which can produce partial success/failure responses.
 		// The handler only performs validations that would cause the entire batch to fail.
 	}
 
-	if totalPayloadSize > 256*1024 {
+	if totalPayloadSize > 262144 {
 		app.sendErrorResponse(w, "BatchRequestTooLong", "The length of all the messages put together is more than the limit.", http.StatusBadRequest)
 		return
 	}

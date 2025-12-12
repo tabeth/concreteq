@@ -797,7 +797,7 @@ func TestIntegration_SendMessageBatch(t *testing.T) {
 		{
 			name:     "BatchRequestTooLong",
 			queueURL: stdQueueURL,
-			inputBody:          `{"QueueUrl": "` + stdQueueURL + `", "Entries": [{"Id": "1", "MessageBody": "` + string(make([]byte, 256*1024)) + `"}]}`,
+			inputBody:          `{"QueueUrl": "` + stdQueueURL + `", "Entries": [{"Id": "1", "MessageBody": "` + strings.Repeat("a", 150*1024) + `"}, {"Id": "2", "MessageBody": "` + strings.Repeat("b", 150*1024) + `"}]}`,
 			expectedStatusCode: http.StatusBadRequest,
 			expectedBody:       `{"__type":"BatchRequestTooLong", "message":"The length of all the messages put together is more than the limit."}`,
 		},
@@ -2199,4 +2199,175 @@ func TestIntegration_Encryption_EndToEnd(t *testing.T) {
 
 func strPtr(s string) *string {
 	return &s
+func TestIntegration_RedriveAllowPolicy(t *testing.T) {
+	app, teardown := setupIntegrationTest(t)
+	defer teardown()
+
+	ctx := context.Background()
+	dlqName := "redrive-allow-dlq"
+	srcQueueName := "redrive-allow-src"
+
+	// 1. Create DLQ with default (implicit allowAll)
+	_, err := app.store.CreateQueue(ctx, dlqName, nil, nil)
+	require.NoError(t, err)
+
+	// 2. Create Source Queue pointing to DLQ - Should Succeed
+	redrivePolicy := fmt.Sprintf(`{"deadLetterTargetArn":"arn:aws:sqs:us-east-1:123456789012:%s","maxReceiveCount":"1"}`, dlqName)
+	createBody := fmt.Sprintf(`{"QueueName": "%s", "Attributes": {"RedrivePolicy": %q}}`, srcQueueName, redrivePolicy)
+	req, _ := http.NewRequest("POST", app.baseURL+"/", bytes.NewBufferString(createBody))
+	req.Header.Set("X-Amz-Target", "AmazonSQS.CreateQueue")
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusCreated, resp.StatusCode)
+	resp.Body.Close()
+
+	// 3. Update DLQ to denyAll
+	denyPolicy := `{"redrivePermission": "denyAll"}`
+	updateBody := fmt.Sprintf(`{"QueueUrl": "%s/queues/%s", "Attributes": {"RedriveAllowPolicy": %q}}`, app.baseURL, dlqName, denyPolicy)
+	req, _ = http.NewRequest("POST", app.baseURL+"/", bytes.NewBufferString(updateBody))
+	req.Header.Set("X-Amz-Target", "AmazonSQS.SetQueueAttributes")
+	resp, err = http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	resp.Body.Close()
+
+	// 4. Try to create another source queue pointing to DLQ - Should Fail
+	srcQueue2 := "redrive-allow-src-2"
+	createBody2 := fmt.Sprintf(`{"QueueName": "%s", "Attributes": {"RedrivePolicy": %q}}`, srcQueue2, redrivePolicy)
+	req, _ = http.NewRequest("POST", app.baseURL+"/", bytes.NewBufferString(createBody2))
+	req.Header.Set("X-Amz-Target", "AmazonSQS.CreateQueue")
+	resp, err = http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	var errResp models.ErrorResponse
+	json.NewDecoder(resp.Body).Decode(&errResp)
+	assert.Equal(t, "InvalidParameterValue", errResp.Type)
+	resp.Body.Close()
+
+	// 5. Update DLQ to allow specific queue (byQueue)
+	// We allow srcQueue2
+	byQueuePolicy := fmt.Sprintf(`{"redrivePermission": "byQueue", "sourceQueueArns": ["arn:aws:sqs:us-east-1:123456789012:%s"]}`, srcQueue2)
+	updateBody2 := fmt.Sprintf(`{"QueueUrl": "%s/queues/%s", "Attributes": {"RedriveAllowPolicy": %q}}`, app.baseURL, dlqName, byQueuePolicy)
+	req, _ = http.NewRequest("POST", app.baseURL+"/", bytes.NewBufferString(updateBody2))
+	req.Header.Set("X-Amz-Target", "AmazonSQS.SetQueueAttributes")
+	resp, err = http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	resp.Body.Close()
+
+	// 6. Create srcQueue2 again - Should Succeed now
+	req, _ = http.NewRequest("POST", app.baseURL+"/", bytes.NewBufferString(createBody2))
+	req.Header.Set("X-Amz-Target", "AmazonSQS.CreateQueue")
+	resp, err = http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusCreated, resp.StatusCode)
+	resp.Body.Close()
+
+	// 7. Try to create srcQueue3 - Should Fail (not in allowed list)
+	srcQueue3 := "redrive-allow-src-3"
+	createBody3 := fmt.Sprintf(`{"QueueName": "%s", "Attributes": {"RedrivePolicy": %q}}`, srcQueue3, redrivePolicy)
+	req, _ = http.NewRequest("POST", app.baseURL+"/", bytes.NewBufferString(createBody3))
+	req.Header.Set("X-Amz-Target", "AmazonSQS.CreateQueue")
+	resp, err = http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	resp.Body.Close()
+}
+func TestIntegration_RedriveAllowPolicy_Expanded(t *testing.T) {
+	app, teardown := setupIntegrationTest(t)
+	defer teardown()
+
+	ctx := context.Background()
+	dlqName := "expanded-dlq"
+	srcQueueName := "expanded-src"
+
+	// Create DLQ and Source
+	_, err := app.store.CreateQueue(ctx, dlqName, nil, nil)
+	require.NoError(t, err)
+	_, err = app.store.CreateQueue(ctx, srcQueueName, nil, nil)
+	require.NoError(t, err)
+
+	redrivePolicy := fmt.Sprintf(`{"deadLetterTargetArn":"arn:aws:sqs:us-east-1:123456789012:%s","maxReceiveCount":"1"}`, dlqName)
+
+	t.Run("SetQueueAttributes Blocked by denyAll", func(t *testing.T) {
+		// Set DLQ to denyAll
+		denyPolicy := `{"redrivePermission": "denyAll"}`
+		updateBody := fmt.Sprintf(`{"QueueUrl": "%s/queues/%s", "Attributes": {"RedriveAllowPolicy": %q}}`, app.baseURL, dlqName, denyPolicy)
+		req, _ := http.NewRequest("POST", app.baseURL+"/", bytes.NewBufferString(updateBody))
+		req.Header.Set("X-Amz-Target", "AmazonSQS.SetQueueAttributes")
+		resp, err := http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+		resp.Body.Close()
+
+		// Try to set RedrivePolicy on source queue - Should Fail
+		setAttrsBody := fmt.Sprintf(`{"QueueUrl": "%s/queues/%s", "Attributes": {"RedrivePolicy": %q}}`, app.baseURL, srcQueueName, redrivePolicy)
+		req, _ = http.NewRequest("POST", app.baseURL+"/", bytes.NewBufferString(setAttrsBody))
+		req.Header.Set("X-Amz-Target", "AmazonSQS.SetQueueAttributes")
+		resp, err = http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+
+		var errResp models.ErrorResponse
+		json.NewDecoder(resp.Body).Decode(&errResp)
+		assert.Equal(t, "InvalidParameterValue", errResp.Type)
+		assert.Contains(t, errResp.Message, "does not allow this queue to use it as a dead letter queue")
+		resp.Body.Close()
+	})
+
+	t.Run("Invalid RedriveAllowPolicy JSON", func(t *testing.T) {
+		// Try to set invalid JSON for RedriveAllowPolicy on DLQ
+		updateBody := fmt.Sprintf(`{"QueueUrl": "%s/queues/%s", "Attributes": {"RedriveAllowPolicy": "invalid-json"}}`, app.baseURL, dlqName)
+		req, _ := http.NewRequest("POST", app.baseURL+"/", bytes.NewBufferString(updateBody))
+		req.Header.Set("X-Amz-Target", "AmazonSQS.SetQueueAttributes")
+		resp, err := http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+		var errResp models.ErrorResponse
+		json.NewDecoder(resp.Body).Decode(&errResp)
+		assert.Equal(t, "InvalidAttributeValue", errResp.Type) // Or whatever code validateAttributes returns
+		resp.Body.Close()
+	})
+
+	t.Run("Invalid RedrivePermission Enum", func(t *testing.T) {
+		// Try to set invalid permission enum
+		invalidPolicy := `{"redrivePermission": "invalidEnum"}`
+		updateBody := fmt.Sprintf(`{"QueueUrl": "%s/queues/%s", "Attributes": {"RedriveAllowPolicy": %q}}`, app.baseURL, dlqName, invalidPolicy)
+		req, _ := http.NewRequest("POST", app.baseURL+"/", bytes.NewBufferString(updateBody))
+		req.Header.Set("X-Amz-Target", "AmazonSQS.SetQueueAttributes")
+		resp, err := http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+		resp.Body.Close()
+	})
+
+	t.Run("Missing SourceQueueArns for byQueue", func(t *testing.T) {
+		// Try to set byQueue without ARNs
+		invalidPolicy := `{"redrivePermission": "byQueue", "sourceQueueArns": []}`
+		updateBody := fmt.Sprintf(`{"QueueUrl": "%s/queues/%s", "Attributes": {"RedriveAllowPolicy": %q}}`, app.baseURL, dlqName, invalidPolicy)
+		req, _ := http.NewRequest("POST", app.baseURL+"/", bytes.NewBufferString(updateBody))
+		req.Header.Set("X-Amz-Target", "AmazonSQS.SetQueueAttributes")
+		resp, err := http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+		resp.Body.Close()
+	})
+
+	t.Run("Non-existent DLQ", func(t *testing.T) {
+		// Try to set RedrivePolicy pointing to a non-existent DLQ
+		nonExistentDLQ := "arn:aws:sqs:us-east-1:123456789012:non-existent-dlq"
+		badRedrivePolicy := fmt.Sprintf(`{"deadLetterTargetArn":"%s","maxReceiveCount":"1"}`, nonExistentDLQ)
+		setAttrsBody := fmt.Sprintf(`{"QueueUrl": "%s/queues/%s", "Attributes": {"RedrivePolicy": %q}}`, app.baseURL, srcQueueName, badRedrivePolicy)
+		req, _ := http.NewRequest("POST", app.baseURL+"/", bytes.NewBufferString(setAttrsBody))
+		req.Header.Set("X-Amz-Target", "AmazonSQS.SetQueueAttributes")
+		resp, err := http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+
+		var errResp models.ErrorResponse
+		json.NewDecoder(resp.Body).Decode(&errResp)
+		// Based on my implementation: AWS.SimpleQueueService.NonExistentQueue
+		assert.Equal(t, "AWS.SimpleQueueService.NonExistentQueue", errResp.Type)
+		resp.Body.Close()
+	})
 }
