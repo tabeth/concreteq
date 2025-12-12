@@ -22,6 +22,7 @@ import (
 	"github.com/apple/foundationdb/bindings/go/src/fdb/directory"
 	"github.com/apple/foundationdb/bindings/go/src/fdb/tuple"
 	"github.com/google/uuid"
+	"github.com/tabeth/concreteq/kms"
 	"github.com/tabeth/concreteq/models"
 )
 
@@ -41,6 +42,7 @@ const (
 type FDBStore struct {
 	db  fdb.Database
 	dir directory.DirectorySubspace
+	kms kms.KeyManager
 }
 
 // GetDB returns the underlying FoundationDB database object, primarily for testing purposes.
@@ -72,7 +74,12 @@ func NewFDBStoreAtPath(path ...string) (*FDBStore, error) {
 		return nil, err
 	}
 
-	return &FDBStore{db: db, dir: dir}, nil
+	kmsInstance, err := kms.NewLocalKMS(db)
+	if err != nil {
+		return nil, err
+	}
+
+	return &FDBStore{db: db, dir: dir, kms: kmsInstance}, nil
 }
 
 // CreateQueue creates a new queue in FoundationDB. If the queue already exists,
@@ -546,6 +553,60 @@ func (s *FDBStore) SendMessage(ctx context.Context, queueName string, message *m
 			tr.Set(visKey, []byte{})
 		}
 
+		// 5a. Encryption Logic
+		var masterKeyID string
+		// Fetch attributes to check for encryption config
+		attrsBytes, err := tr.Get(queueDir.Pack(tuple.Tuple{"attributes"})).Get()
+		if err != nil {
+			return nil, err
+		}
+		if len(attrsBytes) > 0 {
+			var attrs map[string]string
+			if err := json.Unmarshal(attrsBytes, &attrs); err == nil {
+				if id, ok := attrs["KmsMasterKeyId"]; ok && id != "" {
+					masterKeyID = id
+				}
+			}
+		}
+
+		if masterKeyID != "" {
+			// Generate Data Key (outside transaction if possible, but inside is okay if efficient)
+			// Since GenerateDataKey interacts with FDB for Master Key, we might need to be careful about transaction boundaries.
+			// However, our LocalKMS implementation handles its own transactions or uses the DB handle.
+			// Using it inside `s.db.Transact` might cause issues if LocalKMS starts a new transaction?
+			// FDB allows nested transactions if using different handles, but here LocalKMS uses `s.db` which is the database handle.
+			// It is safe to start a transaction from `db` while another is running.
+			plaintextKey, encryptedKeyBlob, err := s.kms.GenerateDataKey(ctx, masterKeyID)
+			if err != nil {
+				return nil, err
+			}
+
+			// Serialize the actual content (Body + Attributes)
+			payload := struct {
+				Body       string
+				Attributes map[string]models.MessageAttributeValue
+			}{
+				Body:       internalMessage.Body,
+				Attributes: internalMessage.Attributes,
+			}
+			payloadBytes, err := json.Marshal(payload)
+			if err != nil {
+				return nil, err
+			}
+
+			// Encrypt
+			ciphertext, err := kms.Encrypt(plaintextKey, payloadBytes)
+			if err != nil {
+				return nil, err
+			}
+
+			// Update internal message to store encrypted data
+			internalMessage.IsEncrypted = true
+			internalMessage.EncryptedDataKey = encryptedKeyBlob
+			internalMessage.Body = base64.StdEncoding.EncodeToString(ciphertext)
+			internalMessage.Attributes = nil // Clear plaintext attributes
+		}
+
 		// 6. Write the full message data to the messages subspace.
 		msgBytes, err := json.Marshal(internalMessage)
 		if err != nil {
@@ -819,17 +880,20 @@ func (s *FDBStore) SendMessageBatch(ctx context.Context, queueName string, req *
 		isFifo := strings.HasSuffix(queueName, ".fifo")
 
 		var contentBasedDedupEnabled bool
-		if isFifo {
-			attrsBytes, err := tr.Get(queueDir.Pack(tuple.Tuple{"attributes"})).Get()
-			if err != nil {
-				return nil, err
-			}
-			if len(attrsBytes) > 0 {
-				var attrs map[string]string
-				if err := json.Unmarshal(attrsBytes, &attrs); err == nil {
-					if attrs["ContentBasedDeduplication"] == "true" {
-						contentBasedDedupEnabled = true
-					}
+		var masterKeyID string
+		// Check attributes for both FIFO content dedup and Encryption
+		attrsBytes, err := tr.Get(queueDir.Pack(tuple.Tuple{"attributes"})).Get()
+		if err != nil {
+			return nil, err
+		}
+		if len(attrsBytes) > 0 {
+			var attrs map[string]string
+			if err := json.Unmarshal(attrsBytes, &attrs); err == nil {
+				if isFifo && attrs["ContentBasedDeduplication"] == "true" {
+					contentBasedDedupEnabled = true
+				}
+				if id, ok := attrs["KmsMasterKeyId"]; ok && id != "" {
+					masterKeyID = id
 				}
 			}
 		}
@@ -926,6 +990,39 @@ func (s *FDBStore) SendMessageBatch(ctx context.Context, queueName string, req *
 				tr.Set(visKey, []byte{})
 			}
 
+			// Encryption Logic for Batch
+			if masterKeyID != "" {
+				plaintextKey, encryptedKeyBlob, err := s.kms.GenerateDataKey(ctx, masterKeyID)
+				if err != nil {
+					failed = append(failed, models.BatchResultErrorEntry{Id: entry.Id, Code: "InternalError", Message: "Encryption failed: " + err.Error(), SenderFault: false})
+					continue
+				}
+
+				payload := struct {
+					Body       string
+					Attributes map[string]models.MessageAttributeValue
+				}{
+					Body:       internalMessage.Body,
+					Attributes: internalMessage.Attributes,
+				}
+				payloadBytes, err := json.Marshal(payload)
+				if err != nil {
+					failed = append(failed, models.BatchResultErrorEntry{Id: entry.Id, Code: "InternalError", Message: "Failed to marshal payload.", SenderFault: false})
+					continue
+				}
+
+				ciphertext, err := kms.Encrypt(plaintextKey, payloadBytes)
+				if err != nil {
+					failed = append(failed, models.BatchResultErrorEntry{Id: entry.Id, Code: "InternalError", Message: "Encryption failed.", SenderFault: false})
+					continue
+				}
+
+				internalMessage.IsEncrypted = true
+				internalMessage.EncryptedDataKey = encryptedKeyBlob
+				internalMessage.Body = base64.StdEncoding.EncodeToString(ciphertext)
+				internalMessage.Attributes = nil
+			}
+
 			msgBytes, err := json.Marshal(internalMessage)
 			if err != nil {
 				failed = append(failed, models.BatchResultErrorEntry{Id: entry.Id, Code: "InternalError", Message: "Failed to marshal message.", SenderFault: false})
@@ -975,7 +1072,7 @@ func (s *FDBStore) SendMessageBatch(ctx context.Context, queueName string, req *
 // It iterates through randomized shards of the visibility index to find available messages.
 // This approach distributes the read load and significantly reduces transaction conflicts
 // under high contention compared to scanning the head of the queue every time.
-func (s *FDBStore) receiveStandardMessages(tr fdb.Transaction, queueDir directory.DirectorySubspace, req *models.ReceiveMessageRequest, maxMessages int, visibilityTimeout int, queueAttributes map[string]string) ([]models.ResponseMessage, error) {
+func (s *FDBStore) receiveStandardMessages(ctx context.Context, tr fdb.Transaction, queueDir directory.DirectorySubspace, req *models.ReceiveMessageRequest, maxMessages int, visibilityTimeout int, queueAttributes map[string]string) ([]models.ResponseMessage, error) {
 	messagesDir := queueDir.Sub("messages")
 	visibleIdxDir := queueDir.Sub("visible_idx")
 	inflightDir := queueDir.Sub("inflight")
@@ -1040,6 +1137,42 @@ func (s *FDBStore) receiveStandardMessages(tr fdb.Transaction, queueDir director
 			var msg models.Message
 			if err := json.Unmarshal(msgBytes, &msg); err != nil {
 				continue
+			}
+
+			// Decrypt if necessary - but do NOT modify `msg` in place if we are going to save it back.
+			// We will create a `decryptedMsg` struct to hold the plaintext for the response.
+			// The `msg` struct is used for updating metadata (receive count, visibility) and saving back to FDB.
+			// We MUST keep the encrypted content in `msg`.
+			decryptedBody := msg.Body
+			decryptedAttributes := msg.Attributes
+
+			if msg.IsEncrypted {
+				plaintextKey, err := s.kms.DecryptDataKey(ctx, msg.EncryptedDataKey)
+				if err != nil {
+					// If we can't decrypt, we can't deliver the message.
+					continue
+				}
+
+				ciphertext, err := base64.StdEncoding.DecodeString(msg.Body)
+				if err != nil {
+					continue
+				}
+
+				payloadBytes, err := kms.Decrypt(plaintextKey, ciphertext)
+				if err != nil {
+					continue
+				}
+
+				var payload struct {
+					Body       string
+					Attributes map[string]models.MessageAttributeValue
+				}
+				if err := json.Unmarshal(payloadBytes, &payload); err != nil {
+					continue
+				}
+
+				decryptedBody = payload.Body
+				decryptedAttributes = payload.Attributes
 			}
 
 			// The message is now "in-flight".
@@ -1113,14 +1246,22 @@ func (s *FDBStore) receiveStandardMessages(tr fdb.Transaction, queueDir director
 			tr.Set(inflightDir.Pack(tuple.Tuple{receiptHandle}), receiptBytes)
 
 			// 6. Construct the message object to be returned to the client.
+			// Use the decrypted body and attributes for the response.
 			responseMsg := models.ResponseMessage{
 				MessageId:     msg.ID,
 				ReceiptHandle: receiptHandle,
-				Body:          msg.Body,
+				Body:          decryptedBody,
 				MD5OfBody:     msg.MD5OfBody,
 			}
 			responseMsg.Attributes = s.buildResponseAttributes(&msg, req)
-			responseMsg.MessageAttributes = s.buildResponseMessageAttributes(&msg, req)
+
+			// For MessageAttributes, we need to pass the decrypted attributes to buildResponseMessageAttributes.
+			// We'll create a temporary Message struct or modify the helper to accept attributes map.
+			// Modifying helper is better but let's just make a temporary struct for the helper call.
+			tempMsg := msg
+			tempMsg.Attributes = decryptedAttributes
+			responseMsg.MessageAttributes = s.buildResponseMessageAttributes(&tempMsg, req)
+
 			if len(responseMsg.MessageAttributes) > 0 {
 				var attrKeys []string
 				for k := range responseMsg.MessageAttributes {
@@ -1148,7 +1289,7 @@ func (s *FDBStore) receiveStandardMessages(tr fdb.Transaction, queueDir director
 }
 
 // receiveFifoMessages contains the more complex logic for retrieving messages from a FIFO queue.
-func (s *FDBStore) receiveFifoMessages(tr fdb.Transaction, queueDir directory.DirectorySubspace, req *models.ReceiveMessageRequest, maxMessages int, visibilityTimeout int, queueAttributes map[string]string) ([]models.ResponseMessage, error) {
+func (s *FDBStore) receiveFifoMessages(ctx context.Context, tr fdb.Transaction, queueDir directory.DirectorySubspace, req *models.ReceiveMessageRequest, maxMessages int, visibilityTimeout int, queueAttributes map[string]string) ([]models.ResponseMessage, error) {
 	messagesDir := queueDir.Sub("messages")
 	fifoIdxDir := queueDir.Sub("fifo_idx")
 	inflightGroupsDir := queueDir.Sub("inflight_groups")
@@ -1295,6 +1436,38 @@ func (s *FDBStore) receiveFifoMessages(tr fdb.Transaction, queueDir directory.Di
 			continue
 		}
 
+		// Decrypt if necessary - but do NOT modify `msg` in place if we are going to save it back.
+		decryptedBody := msg.Body
+		decryptedAttributes := msg.Attributes
+
+		if msg.IsEncrypted {
+			plaintextKey, err := s.kms.DecryptDataKey(ctx, msg.EncryptedDataKey)
+			if err != nil {
+				continue
+			}
+
+			ciphertext, err := base64.StdEncoding.DecodeString(msg.Body)
+			if err != nil {
+				continue
+			}
+
+			payloadBytes, err := kms.Decrypt(plaintextKey, ciphertext)
+			if err != nil {
+				continue
+			}
+
+			var payload struct {
+				Body       string
+				Attributes map[string]models.MessageAttributeValue
+			}
+			if err := json.Unmarshal(payloadBytes, &payload); err != nil {
+				continue
+			}
+
+			decryptedBody = payload.Body
+			decryptedAttributes = payload.Attributes
+		}
+
 		// Update Receive Count
 		msg.ReceivedCount++
 		if msg.FirstReceived == 0 {
@@ -1352,11 +1525,15 @@ func (s *FDBStore) receiveFifoMessages(tr fdb.Transaction, queueDir directory.Di
 		responseMsg := models.ResponseMessage{
 			MessageId:     msg.ID,
 			ReceiptHandle: receiptHandle,
-			Body:          msg.Body,
+			Body:          decryptedBody,
 			MD5OfBody:     msg.MD5OfBody,
 		}
 		responseMsg.Attributes = s.buildResponseAttributes(&msg, req)
-		responseMsg.MessageAttributes = s.buildResponseMessageAttributes(&msg, req)
+
+		tempMsg := msg
+		tempMsg.Attributes = decryptedAttributes
+		responseMsg.MessageAttributes = s.buildResponseMessageAttributes(&tempMsg, req)
+
 		if len(responseMsg.MessageAttributes) > 0 {
 			var attrKeys []string
 			for k := range responseMsg.MessageAttributes {
@@ -1448,9 +1625,9 @@ func (s *FDBStore) ReceiveMessage(ctx context.Context, queueName string, req *mo
 
 			// Call the appropriate receive logic based on queue type.
 			if isFifo {
-				return s.receiveFifoMessages(tr, queueDir, req, maxMessages, visibilityTimeout, queueAttributes)
+				return s.receiveFifoMessages(ctx, tr, queueDir, req, maxMessages, visibilityTimeout, queueAttributes)
 			} else {
-				return s.receiveStandardMessages(tr, queueDir, req, maxMessages, visibilityTimeout, queueAttributes)
+				return s.receiveStandardMessages(ctx, tr, queueDir, req, maxMessages, visibilityTimeout, queueAttributes)
 			}
 		})
 
