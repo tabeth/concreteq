@@ -142,6 +142,10 @@ type Message struct {
 	SentTimestamp  int64  `json:"SentTimestamp,omitempty"`
 	MessageGroupId string `json:"MessageGroupId,omitempty"`
 	SequenceNumber int64  `json:"SequenceNumber,omitempty"`
+	// EncryptedDataKey stores the key used to encrypt the message body and attributes.
+	EncryptedDataKey []byte `json:"EncryptedDataKey,omitempty"`
+	// IsEncrypted indicates whether the message body is encrypted.
+	IsEncrypted bool `json:"IsEncrypted,omitempty"`
 }
 
 // DeleteQueueRequest defines the parameters for the SQS DeleteQueue action.
