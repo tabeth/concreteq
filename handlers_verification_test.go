@@ -147,7 +147,7 @@ func TestBVA_CreateQueue_NameBoundaries(t *testing.T) {
 	// 4. FIFO suffix check
 	name = "test.fifo"
 	reqBody, _ = json.Marshal(models.CreateQueueRequest{
-		QueueName: name,
+		QueueName:  name,
 		Attributes: map[string]string{"FifoQueue": "true"}, // Required for .fifo
 	})
 	req = httptest.NewRequest("POST", "/", bytes.NewReader(reqBody))
@@ -164,12 +164,13 @@ func TestEP_SetQueueAttributes(t *testing.T) {
 	app, s := setupHandlerTest(t)
 	// Create a queue first
 	s.CreateQueue(context.Background(), "attr-queue", nil, nil)
+	s.CreateQueue(context.Background(), "dlq", nil, nil)
 
 	tests := []struct {
-		name      string
-		attr      string
-		val       string
-		wantCode  int
+		name     string
+		attr     string
+		val      string
+		wantCode int
 	}{
 		{"Valid VisibilityTimeout", "VisibilityTimeout", "30", http.StatusOK},
 		{"Boundary Min VisibilityTimeout", "VisibilityTimeout", "0", http.StatusOK},
@@ -192,7 +193,7 @@ func TestEP_SetQueueAttributes(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			reqBody, _ := json.Marshal(models.SetQueueAttributesRequest{
-				QueueUrl: "http://localhost/queues/attr-queue",
+				QueueUrl:   "http://localhost/queues/attr-queue",
 				Attributes: map[string]string{tc.attr: tc.val},
 			})
 			req := httptest.NewRequest("POST", "/", bytes.NewReader(reqBody))
@@ -266,9 +267,9 @@ func TestEP_GetQueueAttributes_Validation(t *testing.T) {
 	s.CreateQueue(context.Background(), "get-attr-queue", nil, nil)
 
 	tests := []struct {
-		name      string
-		attrs     []string
-		wantCode  int
+		name     string
+		attrs    []string
+		wantCode int
 	}{
 		{"Valid All", []string{"All"}, http.StatusOK},
 		{"Valid Specific", []string{"VisibilityTimeout", "DelaySeconds"}, http.StatusOK},
@@ -380,8 +381,8 @@ func TestBVA_SendMessage_Attributes(t *testing.T) {
 			attrs[randomString(5)] = models.MessageAttributeValue{DataType: "String", StringValue: new(string)} // Value doesn't matter for this check
 		}
 		reqBody, _ := json.Marshal(models.SendMessageRequest{
-			QueueUrl: "http://localhost/queues/msg-attr-queue",
-			MessageBody: "b",
+			QueueUrl:          "http://localhost/queues/msg-attr-queue",
+			MessageBody:       "b",
 			MessageAttributes: attrs,
 		})
 		req := httptest.NewRequest("POST", "/", bytes.NewReader(reqBody))
@@ -434,9 +435,9 @@ func TestBVA_DeleteMessageBatch_Size(t *testing.T) {
 	s.CreateQueue(context.Background(), "del-batch-queue", nil, nil)
 
 	tests := []struct {
-		name      string
+		name       string
 		entryCount int
-		wantCode  int
+		wantCode   int
 	}{
 		{"Invalid Empty", 0, http.StatusBadRequest},
 		{"Valid Min", 1, http.StatusOK},
@@ -473,9 +474,9 @@ func TestBVA_ChangeMessageVisibility_Timeout(t *testing.T) {
 	s.CreateQueue(context.Background(), "vis-queue", nil, nil)
 
 	tests := []struct {
-		name      string
-		timeout   int
-		wantCode  int
+		name     string
+		timeout  int
+		wantCode int
 	}{
 		{"Valid Min", 0, http.StatusOK},
 		{"Valid Max", 43200, http.StatusOK}, // 12 hours
@@ -597,7 +598,7 @@ func TestFuzz_SendMessage_Body(t *testing.T) {
 
 	f := func(body string) bool {
 		reqBody, _ := json.Marshal(models.SendMessageRequest{
-			QueueUrl: "http://localhost/queues/fuzz-queue",
+			QueueUrl:    "http://localhost/queues/fuzz-queue",
 			MessageBody: body,
 		})
 		req := httptest.NewRequest("POST", "/", bytes.NewReader(reqBody))
@@ -749,9 +750,9 @@ func TestBVA_StartMessageMoveTask_ARN(t *testing.T) {
 	s.CreateQueue(context.Background(), "source-queue", nil, nil)
 
 	tests := []struct {
-		name      string
-		arn       string
-		wantCode  int
+		name     string
+		arn      string
+		wantCode int
 	}{
 		{"Valid ARN", "arn:aws:sqs:us-east-1:123456789012:source-queue", http.StatusOK},
 		{"Invalid Prefix", "arn:aws:sns:us-east-1:123456789012:source-queue", http.StatusBadRequest},

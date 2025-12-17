@@ -14,10 +14,12 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
-	"github.com/apple/foundationdb/bindings/go/src/fdb"
 	"math/rand"
+
+	"github.com/apple/foundationdb/bindings/go/src/fdb"
 
 	"github.com/apple/foundationdb/bindings/go/src/fdb/directory"
 	"github.com/apple/foundationdb/bindings/go/src/fdb/tuple"
@@ -35,6 +37,8 @@ const (
 	// without creating an excessive number of sub-prefixes.
 	numShards = 16
 )
+
+var fdbInitOnce sync.Once
 
 // FDBStore is a concrete implementation of the Store interface using FoundationDB.
 // It holds a connection to the database and a directory subspace for this application
@@ -60,7 +64,9 @@ func NewFDBStore() (*FDBStore, error) {
 // unique, isolated data space, preventing interference between parallel tests.
 func NewFDBStoreAtPath(path ...string) (*FDBStore, error) {
 	// FoundationDB requires specifying the API version to ensure client-server compatibility.
-	fdb.MustAPIVersion(730)
+	fdbInitOnce.Do(func() {
+		fdb.MustAPIVersion(730)
+	})
 	db, err := fdb.OpenDefault()
 	if err != nil {
 		return nil, err
@@ -87,10 +93,10 @@ func NewFDBStoreAtPath(path ...string) (*FDBStore, error) {
 // The entire operation is performed within a single transaction to ensure atomicity.
 //
 // Data Model:
-// - Each queue is represented by a directory within the main application directory.
-//   e.g., `(app_dir, "my-queue")`
-// - Attributes and tags are stored as JSON blobs at well-known keys within the queue's directory.
-//   e.g., `(app_dir, "my-queue", "attributes") -> "{...}"`
+//   - Each queue is represented by a directory within the main application directory.
+//     e.g., `(app_dir, "my-queue")`
+//   - Attributes and tags are stored as JSON blobs at well-known keys within the queue's directory.
+//     e.g., `(app_dir, "my-queue", "attributes") -> "{...}"`
 func (s *FDBStore) CreateQueue(ctx context.Context, name string, attributes map[string]string, tags map[string]string) (map[string]string, error) {
 	resp, err := s.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
 		// First, check if a queue with this name already exists.
@@ -512,13 +518,13 @@ func (s *FDBStore) SendMessage(ctx context.Context, queueName string, message *m
 		// 4. Construct the internal message object to be stored.
 		sentTimestamp := time.Now().Unix()
 		internalMessage := models.Message{
-			ID:                messageID,
-			Body:              message.MessageBody,
-			Attributes:        message.MessageAttributes,
-			MD5OfBody:         md5OfBody,
-			MD5OfAttributes:   md5OfAttributes,
-			SentTimestamp:     sentTimestamp,
-			SenderId:          "123456789012", // Placeholder SenderId
+			ID:              messageID,
+			Body:            message.MessageBody,
+			Attributes:      message.MessageAttributes,
+			MD5OfBody:       md5OfBody,
+			MD5OfAttributes: md5OfAttributes,
+			SentTimestamp:   sentTimestamp,
+			SenderId:        "123456789012", // Placeholder SenderId
 		}
 
 		// 5. Write to the appropriate index based on queue type.

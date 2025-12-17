@@ -234,8 +234,12 @@ func TestIntegration_CreateQueue(t *testing.T) {
 			},
 		},
 		{
-			name:               "Successful Queue with RedrivePolicy",
-			inputBody:          `{"QueueName": "my-queue-with-redrive", "Attributes": {"RedrivePolicy": "{\"deadLetterTargetArn\":\"arn:aws:sqs:us-east-1:123456789012:my-dlq\",\"maxReceiveCount\":\"10\"}"}}`,
+			name:      "Successful Queue with RedrivePolicy",
+			inputBody: `{"QueueName": "my-queue-with-redrive", "Attributes": {"RedrivePolicy": "{\"deadLetterTargetArn\":\"arn:aws:sqs:us-east-1:123456789012:my-dlq\",\"maxReceiveCount\":\"10\"}"}}`,
+			setup: func(t *testing.T) {
+				_, err := app.store.CreateQueue(context.Background(), "my-dlq", nil, nil)
+				require.NoError(t, err)
+			},
 			expectedStatusCode: http.StatusCreated,
 			expectedBody:       fmt.Sprintf(`{"QueueUrl":"%s/queues/my-queue-with-redrive"}`, app.baseURL),
 			verifyInDB: func(t *testing.T, queueName string) {
@@ -768,6 +772,97 @@ func TestIntegration_NewFeatures(t *testing.T) {
 		assert.Equal(t, srcUrl, listDLQResp.QueueUrls[0])
 		resp.Body.Close()
 	})
+
+	t.Run("Long Polling", func(t *testing.T) {
+		queueName := "long-poll-queue"
+		_, err := app.store.CreateQueue(context.Background(), queueName, nil, nil)
+		require.NoError(t, err)
+		queueURL := fmt.Sprintf("%s/queues/%s", app.baseURL, queueName)
+
+		// Sub-test: WaitTimeSeconds expired with no messages
+		t.Run("TimeoutNoMessages", func(t *testing.T) {
+			start := time.Now()
+			reqBody := models.ReceiveMessageRequest{
+				QueueUrl:            queueURL,
+				WaitTimeSeconds:     2,
+				MaxNumberOfMessages: 1,
+			}
+			bodyBytes, _ := json.Marshal(reqBody)
+			req, _ := http.NewRequest("POST", app.baseURL+"/", bytes.NewBuffer(bodyBytes))
+			req.Header.Set("X-Amz-Target", "AmazonSQS.ReceiveMessage")
+			req.Header.Set("Content-Type", "application/json")
+
+			resp, err := http.DefaultClient.Do(req)
+			require.NoError(t, err)
+			defer resp.Body.Close()
+
+			elapsed := time.Since(start)
+			assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+			var recResp models.ReceiveMessageResponse
+			json.NewDecoder(resp.Body).Decode(&recResp)
+			assert.Empty(t, recResp.Messages)
+
+			// Assert that it actually waited at least close to 2 seconds
+			if elapsed < 1500*time.Millisecond {
+				t.Fatalf("Expected long polling to wait ~2s, but finished in %v", elapsed)
+			}
+		})
+
+		// Sub-test: Message arrives during long polling
+		t.Run("MessageArrives", func(t *testing.T) {
+			// Start receiver in a goroutine
+			errChan := make(chan error, 1)
+			msgChan := make(chan []models.ResponseMessage, 1)
+
+			go func() {
+				reqBody := models.ReceiveMessageRequest{
+					QueueUrl:            queueURL,
+					WaitTimeSeconds:     5, // Wait up to 5s
+					MaxNumberOfMessages: 1,
+				}
+				bodyBytes, _ := json.Marshal(reqBody)
+				req, _ := http.NewRequest("POST", app.baseURL+"/", bytes.NewBuffer(bodyBytes))
+				req.Header.Set("X-Amz-Target", "AmazonSQS.ReceiveMessage")
+				req.Header.Set("Content-Type", "application/json")
+
+				resp, err := http.DefaultClient.Do(req)
+				if err != nil {
+					errChan <- err
+					return
+				}
+				defer resp.Body.Close()
+
+				if resp.StatusCode != http.StatusOK {
+					errChan <- fmt.Errorf("status code %d", resp.StatusCode)
+					return
+				}
+
+				var recResp models.ReceiveMessageResponse
+				json.NewDecoder(resp.Body).Decode(&recResp)
+				msgChan <- recResp.Messages
+			}()
+
+			// Wait 1 second (to ensure receiver is waiting), then send a message
+			time.Sleep(1 * time.Second)
+			sendReq := models.SendMessageRequest{
+				QueueUrl:    queueURL,
+				MessageBody: "delayed-msg",
+			}
+			_, err := app.store.SendMessage(context.Background(), queueName, &sendReq)
+			require.NoError(t, err)
+
+			select {
+			case err := <-errChan:
+				require.NoError(t, err)
+			case msgs := <-msgChan:
+				require.NotEmpty(t, msgs)
+				assert.Equal(t, "delayed-msg", msgs[0].Body)
+			case <-time.After(6 * time.Second):
+				t.Fatal("Timeout waiting for receiver to return")
+			}
+		})
+	})
 }
 
 func TestIntegration_SendMessageBatch(t *testing.T) {
@@ -795,8 +890,8 @@ func TestIntegration_SendMessageBatch(t *testing.T) {
 	}{
 		// 1. Batch size exceeds message size limit
 		{
-			name:     "BatchRequestTooLong",
-			queueURL: stdQueueURL,
+			name:               "BatchRequestTooLong",
+			queueURL:           stdQueueURL,
 			inputBody:          `{"QueueUrl": "` + stdQueueURL + `", "Entries": [{"Id": "1", "MessageBody": "` + strings.Repeat("a", 150*1024) + `"}, {"Id": "2", "MessageBody": "` + strings.Repeat("b", 150*1024) + `"}]}`,
 			expectedStatusCode: http.StatusBadRequest,
 			expectedBody:       `{"__type":"BatchRequestTooLong", "message":"The length of all the messages put together is more than the limit."}`,
@@ -961,9 +1056,9 @@ func TestIntegration_FifoFairness(t *testing.T) {
 	var receivedGroupIDs []string
 	for i := 0; i < 3; i++ {
 		recReq := models.ReceiveMessageRequest{
-			QueueUrl:                  queueURL,
-			MaxNumberOfMessages:       1,
-			VisibilityTimeout:         60, // Lock the group for the test duration
+			QueueUrl:                    queueURL,
+			MaxNumberOfMessages:         1,
+			VisibilityTimeout:           60, // Lock the group for the test duration
 			MessageSystemAttributeNames: []string{"All"},
 		}
 		bodyBytes, _ := json.Marshal(recReq)
@@ -1211,7 +1306,6 @@ func TestIntegration_DeleteMessageBatch(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-
 		bodyBytes, _ := json.Marshal(delReq)
 		req, _ := http.NewRequest("POST", app.baseURL+"/", bytes.NewBuffer(bodyBytes))
 		req.Header.Set("X-Amz-Target", "AmazonSQS.DeleteMessageBatch")
@@ -1412,11 +1506,17 @@ func TestIntegration_Messaging(t *testing.T) {
 		// Reset the DB for each subtest to ensure isolation
 		_, err := app.store.GetDB().Transact(func(tr fdb.Transaction) (interface{}, error) {
 			dir, err := directory.CreateOrOpen(tr, []string{"concreteq"}, nil)
-			if err != nil { return nil, err }
+			if err != nil {
+				return nil, err
+			}
 			subdirs, err := dir.List(tr, []string{})
-			if err != nil { return nil, err }
+			if err != nil {
+				return nil, err
+			}
 			for _, subdir := range subdirs {
-				if _, err := dir.Remove(tr, []string{subdir}); err != nil { return nil, err }
+				if _, err := dir.Remove(tr, []string{subdir}); err != nil {
+					return nil, err
+				}
 			}
 			return nil, nil
 		})
@@ -1468,11 +1568,17 @@ func TestIntegration_Messaging(t *testing.T) {
 		// Reset the DB for each subtest to ensure isolation
 		_, err := app.store.GetDB().Transact(func(tr fdb.Transaction) (interface{}, error) {
 			dir, err := directory.CreateOrOpen(tr, []string{"concreteq"}, nil)
-			if err != nil { return nil, err }
+			if err != nil {
+				return nil, err
+			}
 			subdirs, err := dir.List(tr, []string{})
-			if err != nil { return nil, err }
+			if err != nil {
+				return nil, err
+			}
 			for _, subdir := range subdirs {
-				if _, err := dir.Remove(tr, []string{subdir}); err != nil { return nil, err }
+				if _, err := dir.Remove(tr, []string{subdir}); err != nil {
+					return nil, err
+				}
 			}
 			return nil, nil
 		})
@@ -2199,6 +2305,7 @@ func TestIntegration_Encryption_EndToEnd(t *testing.T) {
 
 func strPtr(s string) *string {
 	return &s
+}
 func TestIntegration_RedriveAllowPolicy(t *testing.T) {
 	app, teardown := setupIntegrationTest(t)
 	defer teardown()
