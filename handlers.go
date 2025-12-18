@@ -232,6 +232,22 @@ func validateAttributes(attributes map[string]string) error {
 					}
 				}
 			}
+		case "Policy":
+			// Validate that Policy is a valid JSON object.
+			if !json.Valid([]byte(val)) {
+				err = errors.New("must be a valid JSON object")
+			}
+		case "KmsMasterKeyId":
+			// Basic validation: just ensure it's not empty if provided
+			if len(strings.TrimSpace(val)) == 0 {
+				err = errors.New("must not be empty")
+			}
+		case "KmsDataKeyReusePeriodSeconds":
+			err = validateIntAttribute(val, 60, 86400)
+		case "SqsManagedSseEnabled":
+			if val != "true" && val != "false" {
+				err = fmt.Errorf("must be 'true' or 'false'")
+			}
 		}
 		if err != nil {
 			return fmt.Errorf("invalid value for %s: %w", key, err)

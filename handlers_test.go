@@ -19,7 +19,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-
 func TestCreateQueueHandler(t *testing.T) {
 	tests := []struct {
 		name               string
@@ -209,10 +208,10 @@ func TestTaggingHandlers(t *testing.T) {
 			expectedBody:       "",
 		},
 		{
-			name:      "TagQueue - Missing Tags",
-			action:    "AmazonSQS.TagQueue",
-			inputBody: `{"QueueUrl": "http://localhost/queues/my-queue"}`,
-			mockSetup: func(ms *MockStore) {},
+			name:               "TagQueue - Missing Tags",
+			action:             "AmazonSQS.TagQueue",
+			inputBody:          `{"QueueUrl": "http://localhost/queues/my-queue"}`,
+			mockSetup:          func(ms *MockStore) {},
 			expectedStatusCode: http.StatusBadRequest,
 			expectedBody:       `{"__type":"MissingParameter", "message":"The request must contain Tags."}`,
 		},
@@ -227,10 +226,10 @@ func TestTaggingHandlers(t *testing.T) {
 			expectedBody:       "",
 		},
 		{
-			name:      "UntagQueue - Missing TagKeys",
-			action:    "AmazonSQS.UntagQueue",
-			inputBody: `{"QueueUrl": "http://localhost/queues/my-queue"}`,
-			mockSetup: func(ms *MockStore) {},
+			name:               "UntagQueue - Missing TagKeys",
+			action:             "AmazonSQS.UntagQueue",
+			inputBody:          `{"QueueUrl": "http://localhost/queues/my-queue"}`,
+			mockSetup:          func(ms *MockStore) {},
 			expectedStatusCode: http.StatusBadRequest,
 			expectedBody:       `{"__type":"MissingParameter", "message":"The request must contain TagKeys."}`,
 		},
@@ -580,8 +579,8 @@ func TestGetQueueAttributesHandler(t *testing.T) {
 			}`,
 		},
 		{
-			name:               "Queue Does Not Exist",
-			inputBody:          `{"QueueUrl": "http://localhost/queues/non-existent", "AttributeNames": ["All"]}`,
+			name:      "Queue Does Not Exist",
+			inputBody: `{"QueueUrl": "http://localhost/queues/non-existent", "AttributeNames": ["All"]}`,
 			mockSetup: func(ms *MockStore) {
 				ms.On("GetQueueAttributes", mock.Anything, "non-existent").Return(nil, store.ErrQueueDoesNotExist)
 			},
@@ -1401,7 +1400,7 @@ func TestSendMessageHandler(t *testing.T) {
 			inputBody: `{"MessageBody": "hello world", "QueueUrl": "http://localhost:8080/queues/my-queue"}`,
 			mockSetup: func(ms *MockStore) {
 				ms.On("SendMessage", mock.Anything, "my-queue", mock.AnythingOfType("*models.SendMessageRequest")).Return(&models.SendMessageResponse{
-					MessageId:      "some-uuid",
+					MessageId:        "some-uuid",
 					MD5OfMessageBody: "5d41402abc4b2a76b9719d911017c592",
 				}, nil)
 			},
@@ -1422,7 +1421,7 @@ func TestSendMessageHandler(t *testing.T) {
 					val, ok := req.MessageAttributes["Attribute1"]
 					return ok && val.DataType == "String" && *val.StringValue == "Value1"
 				})).Return(&models.SendMessageResponse{
-					MessageId:      "some-uuid-attrs",
+					MessageId:        "some-uuid-attrs",
 					MD5OfMessageBody: "some-md5",
 				}, nil)
 			},
@@ -1440,7 +1439,7 @@ func TestSendMessageHandler(t *testing.T) {
 			inputBody: `{"MessageBody": "hello fifo", "QueueUrl": "http://localhost:8080/queues/my-queue.fifo", "MessageGroupId": "group1"}`,
 			mockSetup: func(ms *MockStore) {
 				ms.On("SendMessage", mock.Anything, "my-queue.fifo", mock.AnythingOfType("*models.SendMessageRequest")).Return(&models.SendMessageResponse{
-					MessageId:      "some-uuid",
+					MessageId:        "some-uuid",
 					MD5OfMessageBody: "some-md5",
 				}, nil)
 			},
@@ -1717,6 +1716,113 @@ func TestListDeadLetterSourceQueuesHandler(t *testing.T) {
 			}
 
 			mockStore.AssertExpectations(t)
+		})
+	}
+}
+
+func TestValidateAttributes(t *testing.T) {
+	tests := []struct {
+		name        string
+		attributes  map[string]string
+		wantErr     bool
+		errContains string
+	}{
+		{
+			name: "Valid Policy",
+			attributes: map[string]string{
+				"Policy": `{"Version": "2012-10-17", "Statement": []}`,
+			},
+			wantErr: false,
+		},
+		{
+			name: "Invalid Policy - Malformed JSON",
+			attributes: map[string]string{
+				"Policy": `{"Version": "2012-10-17", "Statement": [`,
+			},
+			wantErr:     true,
+			errContains: "must be a valid JSON object",
+		},
+		{
+			name: "Valid KmsDataKeyReusePeriodSeconds - Min",
+			attributes: map[string]string{
+				"KmsDataKeyReusePeriodSeconds": "60",
+			},
+			wantErr: false,
+		},
+		{
+			name: "Valid KmsDataKeyReusePeriodSeconds - Max",
+			attributes: map[string]string{
+				"KmsDataKeyReusePeriodSeconds": "86400",
+			},
+			wantErr: false,
+		},
+		{
+			name: "Invalid KmsDataKeyReusePeriodSeconds - Too Low",
+			attributes: map[string]string{
+				"KmsDataKeyReusePeriodSeconds": "59",
+			},
+			wantErr:     true,
+			errContains: "must be between 60 and 86400",
+		},
+		{
+			name: "Invalid KmsDataKeyReusePeriodSeconds - Too High",
+			attributes: map[string]string{
+				"KmsDataKeyReusePeriodSeconds": "86401",
+			},
+			wantErr:     true,
+			errContains: "must be between 60 and 86400",
+		},
+		{
+			name: "Valid SqsManagedSseEnabled",
+			attributes: map[string]string{
+				"SqsManagedSseEnabled": "true",
+			},
+			wantErr: false,
+		},
+		{
+			name: "Invalid SqsManagedSseEnabled",
+			attributes: map[string]string{
+				"SqsManagedSseEnabled": "yes",
+			},
+			wantErr:     true,
+			errContains: "must be 'true' or 'false'",
+		},
+		{
+			name: "Valid KmsMasterKeyId",
+			attributes: map[string]string{
+				"KmsMasterKeyId": "alias/my-key",
+			},
+			wantErr: false,
+		},
+		{
+			name: "Invalid KmsMasterKeyId - Empty",
+			attributes: map[string]string{
+				"KmsMasterKeyId": "   ",
+			},
+			wantErr:     true,
+			errContains: "must not be empty",
+		},
+		{
+			name: "Mixed Valid Attributes",
+			attributes: map[string]string{
+				"DelaySeconds":         "0",
+				"VisibilityTimeout":    "30",
+				"SqsManagedSseEnabled": "false",
+			},
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateAttributes(tt.attributes)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("validateAttributes() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if tt.wantErr && err != nil && !strings.Contains(err.Error(), tt.errContains) {
+				t.Errorf("validateAttributes() error = %v, want error containing %v", err, tt.errContains)
+			}
 		})
 	}
 }
