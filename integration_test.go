@@ -175,7 +175,7 @@ func TestIntegration_CreateQueue(t *testing.T) {
 			name: "QueueNameExists with different attributes",
 			setup: func(t *testing.T) {
 				// Pre-create a queue with a specific attribute
-				_, err := app.store.CreateQueue(context.Background(), "my-existing-queue", map[string]string{"VisibilityTimeout": "50"}, nil)
+				_, err := app.store.CreateQueue(t.Context(), "my-existing-queue", map[string]string{"VisibilityTimeout": "50"}, nil)
 				require.NoError(t, err)
 			},
 			// Attempt to create the same queue with a *different* attribute value
@@ -237,7 +237,7 @@ func TestIntegration_CreateQueue(t *testing.T) {
 			name:      "Successful Queue with RedrivePolicy",
 			inputBody: `{"QueueName": "my-queue-with-redrive", "Attributes": {"RedrivePolicy": "{\"deadLetterTargetArn\":\"arn:aws:sqs:us-east-1:123456789012:my-dlq\",\"maxReceiveCount\":\"10\"}"}}`,
 			setup: func(t *testing.T) {
-				_, err := app.store.CreateQueue(context.Background(), "my-dlq", nil, nil)
+				_, err := app.store.CreateQueue(t.Context(), "my-dlq", nil, nil)
 				require.NoError(t, err)
 			},
 			expectedStatusCode: http.StatusCreated,
@@ -332,7 +332,7 @@ func TestIntegration_GetQueueAttributes(t *testing.T) {
 	defer teardown()
 
 	client := http.DefaultClient
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// 1. Setup: Create a queue with specific attributes
 	queueName := "test-get-attrs-queue"
@@ -417,7 +417,7 @@ func TestIntegration_ListDeletePurgeQueues(t *testing.T) {
 	defer teardown()
 
 	// --- Setup: Create some initial queues for testing ---
-	ctx := context.Background()
+	ctx := t.Context()
 	initialQueues := []string{"list-queue-a", "list-queue-b", "prefix-queue-1", "prefix-queue-2", "purge-queue-1"}
 	for _, qName := range initialQueues {
 		_, err := app.store.CreateQueue(ctx, qName, nil, nil)
@@ -775,7 +775,7 @@ func TestIntegration_NewFeatures(t *testing.T) {
 
 	t.Run("Long Polling", func(t *testing.T) {
 		queueName := "long-poll-queue"
-		_, err := app.store.CreateQueue(context.Background(), queueName, nil, nil)
+		_, err := app.store.CreateQueue(t.Context(), queueName, nil, nil)
 		require.NoError(t, err)
 		queueURL := fmt.Sprintf("%s/queues/%s", app.baseURL, queueName)
 
@@ -849,7 +849,7 @@ func TestIntegration_NewFeatures(t *testing.T) {
 				QueueUrl:    queueURL,
 				MessageBody: "delayed-msg",
 			}
-			_, err := app.store.SendMessage(context.Background(), queueName, &sendReq)
+			_, err := app.store.SendMessage(t.Context(), queueName, &sendReq)
 			require.NoError(t, err)
 
 			select {
@@ -870,7 +870,7 @@ func TestIntegration_SendMessageBatch(t *testing.T) {
 	defer teardown()
 
 	// Setup a standard and a FIFO queue for the tests
-	ctx := context.Background()
+	ctx := t.Context()
 	stdQueueName := "batch-integ-std"
 	fifoQueueName := "batch-integ-fifo.fifo"
 	stdQueueURL := fmt.Sprintf("%s/queues/%s", app.baseURL, stdQueueName)
@@ -1106,7 +1106,7 @@ func TestIntegration_ChangeMessageVisibility(t *testing.T) {
 	app, teardown := setupIntegrationTest(t)
 	defer teardown()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	queueName := "visibility-integ-queue"
 	queueURL := fmt.Sprintf("%s/queues/%s", app.baseURL, queueName)
 
@@ -1154,7 +1154,7 @@ func TestIntegration_ReceiveMessage_Validation(t *testing.T) {
 	defer teardown()
 
 	client := http.DefaultClient
-	ctx := context.Background()
+	ctx := t.Context()
 
 	queueName := "test-receive-validation"
 	_, err := app.store.CreateQueue(ctx, queueName, nil, nil)
@@ -1239,7 +1239,7 @@ func TestIntegration_DeleteMessageBatch(t *testing.T) {
 	app, teardown := setupIntegrationTest(t)
 	defer teardown()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	queueName := "delete-batch-integ-queue"
 	queueURL := fmt.Sprintf("%s/queues/%s", app.baseURL, queueName)
 
@@ -1349,7 +1349,7 @@ func TestIntegration_DeleteMessage(t *testing.T) {
 	app, teardown := setupIntegrationTest(t)
 	defer teardown()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	queueName := "delete-integ-queue"
 	queueURL := fmt.Sprintf("%s/queues/%s", app.baseURL, queueName)
 
@@ -1427,7 +1427,7 @@ func TestIntegration_Messaging(t *testing.T) {
 	app, teardown := setupIntegrationTest(t)
 	defer teardown()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	stdQueueName := "messaging-queue-std"
 	fifoQueueName := "messaging-queue-fifo.fifo"
 
@@ -1761,9 +1761,9 @@ func TestIntegration_MessageMoveTasks(t *testing.T) {
 	// Setup: Create the source and destination queues required for the tests.
 	sourceQueueName := "source-queue"
 	destinationQueueName := "destination-queue"
-	_, err := app.store.CreateQueue(context.Background(), sourceQueueName, nil, nil)
+	_, err := app.store.CreateQueue(t.Context(), sourceQueueName, nil, nil)
 	require.NoError(t, err)
-	_, err = app.store.CreateQueue(context.Background(), destinationQueueName, nil, nil)
+	_, err = app.store.CreateQueue(t.Context(), destinationQueueName, nil, nil)
 	require.NoError(t, err)
 
 	sourceArn := "arn:aws:sqs:us-east-1:123456789012:" + sourceQueueName
@@ -2161,7 +2161,7 @@ func TestIntegration_StartMessageMoveTask_BackgroundProcessing(t *testing.T) {
 	sourceArn := "arn:aws:sqs:us-east-1:123456789012:" + sourceQueueName
 	destinationArn := "arn:aws:sqs:us-east-1:123456789012:" + destinationQueueName
 
-	ctx := context.Background()
+	ctx := t.Context()
 	_, err := app.store.CreateQueue(ctx, sourceQueueName, nil, nil)
 	require.NoError(t, err)
 	_, err = app.store.CreateQueue(ctx, destinationQueueName, nil, nil)
@@ -2247,7 +2247,7 @@ func TestIntegration_Encryption_EndToEnd(t *testing.T) {
 	s, err := store.NewFDBStoreAtPath("test-encryption-" + time.Now().Format("20060102150405"))
 	require.NoError(t, err)
 
-	ctx := context.Background()
+	ctx := t.Context()
 	queueName := "encrypted-queue-integ"
 
 	// 1. Create a Queue with Encryption Enabled
@@ -2310,7 +2310,7 @@ func TestIntegration_RedriveAllowPolicy(t *testing.T) {
 	app, teardown := setupIntegrationTest(t)
 	defer teardown()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	dlqName := "redrive-allow-dlq"
 	srcQueueName := "redrive-allow-src"
 
@@ -2384,7 +2384,7 @@ func TestIntegration_RedriveAllowPolicy_Expanded(t *testing.T) {
 	app, teardown := setupIntegrationTest(t)
 	defer teardown()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	dlqName := "expanded-dlq"
 	srcQueueName := "expanded-src"
 
@@ -2476,5 +2476,50 @@ func TestIntegration_RedriveAllowPolicy_Expanded(t *testing.T) {
 		// Based on my implementation: AWS.SimpleQueueService.NonExistentQueue
 		assert.Equal(t, "AWS.SimpleQueueService.NonExistentQueue", errResp.Type)
 		resp.Body.Close()
+	})
+}
+
+func TestIntegration_GetQueueURL(t *testing.T) {
+	app, teardown := setupIntegrationTest(t)
+	defer teardown()
+
+	t.Run("GetQueueUrl for existing queue", func(t *testing.T) {
+		queueName := "test-get-url-queue"
+		_, err := app.store.CreateQueue(t.Context(), queueName, nil, nil)
+		require.NoError(t, err)
+
+		reqBody := fmt.Sprintf(`{"QueueName": "%s"}`, queueName)
+		req, _ := http.NewRequest("POST", app.baseURL+"/", bytes.NewBufferString(reqBody))
+		req.Header.Set("X-Amz-Target", "AmazonSQS.GetQueueUrl")
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, err := http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		defer resp.Body.Close()
+
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+		var respData models.GetQueueURLResponse
+		err = json.NewDecoder(resp.Body).Decode(&respData)
+		require.NoError(t, err)
+		assert.Equal(t, fmt.Sprintf("%s/queues/%s", app.baseURL, queueName), respData.QueueUrl)
+	})
+
+	t.Run("GetQueueUrl for non-existent queue", func(t *testing.T) {
+		reqBody := `{"QueueName": "non-existent-queue"}`
+		req, _ := http.NewRequest("POST", app.baseURL+"/", bytes.NewBufferString(reqBody))
+		req.Header.Set("X-Amz-Target", "AmazonSQS.GetQueueUrl")
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, err := http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		defer resp.Body.Close()
+
+		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+
+		var errResp models.ErrorResponse
+		err = json.NewDecoder(resp.Body).Decode(&errResp)
+		require.NoError(t, err)
+		assert.Equal(t, "QueueDoesNotExist", errResp.Type)
 	})
 }

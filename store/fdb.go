@@ -382,11 +382,23 @@ func (s *FDBStore) SetQueueAttributes(ctx context.Context, name string, attribut
 	return err
 }
 
-// GetQueueURL is not yet implemented. The URL is constructed in the handler layer.
+// GetQueueURL checks if a queue exists. The actual URL construction is handled by the API layer
+// based on the request host, but this method ensures the queue is valid.
 func (s *FDBStore) GetQueueURL(ctx context.Context, name string) (string, error) {
-	// TODO: This logic is currently in the handler; might be better to have a
-	//       central configuration for the service's base URL.
-	return "", nil
+	_, err := s.db.ReadTransact(func(rtr fdb.ReadTransaction) (interface{}, error) {
+		exists, err := s.dir.Exists(rtr, []string{name})
+		if err != nil {
+			return nil, err
+		}
+		if !exists {
+			return nil, ErrQueueDoesNotExist
+		}
+		return nil, nil
+	})
+	if err != nil {
+		return "", err
+	}
+	return name, nil
 }
 
 // PurgeQueue deletes all messages from a queue without deleting the queue itself.

@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"math/rand"
 	"net/http"
@@ -163,8 +162,8 @@ func TestBVA_CreateQueue_NameBoundaries(t *testing.T) {
 func TestEP_SetQueueAttributes(t *testing.T) {
 	app, s := setupHandlerTest(t)
 	// Create a queue first
-	s.CreateQueue(context.Background(), "attr-queue", nil, nil)
-	s.CreateQueue(context.Background(), "dlq", nil, nil)
+	s.CreateQueue(t.Context(), "attr-queue", nil, nil)
+	s.CreateQueue(t.Context(), "dlq", nil, nil)
 
 	tests := []struct {
 		name     string
@@ -209,7 +208,7 @@ func TestEP_SetQueueAttributes(t *testing.T) {
 
 func TestBVA_BatchOperations_Limits(t *testing.T) {
 	app, s := setupHandlerTest(t)
-	s.CreateQueue(context.Background(), "batch-limit-queue", nil, nil)
+	s.CreateQueue(t.Context(), "batch-limit-queue", nil, nil)
 
 	// SendMessageBatch Limits
 	t.Run("SendMessageBatch", func(t *testing.T) {
@@ -264,7 +263,7 @@ func TestBVA_BatchOperations_Limits(t *testing.T) {
 
 func TestEP_GetQueueAttributes_Validation(t *testing.T) {
 	app, s := setupHandlerTest(t)
-	s.CreateQueue(context.Background(), "get-attr-queue", nil, nil)
+	s.CreateQueue(t.Context(), "get-attr-queue", nil, nil)
 
 	tests := []struct {
 		name     string
@@ -372,7 +371,7 @@ func TestBVA_SimpleHandlers(t *testing.T) {
 
 func TestBVA_SendMessage_Attributes(t *testing.T) {
 	app, s := setupHandlerTest(t)
-	s.CreateQueue(context.Background(), "msg-attr-queue", nil, nil)
+	s.CreateQueue(t.Context(), "msg-attr-queue", nil, nil)
 
 	// Max 10 attributes
 	t.Run("Max Attributes", func(t *testing.T) {
@@ -432,7 +431,7 @@ func TestBVA_ListQueues_MaxResults(t *testing.T) {
 
 func TestBVA_DeleteMessageBatch_Size(t *testing.T) {
 	app, s := setupHandlerTest(t)
-	s.CreateQueue(context.Background(), "del-batch-queue", nil, nil)
+	s.CreateQueue(t.Context(), "del-batch-queue", nil, nil)
 
 	tests := []struct {
 		name       string
@@ -471,7 +470,7 @@ func TestBVA_DeleteMessageBatch_Size(t *testing.T) {
 
 func TestBVA_ChangeMessageVisibility_Timeout(t *testing.T) {
 	app, s := setupHandlerTest(t)
-	s.CreateQueue(context.Background(), "vis-queue", nil, nil)
+	s.CreateQueue(t.Context(), "vis-queue", nil, nil)
 
 	tests := []struct {
 		name     string
@@ -529,7 +528,7 @@ func TestBVA_ChangeMessageVisibility_Timeout(t *testing.T) {
 
 func TestBVA_ListDLQ_MaxResults(t *testing.T) {
 	app, s := setupHandlerTest(t)
-	s.CreateQueue(context.Background(), "dlq-queue", nil, nil)
+	s.CreateQueue(t.Context(), "dlq-queue", nil, nil)
 
 	tests := []struct {
 		name       string
@@ -561,7 +560,7 @@ func TestBVA_ListDLQ_MaxResults(t *testing.T) {
 
 func TestEP_Tags_Validation(t *testing.T) {
 	app, s := setupHandlerTest(t)
-	s.CreateQueue(context.Background(), "tag-queue", nil, nil)
+	s.CreateQueue(t.Context(), "tag-queue", nil, nil)
 
 	// TagQueue: Empty tags -> 400
 	t.Run("TagQueue Empty", func(t *testing.T) {
@@ -594,7 +593,7 @@ func TestEP_Tags_Validation(t *testing.T) {
 
 func TestFuzz_SendMessage_Body(t *testing.T) {
 	app, s := setupHandlerTest(t)
-	s.CreateQueue(context.Background(), "fuzz-queue", nil, nil)
+	s.CreateQueue(t.Context(), "fuzz-queue", nil, nil)
 
 	f := func(body string) bool {
 		reqBody, _ := json.Marshal(models.SendMessageRequest{
@@ -681,7 +680,7 @@ func TestEP_ReceiveMessage_Validation(t *testing.T) {
 			// Wait, QueueDoesNotExist is 400 Bad Request in SQS API (usually).
 			// Let's create the queue.
 			s := app.Store.(*store.FDBStore)
-			s.CreateQueue(context.Background(), "q", nil, nil)
+			s.CreateQueue(t.Context(), "q", nil, nil)
 			tc.req.QueueUrl = "http://localhost/queues/q"
 
 			reqBody, _ := json.Marshal(tc.req)
@@ -705,7 +704,7 @@ func TestEP_ReceiveMessage_Validation(t *testing.T) {
 
 func TestProperty_AddPermission_LabelValidation(t *testing.T) {
 	app, s := setupHandlerTest(t)
-	s.CreateQueue(context.Background(), "perm-queue", nil, nil)
+	s.CreateQueue(t.Context(), "perm-queue", nil, nil)
 
 	f := func(label string) bool {
 		reqBody, _ := json.Marshal(models.AddPermissionRequest{
@@ -747,7 +746,7 @@ func TestProperty_AddPermission_LabelValidation(t *testing.T) {
 
 func TestBVA_StartMessageMoveTask_ARN(t *testing.T) {
 	app, s := setupHandlerTest(t)
-	s.CreateQueue(context.Background(), "source-queue", nil, nil)
+	s.CreateQueue(t.Context(), "source-queue", nil, nil)
 
 	tests := []struct {
 		name     string

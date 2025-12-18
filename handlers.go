@@ -766,28 +766,28 @@ func validateSettableAttributes(attributes map[string]string) error {
 
 // All valid queue attribute names for GetQueueAttributes
 var validQueueAttributeNames = map[string]bool{
-	"All":    true,
-	"Policy": true,
-	"VisibilityTimeout":                 true,
-	"MaximumMessageSize":                true,
-	"MessageRetentionPeriod":            true,
-	"ApproximateNumberOfMessages":       true,
+	"All":                                   true,
+	"Policy":                                true,
+	"VisibilityTimeout":                     true,
+	"MaximumMessageSize":                    true,
+	"MessageRetentionPeriod":                true,
+	"ApproximateNumberOfMessages":           true,
 	"ApproximateNumberOfMessagesNotVisible": true,
-	"CreatedTimestamp":                  true,
-	"LastModifiedTimestamp":             true,
-	"QueueArn":                          true,
+	"CreatedTimestamp":                      true,
+	"LastModifiedTimestamp":                 true,
+	"QueueArn":                              true,
 	"ApproximateNumberOfMessagesDelayed":    true,
-	"DelaySeconds":                      true,
-	"ReceiveMessageWaitTimeSeconds":     true,
-	"RedrivePolicy":                     true,
-	"FifoQueue":                         true,
-	"ContentBasedDeduplication":         true,
-	"KmsMasterKeyId":                    true,
-	"KmsDataKeyReusePeriodSeconds":      true,
-	"DeduplicationScope":                true,
-	"FifoThroughputLimit":               true,
-	"RedriveAllowPolicy":                true,
-	"SqsManagedSseEnabled":              true,
+	"DelaySeconds":                          true,
+	"ReceiveMessageWaitTimeSeconds":         true,
+	"RedrivePolicy":                         true,
+	"FifoQueue":                             true,
+	"ContentBasedDeduplication":             true,
+	"KmsMasterKeyId":                        true,
+	"KmsDataKeyReusePeriodSeconds":          true,
+	"DeduplicationScope":                    true,
+	"FifoThroughputLimit":                   true,
+	"RedriveAllowPolicy":                    true,
+	"SqsManagedSseEnabled":                  true,
 }
 
 // validMessageSystemAttributeNames is a set of the allowed system attribute names for messages.
@@ -883,7 +883,7 @@ func calculateMessageSize(body string, attributes map[string]models.MessageAttri
 
 func (app *App) validateSendMessageRequest(req *models.SendMessageRequest, queueName string) error {
 	if req.QueueUrl == "" {
-		return errors.New("MissingParameter: The request must contain a QueueUrl.")
+		return errors.New("MissingParameter: The request must contain a QueueUrl")
 	}
 
 	if len(req.MessageBody) < 1 {
@@ -897,15 +897,15 @@ func (app *App) validateSendMessageRequest(req *models.SendMessageRequest, queue
 	}
 
 	if !isSqsMessageBodyValid(req.MessageBody) {
-		return errors.New("InvalidMessageContents: The message contains characters outside the allowed set.")
+		return errors.New("InvalidMessageContents: The message contains characters outside the allowed set")
 	}
 
 	if req.DelaySeconds != nil {
 		if *req.DelaySeconds < 0 || *req.DelaySeconds > 900 {
-			return errors.New("InvalidParameterValue: Value for parameter DelaySeconds is invalid. Reason: Must be an integer from 0 to 900.")
+			return errors.New("InvalidParameterValue: Value for parameter DelaySeconds is invalid. Reason: Must be an integer from 0 to 900")
 		}
 		if strings.HasSuffix(queueName, ".fifo") {
-			return errors.New("InvalidParameterValue: The request include parameter that is not valid for this queue type. Reason: DelaySeconds is not supported for FIFO queues.")
+			return errors.New("InvalidParameterValue: The request include parameter that is not valid for this queue type. Reason: DelaySeconds is not supported for FIFO queues")
 		}
 	}
 
@@ -913,13 +913,13 @@ func (app *App) validateSendMessageRequest(req *models.SendMessageRequest, queue
 
 	if req.MessageDeduplicationId != nil {
 		if !isFifo {
-			return errors.New("InvalidParameterValue: MessageDeduplicationId is supported only for FIFO queues.")
+			return errors.New("InvalidParameterValue: MessageDeduplicationId is supported only for FIFO queues")
 		}
 		if len(*req.MessageDeduplicationId) > 128 {
-			return errors.New("InvalidParameterValue: MessageDeduplicationId can be up to 128 characters long.")
+			return errors.New("InvalidParameterValue: MessageDeduplicationId can be up to 128 characters long")
 		}
 		if !isValidSqsChars(*req.MessageDeduplicationId) {
-			return errors.New("InvalidParameterValue: MessageDeduplicationId can only contain alphanumeric characters and punctuation.")
+			return errors.New("InvalidParameterValue: MessageDeduplicationId can only contain alphanumeric characters and punctuation")
 		}
 	}
 
@@ -1419,6 +1419,7 @@ func (app *App) AddPermissionHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(http.StatusOK)
 }
+
 // RemovePermissionHandler handles requests to remove permissions from a queue.
 func (app *App) RemovePermissionHandler(w http.ResponseWriter, r *http.Request) {
 	var req models.RemovePermissionRequest
@@ -1454,6 +1455,7 @@ func (app *App) RemovePermissionHandler(w http.ResponseWriter, r *http.Request) 
 
 	w.WriteHeader(http.StatusOK)
 }
+
 // ListQueueTagsHandler handles requests to list tags for a queue.
 func (app *App) ListQueueTagsHandler(w http.ResponseWriter, r *http.Request) {
 	var req models.ListQueueTagsRequest
@@ -1549,6 +1551,7 @@ func (app *App) UntagQueueHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(http.StatusOK)
 }
+
 // ListDeadLetterSourceQueuesHandler handles requests to list queues that use a specific queue as a DLQ.
 func (app *App) ListDeadLetterSourceQueuesHandler(w http.ResponseWriter, r *http.Request) {
 	var req models.ListDeadLetterSourceQueuesRequest

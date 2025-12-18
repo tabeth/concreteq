@@ -1,7 +1,6 @@
 package store
 
 import (
-	"context"
 	"encoding/json"
 	"math/rand"
 	"sync"
@@ -57,7 +56,7 @@ func TestConcurrency_ShardSelection(t *testing.T) {
 		t.Logf("Skipping race test because FDB not available: %v", err)
 		return
 	}
-	ctx := context.Background()
+	ctx := t.Context()
 	queueName := "race-test-queue"
 	_, err = s.CreateQueue(ctx, queueName, nil, nil)
 	assert.NoError(t, err)
@@ -99,7 +98,7 @@ func TestProperty_SendMessage_Invariants(t *testing.T) {
 	if err != nil {
 		t.Skip("Skipping because FDB not available")
 	}
-	ctx := context.Background()
+	ctx := t.Context()
 	queueName := "prop-test-queue"
 	_, err = s.CreateQueue(ctx, queueName, nil, nil)
 	assert.NoError(t, err)
@@ -152,7 +151,7 @@ func TestBoundary_BatchOperations(t *testing.T) {
 	if err != nil {
 		t.Skip("Skipping because FDB not available")
 	}
-	ctx := context.Background()
+	ctx := t.Context()
 	queueName := "bva-queue"
 	_, err = s.CreateQueue(ctx, queueName, nil, nil)
 	assert.NoError(t, err)
@@ -189,7 +188,7 @@ func TestNegative_InvalidReceiptHandle(t *testing.T) {
 	if err != nil {
 		t.Skip("Skipping because FDB not available")
 	}
-	ctx := context.Background()
+	ctx := t.Context()
 	queueName := "neg-queue"
 	_, err = s.CreateQueue(ctx, queueName, nil, nil)
 	assert.NoError(t, err)
@@ -204,18 +203,18 @@ func TestNegative_InvalidReceiptHandle(t *testing.T) {
 // --- REDRIVE POLICY PARSING FUZZING ---
 
 func TestFuzz_RedrivePolicy(t *testing.T) {
-    // This tests the JSON parsing robustness in Create/SetQueueAttributes
-    f := func(s string) bool {
-        // We are checking if random strings cause a panic in the unmarshaller or logic
-        var policy struct {
+	// This tests the JSON parsing robustness in Create/SetQueueAttributes
+	f := func(s string) bool {
+		// We are checking if random strings cause a panic in the unmarshaller or logic
+		var policy struct {
 			DeadLetterTargetArn string `json:"deadLetterTargetArn"`
 			MaxReceiveCount     string `json:"maxReceiveCount"`
 		}
-        err := json.Unmarshal([]byte(s), &policy)
-        // It shouldn't panic.
-        return err == nil || err != nil
-    }
-    if err := quick.Check(f, nil); err != nil {
+		err := json.Unmarshal([]byte(s), &policy)
+		// It shouldn't panic.
+		return err == nil || err != nil
+	}
+	if err := quick.Check(f, nil); err != nil {
 		t.Error(err)
 	}
 }

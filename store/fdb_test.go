@@ -1,7 +1,6 @@
 package store
 
 import (
-	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -26,18 +25,29 @@ func TestFDBStore_NewFDBStore(t *testing.T) {
 	assert.NotNil(t, store.GetDB())
 }
 
-func TestFDBStore_Unimplemented(t *testing.T) {
-	ctx := context.Background()
+func TestFDBStore_GetQueueURL(t *testing.T) {
+	ctx := t.Context()
 	store, teardown := setupTestDB(t)
 	defer teardown()
 
-	_, err := store.GetQueueURL(ctx, "q")
-	assert.NoError(t, err)
-	// RemovePermission and ListDeadLetterSourceQueues are now implemented and tested elsewhere.
+	t.Run("returns error for non-existent queue", func(t *testing.T) {
+		_, err := store.GetQueueURL(ctx, "non-existent")
+		assert.ErrorIs(t, err, ErrQueueDoesNotExist)
+	})
+
+	t.Run("returns success for existing queue", func(t *testing.T) {
+		queueName := "existing-queue"
+		_, err := store.CreateQueue(ctx, queueName, nil, nil)
+		require.NoError(t, err)
+
+		name, err := store.GetQueueURL(ctx, queueName)
+		assert.NoError(t, err)
+		assert.Equal(t, queueName, name)
+	})
 }
 
 func TestFDBStore_ListDeadLetterSourceQueues(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	store, teardown := setupTestDB(t)
 	defer teardown()
 
@@ -101,7 +111,7 @@ func TestHashSystemAttributes(t *testing.T) {
 }
 
 func TestFDBStore_ChangeMessageVisibility(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	store, teardown := setupTestDB(t)
 	defer teardown()
 
@@ -138,7 +148,7 @@ func TestFDBStore_ChangeMessageVisibility(t *testing.T) {
 }
 
 func TestFDBStore_ChangeMessageVisibilityBatch(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	store, teardown := setupTestDB(t)
 	defer teardown()
 
@@ -187,7 +197,7 @@ func TestFDBStore_ChangeMessageVisibilityBatch(t *testing.T) {
 }
 
 func TestFDBStore_DeleteMessageBatch_InvalidReceipt(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	store, teardown := setupTestDB(t)
 	defer teardown()
 
@@ -213,7 +223,7 @@ func TestFDBStore_DeleteMessageBatch_InvalidReceipt(t *testing.T) {
 }
 
 func TestFDBStore_ChangeMessageVisibility_NotInflight(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	store, teardown := setupTestDB(t)
 	defer teardown()
 
@@ -226,7 +236,7 @@ func TestFDBStore_ChangeMessageVisibility_NotInflight(t *testing.T) {
 }
 
 func TestFDBStore_DeleteMessageBatch_MessageNotFound(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	store, teardown := setupTestDB(t)
 	defer teardown()
 
@@ -321,7 +331,7 @@ func setupTestDB(tb testing.TB) (*FDBStore, func()) {
 }
 
 func TestFDBStore_CreateQueue(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	store, teardown := setupTestDB(t)
 	defer teardown()
 
@@ -402,7 +412,7 @@ func TestFDBStore_ListQueues(t *testing.T) {
 
 	// Create the queues in FDB
 	for _, name := range allTestQueues {
-		_, err := store.CreateQueue(context.Background(), name, nil, nil)
+		_, err := store.CreateQueue(t.Context(), name, nil, nil)
 		// We ignore "already exists" error to make tests idempotent
 		if err != nil {
 			t.Fatalf("Failed to create test queue %s: %v", name, err)
@@ -412,7 +422,7 @@ func TestFDBStore_ListQueues(t *testing.T) {
 
 	// --- Test Cases ---
 	t.Run("List all queues", func(t *testing.T) {
-		queues, nextToken, err := store.ListQueues(context.Background(), 0, "", "")
+		queues, nextToken, err := store.ListQueues(t.Context(), 0, "", "")
 		assert.NoError(t, err)
 		assert.Empty(t, nextToken)
 
@@ -428,14 +438,14 @@ func TestFDBStore_ListQueues(t *testing.T) {
 	})
 
 	t.Run("List with MaxResults", func(t *testing.T) {
-		queues, nextToken, err := store.ListQueues(context.Background(), 2, "", "")
+		queues, nextToken, err := store.ListQueues(t.Context(), 2, "", "")
 		assert.NoError(t, err)
 		assert.NotEmpty(t, nextToken)
 		assert.Len(t, queues, 2)
 	})
 
 	t.Run("List with QueueNamePrefix", func(t *testing.T) {
-		queues, nextToken, err := store.ListQueues(context.Background(), 0, "", "prefix-")
+		queues, nextToken, err := store.ListQueues(t.Context(), 0, "", "prefix-")
 		assert.NoError(t, err)
 		assert.Empty(t, nextToken)
 		assert.Len(t, queues, 2)
@@ -445,13 +455,13 @@ func TestFDBStore_ListQueues(t *testing.T) {
 
 	t.Run("Pagination", func(t *testing.T) {
 		// Get the first page
-		queues1, nextToken1, err := store.ListQueues(context.Background(), 3, "", "")
+		queues1, nextToken1, err := store.ListQueues(t.Context(), 3, "", "")
 		assert.NoError(t, err)
 		assert.NotEmpty(t, nextToken1)
 		assert.Len(t, queues1, 3)
 
 		// Get the second page
-		queues2, _, err := store.ListQueues(context.Background(), 10, nextToken1, "")
+		queues2, _, err := store.ListQueues(t.Context(), 10, nextToken1, "")
 		assert.NoError(t, err)
 
 		// Check that the second page contains the rest of the queues
@@ -473,7 +483,7 @@ func TestFDBStore_ListQueues(t *testing.T) {
 }
 
 func TestFDBStore_DeleteQueue(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	store, teardown := setupTestDB(t)
 	defer teardown()
 
@@ -523,7 +533,7 @@ func TestFDBStore_DeleteQueue(t *testing.T) {
 }
 
 func TestFDBStore_SendMessageBatch(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	store, teardown := setupTestDB(t)
 	defer teardown()
 
@@ -642,7 +652,7 @@ func TestFDBStore_SendMessageBatch(t *testing.T) {
 }
 
 func TestFDBStore_FifoQueue_Fairness(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	store, teardown := setupTestDB(t)
 	defer teardown()
 
@@ -748,7 +758,7 @@ func getMessageFromDB(s *FDBStore, queueName, messageID string) (*models.Message
 }
 
 func TestFDBStore_DeleteMessageBatch(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	store, teardown := setupTestDB(t)
 	defer teardown()
 
@@ -808,7 +818,6 @@ func TestFDBStore_DeleteMessageBatch(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-
 		delResp, err := store.DeleteMessageBatch(ctx, queueName, entries)
 		require.NoError(t, err)
 		assert.Len(t, delResp.Successful, 2) // valid_del and non_existent_del
@@ -819,7 +828,7 @@ func TestFDBStore_DeleteMessageBatch(t *testing.T) {
 }
 
 func TestFDBStore_DeleteMessage(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	store, teardown := setupTestDB(t)
 	defer teardown()
 
@@ -912,7 +921,7 @@ func TestFDBStore_DeleteMessage(t *testing.T) {
 }
 
 func TestFDBStore_ReceiveMessage(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	t.Run("Standard Queue", func(t *testing.T) {
 		t.Run("Receive from empty queue", func(t *testing.T) {
@@ -1048,7 +1057,7 @@ func TestFDBStore_ReceiveMessage(t *testing.T) {
 }
 
 func TestFDBStore_PurgeQueue(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	store, teardown := setupTestDB(t)
 	defer teardown()
 
@@ -1145,7 +1154,7 @@ func TestFDBStore_PurgeQueue(t *testing.T) {
 }
 
 func TestFDBStore_DeleteRecreateIsolation(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	store, teardown := setupTestDB(t)
 	defer teardown()
 
@@ -1172,7 +1181,7 @@ func TestFDBStore_DeleteRecreateIsolation(t *testing.T) {
 }
 
 func TestFDBStore_SendMessage(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	store, teardown := setupTestDB(t)
 	defer teardown()
 
@@ -1280,7 +1289,7 @@ func TestFDBStore_SendMessage(t *testing.T) {
 }
 
 func TestFDBStore_ContentBasedDeduplication(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	store, teardown := setupTestDB(t)
 	defer teardown()
 
@@ -1345,7 +1354,7 @@ func TestFDBStore_ContentBasedDeduplication(t *testing.T) {
 }
 
 func TestFDBStore_RedrivePolicy(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	store, teardown := setupTestDB(t)
 	defer teardown()
 
@@ -1421,7 +1430,7 @@ func TestFDBStore_RedrivePolicy(t *testing.T) {
 }
 
 func TestFDBStore_QueueTags(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	store, teardown := setupTestDB(t)
 	defer teardown()
 
@@ -1463,7 +1472,7 @@ func TestFDBStore_QueueTags(t *testing.T) {
 }
 
 func TestFDBStore_SetQueueAttributes(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	store, teardown := setupTestDB(t)
 	defer teardown()
 
@@ -1495,7 +1504,7 @@ func TestFDBStore_SetQueueAttributes(t *testing.T) {
 }
 
 func TestFDBStore_GetQueueAttributes(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	store, teardown := setupTestDB(t)
 	defer teardown()
 

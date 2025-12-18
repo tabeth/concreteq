@@ -38,7 +38,7 @@ func BenchmarkReceiveMessageWithContention(b *testing.B) {
 	defer cleanup(b, store, queueName)
 
 	// Create a standard queue
-	_, err = store.CreateQueue(context.Background(), queueName, nil, nil)
+	_, err = store.CreateQueue(b.Context(), queueName, nil, nil)
 	if err != nil {
 		b.Fatalf("Failed to create queue: %v", err)
 	}
@@ -47,7 +47,7 @@ func BenchmarkReceiveMessageWithContention(b *testing.B) {
 	// the benchmark doesn't run out of work.
 	const numMessages = 5000
 	for i := 0; i < numMessages; i++ {
-		_, err := store.SendMessage(context.Background(), queueName, &models.SendMessageRequest{
+		_, err := store.SendMessage(b.Context(), queueName, &models.SendMessageRequest{
 			MessageBody: fmt.Sprintf("message-%d", i),
 		})
 		if err != nil {
@@ -55,10 +55,11 @@ func BenchmarkReceiveMessageWithContention(b *testing.B) {
 		}
 	}
 
-	b.ResetTimer() // Start timing now
+	b.ResetTimer()       // Start timing now
 	b.SetParallelism(50) // 50 concurrent goroutines
 
 	// RunParallel will create multiple goroutines and distribute b.N iterations among them.
+	ctx := b.Context()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
 			// Each goroutine will loop, receiving and deleting one message at a time.
@@ -66,7 +67,7 @@ func BenchmarkReceiveMessageWithContention(b *testing.B) {
 				MaxNumberOfMessages: 1,
 				WaitTimeSeconds:     1,
 			}
-			resp, err := store.ReceiveMessage(context.Background(), queueName, receiveReq)
+			resp, err := store.ReceiveMessage(ctx, queueName, receiveReq)
 			if err != nil {
 				b.Logf("Received error during receive: %v", err)
 				continue
@@ -75,7 +76,7 @@ func BenchmarkReceiveMessageWithContention(b *testing.B) {
 			if len(resp.Messages) > 0 {
 				// We delete the message to complete the SQS cycle, but the primary
 				// focus of this benchmark is the performance of ReceiveMessage.
-				_ = store.DeleteMessage(context.Background(), queueName, resp.Messages[0].ReceiptHandle)
+				_ = store.DeleteMessage(ctx, queueName, resp.Messages[0].ReceiptHandle)
 			}
 		}
 	})
