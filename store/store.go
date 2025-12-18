@@ -75,14 +75,14 @@ type Store interface {
 	// ChangeMessageVisibilityBatch changes the visibility timeout for a batch of messages.
 	ChangeMessageVisibilityBatch(ctx context.Context, queueName string, entries []models.ChangeMessageVisibilityBatchRequestEntry) (*models.ChangeMessageVisibilityBatchResponse, error)
 
-	// --- Permissions --- (Not yet implemented)
+	// --- Permissions ---
 
 	// AddPermission adds a permission to a queue for a specific principal.
 	AddPermission(ctx context.Context, queueName, label string, accountIds []string, actions []string) error
 	// RemovePermission removes a permission from a queue.
 	RemovePermission(ctx context.Context, queueName, label string) error
 
-	// --- Tagging --- (Not yet implemented)
+	// --- Tagging ---
 
 	// ListQueueTags lists the tags for a specified queue.
 	ListQueueTags(ctx context.Context, queueName string) (map[string]string, error)
@@ -91,12 +91,12 @@ type Store interface {
 	// UntagQueue removes tags from a queue.
 	UntagQueue(ctx context.Context, queueName string, tagKeys []string) error
 
-	// --- Dead-Letter Queues --- (Not yet implemented)
+	// --- Dead-Letter Queues ---
 
 	// ListDeadLetterSourceQueues lists queues that have the specified queue as a dead-letter queue.
 	ListDeadLetterSourceQueues(ctx context.Context, queueURL string, maxResults int, nextToken string) ([]string, string, error)
 
-	// --- Message Move Tasks --- (Not yet implemented)
+	// --- Message Move Tasks ---
 
 	// StartMessageMoveTask starts a task to move messages from a source queue to a destination queue.
 	StartMessageMoveTask(ctx context.Context, sourceArn, destinationArn string) (string, error)
