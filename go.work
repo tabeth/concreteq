@@ -1,3 +1,8 @@
-go 1.24.11
+go 1.24
 
-use ./apps/concreteq
+use (
+	./apps/concreteq
+	./apps/concretedb
+	./libs/kms
+	./libs/fdb
+)

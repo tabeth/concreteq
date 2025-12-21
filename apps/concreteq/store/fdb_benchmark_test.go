@@ -1,7 +1,6 @@
 package store
 
 import (
-	"context"
 	"fmt"
 	"testing"
 
@@ -9,7 +8,7 @@ import (
 )
 
 func cleanup(b *testing.B, store *FDBStore, queueName string) {
-	err := store.DeleteQueue(context.Background(), queueName)
+	err := store.DeleteQueue(b.Context(), queueName)
 	if err != nil {
 		if err.Error() != "queue does not exist" {
 			b.Logf("Failed to cleanup queue %s: %v", queueName, err)

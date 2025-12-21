@@ -14,18 +14,17 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"math/rand"
 
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
-
 	"github.com/apple/foundationdb/bindings/go/src/fdb/directory"
 	"github.com/apple/foundationdb/bindings/go/src/fdb/tuple"
 	"github.com/google/uuid"
-	"github.com/tabeth/concreteq/kms"
 	"github.com/tabeth/concreteq/models"
+	fdb_lib "github.com/tabeth/kiroku-core/libs/fdb"
+	"github.com/tabeth/kiroku-core/libs/kms"
 )
 
 const (
@@ -37,8 +36,6 @@ const (
 	// without creating an excessive number of sub-prefixes.
 	numShards = 16
 )
-
-var fdbInitOnce sync.Once
 
 // FDBStore is a concrete implementation of the Store interface using FoundationDB.
 // It holds a connection to the database and a directory subspace for this application
@@ -64,10 +61,8 @@ func NewFDBStore() (*FDBStore, error) {
 // unique, isolated data space, preventing interference between parallel tests.
 func NewFDBStoreAtPath(path ...string) (*FDBStore, error) {
 	// FoundationDB requires specifying the API version to ensure client-server compatibility.
-	fdbInitOnce.Do(func() {
-		fdb.MustAPIVersion(730)
-	})
-	db, err := fdb.OpenDefault()
+	db, err := fdb_lib.OpenDB(730) // Renamed import to avoid conflict if needed, or just fdb_lib "github.com/tabeth/kiroku-core/libs/fdb"
+
 	if err != nil {
 		return nil, err
 	}

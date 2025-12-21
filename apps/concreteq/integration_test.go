@@ -105,7 +105,7 @@ func setupIntegrationTest(t *testing.T) (*testApp, func()) {
 
 	// Teardown function
 	teardown := func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 		defer cancel()
 		err := server.Shutdown(ctx)
 		require.NoError(t, err)

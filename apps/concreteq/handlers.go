@@ -899,7 +899,7 @@ func calculateMessageSize(body string, attributes map[string]models.MessageAttri
 
 func (app *App) validateSendMessageRequest(req *models.SendMessageRequest, queueName string) error {
 	if req.QueueUrl == "" {
-		return errors.New("MissingParameter: The request must contain a QueueUrl")
+		return errors.New("MissingParameter: The request must contain a QueueUrl.")
 	}
 
 	if len(req.MessageBody) < 1 {
@@ -913,7 +913,7 @@ func (app *App) validateSendMessageRequest(req *models.SendMessageRequest, queue
 	}
 
 	if !isSqsMessageBodyValid(req.MessageBody) {
-		return errors.New("InvalidMessageContents: The message contains characters outside the allowed set")
+		return errors.New("InvalidMessageContents: The message contains characters outside the allowed set.")
 	}
 
 	if req.DelaySeconds != nil {
@@ -921,7 +921,7 @@ func (app *App) validateSendMessageRequest(req *models.SendMessageRequest, queue
 			return errors.New("InvalidParameterValue: Value for parameter DelaySeconds is invalid. Reason: Must be an integer from 0 to 900")
 		}
 		if strings.HasSuffix(queueName, ".fifo") {
-			return errors.New("InvalidParameterValue: The request include parameter that is not valid for this queue type. Reason: DelaySeconds is not supported for FIFO queues")
+			return errors.New("InvalidParameterValue: The request include parameter that is not valid for this queue type. Reason: DelaySeconds is not supported for FIFO queues.")
 		}
 	}
 
@@ -929,7 +929,7 @@ func (app *App) validateSendMessageRequest(req *models.SendMessageRequest, queue
 
 	if req.MessageDeduplicationId != nil {
 		if !isFifo {
-			return errors.New("InvalidParameterValue: MessageDeduplicationId is supported only for FIFO queues")
+			return errors.New("InvalidParameterValue: MessageDeduplicationId is supported only for FIFO queues.")
 		}
 		if len(*req.MessageDeduplicationId) > 128 {
 			return errors.New("InvalidParameterValue: MessageDeduplicationId can be up to 128 characters long")
