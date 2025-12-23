@@ -8,43 +8,23 @@ import (
 	"time"
 
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
-	"github.com/apple/foundationdb/bindings/go/src/fdb/tuple"
 	"github.com/tabeth/concretedb/models"
+	"github.com/tabeth/kiroku-core/libs/fdb/fdbtest"
 )
 
-var fdbAvailable bool
 var testDB fdb.Database
 
 func TestMain(m *testing.M) {
-	log.Println("Setting up FoundationDB for tests...")
-	fdb.MustAPIVersion(710)
-
+	// Attempt to open the DB locally for the suite
+	// We rely on fdbtest.SkipIfFDBUnavailable to actually gate the tests
 	var err error
+	// Use the shared OpenDB to ensure version consistency, or just direct fdb
+	// (But we need to import sharedfdb to use fdbtest effectively or at least consistent versions)
+	// For now, let's keep using local fdb.OpenDefault but with proper version set
+	fdb.MustAPIVersion(710)
 	testDB, err = fdb.OpenDefault()
 	if err != nil {
-		log.Printf("WARNING: could not open FoundationDB handle: %v", err)
-	} else {
-		// Check connectivity with a timeout
-		done := make(chan error)
-		go func() {
-			_, err := testDB.ReadTransact(func(rtr fdb.ReadTransaction) (interface{}, error) {
-				rtr.Get(fdb.Key("healthcheck")).Get() // Force a read
-				return nil, nil
-			})
-			done <- err
-		}()
-
-		select {
-		case err := <-done:
-			if err != nil {
-				log.Printf("WARNING: could not connect to FoundationDB: %v", err)
-			} else {
-				log.Println("Successfully connected to FoundationDB.")
-				fdbAvailable = true
-			}
-		case <-time.After(2 * time.Second):
-			log.Println("WARNING: FoundationDB connection timed out.")
-		}
+		log.Printf("WARNING: could not open FoundationDB handle (TestMain): %v", err)
 	}
 
 	exitCode := m.Run()
@@ -53,15 +33,28 @@ func TestMain(m *testing.M) {
 
 func setupTestStore(t *testing.T, tableName string) *FoundationDBStore {
 	t.Helper()
-	if !fdbAvailable {
-		t.Skip("FoundationDB is not available/reachable. Skipping test.")
+	fdbtest.SkipIfFDBUnavailable(t)
+
+	if testDB == (fdb.Database{}) { // Zero value check if possible, or just rely on it being set
+		// If TestMain failed, try again or fail?
+		// Since SkipIf passed, we SHOULD be able to connect.
+		var err error
+		testDB, err = fdb.OpenDefault()
+		if err != nil {
+			t.Fatalf("Failed to open FDB handle even though availability check passed: %v", err)
+		}
 	}
+
 	store := NewFoundationDBStore(testDB)
 	log.Printf("Test '%s': Clearing keys for table '%s'", t.Name(), tableName)
 
 	_, err := store.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
-		key := store.ss.Pack(tuple.Tuple{tableName})
-		tr.Clear(key)
+		// Use Remove to clear the directory for this table
+		_, err := store.dir.Remove(tr, []string{"tables", tableName})
+		if err != nil {
+			// Ignore if it doesn't exist
+			return nil, nil // Or check err
+		}
 		return nil, nil
 	})
 	if err != nil {

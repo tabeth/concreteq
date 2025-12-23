@@ -10,7 +10,7 @@ import (
 	"github.com/apple/foundationdb/bindings/go/src/fdb/subspace"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/tabeth/concreteq/store/directory"
+	"github.com/tabeth/kiroku-core/libs/fdb/directory"
 )
 
 var (

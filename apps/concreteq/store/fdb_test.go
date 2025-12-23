@@ -17,9 +17,11 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tabeth/concreteq/models"
+	"github.com/tabeth/kiroku-core/libs/fdb/fdbtest"
 )
 
 func TestFDBStore_NewFDBStore(t *testing.T) {
+	fdbtest.SkipIfFDBUnavailable(t)
 	store, err := NewFDBStore()
 	require.NoError(t, err)
 	assert.NotNil(t, store)
@@ -279,31 +281,14 @@ func generateRandomString(length int) string {
 
 func setupTestDB(tb testing.TB) (*FDBStore, func()) {
 	tb.Helper()
-	fdb.MustAPIVersion(730)
+	fdbtest.SkipIfFDBUnavailable(tb)
+
+	// Open FDB handle for teardown
+	// We know it's available because of SkipIfFDBUnavailable
 	db, err := fdb.OpenDefault()
 	if err != nil {
-		tb.Logf("FoundationDB integration tests skipped: could not open default FDB database: %v", err)
-		tb.Skip("skipping FoundationDB tests: could not open default FDB database")
+		tb.Fatalf("Failed to open FDB handle: %v", err)
 	}
-
-	// Pre-test condition to check if the cluster is up with a short timeout.
-	tb.Log("Checking FoundationDB cluster availability...")
-	tr, err := db.CreateTransaction()
-	if err != nil {
-		tb.Skipf("skipping FoundationDB tests: could not create transaction: %v", err)
-	}
-	// Set a 1-second timeout for the check to avoid long waits.
-	err = tr.Options().SetTimeout(1000)
-	if err != nil {
-		tb.Skipf("skipping FoundationDB tests: could not set transaction timeout: %v", err)
-	}
-
-	_, err = tr.Get(fdb.Key("\xff\xff/status/json")).Get()
-	if err != nil {
-		tb.Logf("FoundationDB integration tests skipped: could not connect to cluster: %v. Please ensure FoundationDB is running.", err)
-		tb.Skip("Please ensure FoundationDB is running and accessible.")
-	}
-	tb.Log("FoundationDB cluster is available. Proceeding with tests.")
 
 	// Create a unique directory for this test to ensure isolation
 	testDirName := "test-" + strings.ReplaceAll(tb.Name(), "/", "_") + "-" + generateRandomString(4)

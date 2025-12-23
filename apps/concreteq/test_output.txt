@@ -1,0 +1,347 @@
+=== RUN   TestCreateQueueHandler
+=== RUN   TestCreateQueueHandler/Successful_Standard_Queue_Creation
+=== RUN   TestCreateQueueHandler/Successful_FIFO_Queue_Creation
+=== RUN   TestCreateQueueHandler/Queue_Name_Too_Long
+=== RUN   TestCreateQueueHandler/Invalid_Characters_in_Queue_Name
+=== RUN   TestCreateQueueHandler/FIFO_Name_without_FIFO_Attribute
+=== RUN   TestCreateQueueHandler/FIFO_Attribute_without_FIFO_Name
+=== RUN   TestCreateQueueHandler/Invalid_Attribute_Value
+=== RUN   TestCreateQueueHandler/Invalid_Redrive_Policy_JSON
+=== RUN   TestCreateQueueHandler/Invalid_Redrive_Policy_MaxReceiveCount
+=== RUN   TestCreateQueueHandler/FIFO_Attribute_on_Standard_Queue
+=== RUN   TestCreateQueueHandler/Idempotent_Success_-_Queue_Exists_with_Same_Attributes
+=== RUN   TestCreateQueueHandler/QueueNameExists_-_Queue_Exists_with_Different_Attributes
+--- PASS: TestCreateQueueHandler (0.00s)
+    --- PASS: TestCreateQueueHandler/Successful_Standard_Queue_Creation (0.00s)
+    --- PASS: TestCreateQueueHandler/Successful_FIFO_Queue_Creation (0.00s)
+    --- PASS: TestCreateQueueHandler/Queue_Name_Too_Long (0.00s)
+    --- PASS: TestCreateQueueHandler/Invalid_Characters_in_Queue_Name (0.00s)
+    --- PASS: TestCreateQueueHandler/FIFO_Name_without_FIFO_Attribute (0.00s)
+    --- PASS: TestCreateQueueHandler/FIFO_Attribute_without_FIFO_Name (0.00s)
+    --- PASS: TestCreateQueueHandler/Invalid_Attribute_Value (0.00s)
+    --- PASS: TestCreateQueueHandler/Invalid_Redrive_Policy_JSON (0.00s)
+    --- PASS: TestCreateQueueHandler/Invalid_Redrive_Policy_MaxReceiveCount (0.00s)
+    --- PASS: TestCreateQueueHandler/FIFO_Attribute_on_Standard_Queue (0.00s)
+    --- PASS: TestCreateQueueHandler/Idempotent_Success_-_Queue_Exists_with_Same_Attributes (0.00s)
+    --- PASS: TestCreateQueueHandler/QueueNameExists_-_Queue_Exists_with_Different_Attributes (0.00s)
+=== RUN   TestTaggingHandlers
+=== RUN   TestTaggingHandlers/ListQueueTags_-_Success
+=== RUN   TestTaggingHandlers/ListQueueTags_-_Queue_Does_Not_Exist
+=== RUN   TestTaggingHandlers/TagQueue_-_Success
+=== RUN   TestTaggingHandlers/TagQueue_-_Missing_Tags
+=== RUN   TestTaggingHandlers/UntagQueue_-_Success
+=== RUN   TestTaggingHandlers/UntagQueue_-_Missing_TagKeys
+--- PASS: TestTaggingHandlers (0.00s)
+    --- PASS: TestTaggingHandlers/ListQueueTags_-_Success (0.00s)
+    --- PASS: TestTaggingHandlers/ListQueueTags_-_Queue_Does_Not_Exist (0.00s)
+    --- PASS: TestTaggingHandlers/TagQueue_-_Success (0.00s)
+    --- PASS: TestTaggingHandlers/TagQueue_-_Missing_Tags (0.00s)
+    --- PASS: TestTaggingHandlers/UntagQueue_-_Success (0.00s)
+    --- PASS: TestTaggingHandlers/UntagQueue_-_Missing_TagKeys (0.00s)
+=== RUN   TestSetQueueAttributesHandler
+=== RUN   TestSetQueueAttributesHandler/Successful_Set_Attributes
+=== RUN   TestSetQueueAttributesHandler/Missing_QueueUrl
+=== RUN   TestSetQueueAttributesHandler/Missing_Attributes
+=== RUN   TestSetQueueAttributesHandler/Queue_Does_Not_Exist
+=== RUN   TestSetQueueAttributesHandler/Invalid_Attribute_Value
+=== RUN   TestSetQueueAttributesHandler/Attempt_to_set_immutable_attribute
+--- PASS: TestSetQueueAttributesHandler (0.00s)
+    --- PASS: TestSetQueueAttributesHandler/Successful_Set_Attributes (0.00s)
+    --- PASS: TestSetQueueAttributesHandler/Missing_QueueUrl (0.00s)
+    --- PASS: TestSetQueueAttributesHandler/Missing_Attributes (0.00s)
+    --- PASS: TestSetQueueAttributesHandler/Queue_Does_Not_Exist (0.00s)
+    --- PASS: TestSetQueueAttributesHandler/Invalid_Attribute_Value (0.00s)
+    --- PASS: TestSetQueueAttributesHandler/Attempt_to_set_immutable_attribute (0.00s)
+=== RUN   TestGetQueueUrlHandler
+=== RUN   TestGetQueueUrlHandler/Successful_Get_URL
+=== RUN   TestGetQueueUrlHandler/Missing_QueueName
+=== RUN   TestGetQueueUrlHandler/Queue_Does_Not_Exist
+--- PASS: TestGetQueueUrlHandler (0.00s)
+    --- PASS: TestGetQueueUrlHandler/Successful_Get_URL (0.00s)
+    --- PASS: TestGetQueueUrlHandler/Missing_QueueName (0.00s)
+    --- PASS: TestGetQueueUrlHandler/Queue_Does_Not_Exist (0.00s)
+=== RUN   TestChangeMessageVisibilityBatchHandler
+=== RUN   TestChangeMessageVisibilityBatchHandler/Successful_Batch_Change
+=== RUN   TestChangeMessageVisibilityBatchHandler/Missing_QueueUrl
+=== RUN   TestChangeMessageVisibilityBatchHandler/Too_Many_Entries
+=== RUN   TestChangeMessageVisibilityBatchHandler/Duplicate_Entry_Ids
+=== RUN   TestChangeMessageVisibilityBatchHandler/Partial_Failure
+=== RUN   TestChangeMessageVisibilityBatchHandler/Full_batch_failure_due_to_non-existent_queue
+--- PASS: TestChangeMessageVisibilityBatchHandler (0.00s)
+    --- PASS: TestChangeMessageVisibilityBatchHandler/Successful_Batch_Change (0.00s)
+    --- PASS: TestChangeMessageVisibilityBatchHandler/Missing_QueueUrl (0.00s)
+    --- PASS: TestChangeMessageVisibilityBatchHandler/Too_Many_Entries (0.00s)
+    --- PASS: TestChangeMessageVisibilityBatchHandler/Duplicate_Entry_Ids (0.00s)
+    --- PASS: TestChangeMessageVisibilityBatchHandler/Partial_Failure (0.00s)
+    --- PASS: TestChangeMessageVisibilityBatchHandler/Full_batch_failure_due_to_non-existent_queue (0.00s)
+=== RUN   TestUnimplementedHandlers
+--- PASS: TestUnimplementedHandlers (0.00s)
+=== RUN   TestGetQueueAttributesHandler
+=== RUN   TestGetQueueAttributesHandler/Successful_-_All_Attributes
+=== RUN   TestGetQueueAttributesHandler/Successful_-_Specific_Attributes
+=== RUN   TestGetQueueAttributesHandler/Queue_Does_Not_Exist
+=== RUN   TestGetQueueAttributesHandler/Successful_-_With_Defaulted_Attributes
+=== RUN   TestGetQueueAttributesHandler/Requesting_valid_but_unset_attribute
+=== RUN   TestGetQueueAttributesHandler/Invalid_Attribute_Name
+=== RUN   TestGetQueueAttributesHandler/Missing_QueueUrl
+--- PASS: TestGetQueueAttributesHandler (0.00s)
+    --- PASS: TestGetQueueAttributesHandler/Successful_-_All_Attributes (0.00s)
+    --- PASS: TestGetQueueAttributesHandler/Successful_-_Specific_Attributes (0.00s)
+    --- PASS: TestGetQueueAttributesHandler/Queue_Does_Not_Exist (0.00s)
+    --- PASS: TestGetQueueAttributesHandler/Successful_-_With_Defaulted_Attributes (0.00s)
+    --- PASS: TestGetQueueAttributesHandler/Requesting_valid_but_unset_attribute (0.00s)
+    --- PASS: TestGetQueueAttributesHandler/Invalid_Attribute_Name (0.00s)
+    --- PASS: TestGetQueueAttributesHandler/Missing_QueueUrl (0.00s)
+=== RUN   TestDeleteMessageBatchHandler
+=== RUN   TestDeleteMessageBatchHandler/Successful_Batch_Deletion
+=== RUN   TestDeleteMessageBatchHandler/Queue_Does_Not_Exist
+=== RUN   TestDeleteMessageBatchHandler/Partial_Failure
+=== RUN   TestDeleteMessageBatchHandler/Too_Many_Entries
+=== RUN   TestDeleteMessageBatchHandler/Duplicate_Entry_Ids
+--- PASS: TestDeleteMessageBatchHandler (0.00s)
+    --- PASS: TestDeleteMessageBatchHandler/Successful_Batch_Deletion (0.00s)
+    --- PASS: TestDeleteMessageBatchHandler/Queue_Does_Not_Exist (0.00s)
+    --- PASS: TestDeleteMessageBatchHandler/Partial_Failure (0.00s)
+    --- PASS: TestDeleteMessageBatchHandler/Too_Many_Entries (0.00s)
+    --- PASS: TestDeleteMessageBatchHandler/Duplicate_Entry_Ids (0.00s)
+=== RUN   TestSendMessageBatchHandler
+=== RUN   TestSendMessageBatchHandler/Successful_Batch_Send
+=== RUN   TestSendMessageBatchHandler/Too_Many_Entries
+=== RUN   TestSendMessageBatchHandler/Duplicate_Entry_Ids
+=== RUN   TestSendMessageBatchHandler/Empty_Batch_Request
+=== RUN   TestSendMessageBatchHandler/Batch_Request_Too_Long
+=== RUN   TestSendMessageBatchHandler/Queue_Does_Not_Exist
+=== RUN   TestSendMessageBatchHandler/Partial_Success
+--- PASS: TestSendMessageBatchHandler (0.00s)
+    --- PASS: TestSendMessageBatchHandler/Successful_Batch_Send (0.00s)
+    --- PASS: TestSendMessageBatchHandler/Too_Many_Entries (0.00s)
+    --- PASS: TestSendMessageBatchHandler/Duplicate_Entry_Ids (0.00s)
+    --- PASS: TestSendMessageBatchHandler/Empty_Batch_Request (0.00s)
+    --- PASS: TestSendMessageBatchHandler/Batch_Request_Too_Long (0.00s)
+    --- PASS: TestSendMessageBatchHandler/Queue_Does_Not_Exist (0.00s)
+    --- PASS: TestSendMessageBatchHandler/Partial_Success (0.00s)
+=== RUN   TestDeleteMessageHandler
+=== RUN   TestDeleteMessageHandler/Successful_Deletion
+=== RUN   TestDeleteMessageHandler/Missing_QueueUrl
+=== RUN   TestDeleteMessageHandler/Missing_ReceiptHandle
+=== RUN   TestDeleteMessageHandler/Queue_Does_Not_Exist
+=== RUN   TestDeleteMessageHandler/Invalid_Receipt_Handle
+--- PASS: TestDeleteMessageHandler (0.00s)
+    --- PASS: TestDeleteMessageHandler/Successful_Deletion (0.00s)
+    --- PASS: TestDeleteMessageHandler/Missing_QueueUrl (0.00s)
+    --- PASS: TestDeleteMessageHandler/Missing_ReceiptHandle (0.00s)
+    --- PASS: TestDeleteMessageHandler/Queue_Does_Not_Exist (0.00s)
+    --- PASS: TestDeleteMessageHandler/Invalid_Receipt_Handle (0.00s)
+=== RUN   TestReceiveMessageHandler
+=== RUN   TestReceiveMessageHandler/Successful_Receive
+=== RUN   TestReceiveMessageHandler/Invalid_MaxNumberOfMessages
+=== RUN   TestReceiveMessageHandler/Invalid_VisibilityTimeout
+=== RUN   TestReceiveMessageHandler/Invalid_ReceiveRequestAttemptId
+=== RUN   TestReceiveMessageHandler/Invalid_System_Attribute_Name
+=== RUN   TestReceiveMessageHandler/Invalid_Custom_Attribute_Name
+=== RUN   TestReceiveMessageHandler/Invalid_WaitTimeSeconds
+=== RUN   TestReceiveMessageHandler/Queue_Does_Not_Exist
+=== RUN   TestReceiveMessageHandler/Successful_Receive_with_wildcard_attribute
+--- PASS: TestReceiveMessageHandler (0.00s)
+    --- PASS: TestReceiveMessageHandler/Successful_Receive (0.00s)
+    --- PASS: TestReceiveMessageHandler/Invalid_MaxNumberOfMessages (0.00s)
+    --- PASS: TestReceiveMessageHandler/Invalid_VisibilityTimeout (0.00s)
+    --- PASS: TestReceiveMessageHandler/Invalid_ReceiveRequestAttemptId (0.00s)
+    --- PASS: TestReceiveMessageHandler/Invalid_System_Attribute_Name (0.00s)
+    --- PASS: TestReceiveMessageHandler/Invalid_Custom_Attribute_Name (0.00s)
+    --- PASS: TestReceiveMessageHandler/Invalid_WaitTimeSeconds (0.00s)
+    --- PASS: TestReceiveMessageHandler/Queue_Does_Not_Exist (0.00s)
+    --- PASS: TestReceiveMessageHandler/Successful_Receive_with_wildcard_attribute (0.00s)
+=== RUN   TestPurgeQueueHandler
+=== RUN   TestPurgeQueueHandler/Successful_Purge
+=== RUN   TestPurgeQueueHandler/Missing_QueueUrl
+=== RUN   TestPurgeQueueHandler/Queue_Does_Not_Exist
+=== RUN   TestPurgeQueueHandler/Purge_In_Progress
+--- PASS: TestPurgeQueueHandler (0.00s)
+    --- PASS: TestPurgeQueueHandler/Successful_Purge (0.00s)
+    --- PASS: TestPurgeQueueHandler/Missing_QueueUrl (0.00s)
+    --- PASS: TestPurgeQueueHandler/Queue_Does_Not_Exist (0.00s)
+    --- PASS: TestPurgeQueueHandler/Purge_In_Progress (0.00s)
+=== RUN   TestDeleteQueueHandler
+=== RUN   TestDeleteQueueHandler/Successful_Deletion
+=== RUN   TestDeleteQueueHandler/Missing_QueueUrl
+=== RUN   TestDeleteQueueHandler/Queue_Does_Not_Exist
+--- PASS: TestDeleteQueueHandler (0.00s)
+    --- PASS: TestDeleteQueueHandler/Successful_Deletion (0.00s)
+    --- PASS: TestDeleteQueueHandler/Missing_QueueUrl (0.00s)
+    --- PASS: TestDeleteQueueHandler/Queue_Does_Not_Exist (0.00s)
+=== RUN   TestListQueuesHandler
+=== RUN   TestListQueuesHandler/Successful_Listing
+=== RUN   TestListQueuesHandler/Malformed_JSON_is_ignored
+=== RUN   TestListQueuesHandler/Store_Internal_Error
+=== RUN   TestListQueuesHandler/Over_1000_queues_returned
+=== RUN   TestListQueuesHandler/Invalid_MaxResults_too_high
+=== RUN   TestListQueuesHandler/No_NextToken_when_MaxResults_is_not_specified
+--- PASS: TestListQueuesHandler (0.00s)
+    --- PASS: TestListQueuesHandler/Successful_Listing (0.00s)
+    --- PASS: TestListQueuesHandler/Malformed_JSON_is_ignored (0.00s)
+    --- PASS: TestListQueuesHandler/Store_Internal_Error (0.00s)
+    --- PASS: TestListQueuesHandler/Over_1000_queues_returned (0.00s)
+    --- PASS: TestListQueuesHandler/Invalid_MaxResults_too_high (0.00s)
+    --- PASS: TestListQueuesHandler/No_NextToken_when_MaxResults_is_not_specified (0.00s)
+=== RUN   TestSendMessageHandler
+=== RUN   TestSendMessageHandler/Successful_Send_to_Standard_Queue
+=== RUN   TestSendMessageHandler/Successful_Send_with_Message_Attributes
+=== RUN   TestSendMessageHandler/Invalid_Message_Body_Characters
+=== RUN   TestSendMessageHandler/Successful_Send_to_FIFO_Queue
+=== RUN   TestSendMessageHandler/Missing_QueueUrl
+=== RUN   TestSendMessageHandler/Empty_Message_Body
+=== RUN   TestSendMessageHandler/Message_Body_Too_Long
+=== RUN   TestSendMessageHandler/DelaySeconds_with_FIFO_Queue
+=== RUN   TestSendMessageHandler/Missing_MessageGroupId_for_FIFO
+=== RUN   TestSendMessageHandler/MessageDeduplicationId_with_Standard_Queue
+=== RUN   TestSendMessageHandler/Queue_Does_Not_Exist
+--- PASS: TestSendMessageHandler (0.00s)
+    --- PASS: TestSendMessageHandler/Successful_Send_to_Standard_Queue (0.00s)
+    --- PASS: TestSendMessageHandler/Successful_Send_with_Message_Attributes (0.00s)
+    --- PASS: TestSendMessageHandler/Invalid_Message_Body_Characters (0.00s)
+    --- PASS: TestSendMessageHandler/Successful_Send_to_FIFO_Queue (0.00s)
+    --- PASS: TestSendMessageHandler/Missing_QueueUrl (0.00s)
+    --- PASS: TestSendMessageHandler/Empty_Message_Body (0.00s)
+    --- PASS: TestSendMessageHandler/Message_Body_Too_Long (0.00s)
+    --- PASS: TestSendMessageHandler/DelaySeconds_with_FIFO_Queue (0.00s)
+    --- PASS: TestSendMessageHandler/Missing_MessageGroupId_for_FIFO (0.00s)
+    --- PASS: TestSendMessageHandler/MessageDeduplicationId_with_Standard_Queue (0.00s)
+    --- PASS: TestSendMessageHandler/Queue_Does_Not_Exist (0.00s)
+=== RUN   TestChangeMessageVisibilityHandler
+=== RUN   TestChangeMessageVisibilityHandler/Successful_Change
+=== RUN   TestChangeMessageVisibilityHandler/Missing_QueueUrl
+=== RUN   TestChangeMessageVisibilityHandler/Missing_ReceiptHandle
+=== RUN   TestChangeMessageVisibilityHandler/VisibilityTimeout_Too_Low
+=== RUN   TestChangeMessageVisibilityHandler/VisibilityTimeout_Too_High
+=== RUN   TestChangeMessageVisibilityHandler/Queue_Does_Not_Exist
+=== RUN   TestChangeMessageVisibilityHandler/Invalid_Receipt_Handle
+=== RUN   TestChangeMessageVisibilityHandler/Message_Not_In-flight
+--- PASS: TestChangeMessageVisibilityHandler (0.00s)
+    --- PASS: TestChangeMessageVisibilityHandler/Successful_Change (0.00s)
+    --- PASS: TestChangeMessageVisibilityHandler/Missing_QueueUrl (0.00s)
+    --- PASS: TestChangeMessageVisibilityHandler/Missing_ReceiptHandle (0.00s)
+    --- PASS: TestChangeMessageVisibilityHandler/VisibilityTimeout_Too_Low (0.00s)
+    --- PASS: TestChangeMessageVisibilityHandler/VisibilityTimeout_Too_High (0.00s)
+    --- PASS: TestChangeMessageVisibilityHandler/Queue_Does_Not_Exist (0.00s)
+    --- PASS: TestChangeMessageVisibilityHandler/Invalid_Receipt_Handle (0.00s)
+    --- PASS: TestChangeMessageVisibilityHandler/Message_Not_In-flight (0.00s)
+=== RUN   TestListDeadLetterSourceQueuesHandler
+=== RUN   TestListDeadLetterSourceQueuesHandler/Successful_Listing
+=== RUN   TestListDeadLetterSourceQueuesHandler/Successful_Listing_Defaults
+=== RUN   TestListDeadLetterSourceQueuesHandler/Missing_QueueUrl
+=== RUN   TestListDeadLetterSourceQueuesHandler/Invalid_MaxResults
+=== RUN   TestListDeadLetterSourceQueuesHandler/Queue_Does_Not_Exist
+--- PASS: TestListDeadLetterSourceQueuesHandler (0.01s)
+    --- PASS: TestListDeadLetterSourceQueuesHandler/Successful_Listing (0.00s)
+    --- PASS: TestListDeadLetterSourceQueuesHandler/Successful_Listing_Defaults (0.00s)
+    --- PASS: TestListDeadLetterSourceQueuesHandler/Missing_QueueUrl (0.00s)
+    --- PASS: TestListDeadLetterSourceQueuesHandler/Invalid_MaxResults (0.00s)
+    --- PASS: TestListDeadLetterSourceQueuesHandler/Queue_Does_Not_Exist (0.00s)
+=== RUN   TestValidateAttributes
+=== RUN   TestValidateAttributes/Valid_Policy
+=== RUN   TestValidateAttributes/Invalid_Policy_-_Malformed_JSON
+=== RUN   TestValidateAttributes/Valid_KmsDataKeyReusePeriodSeconds_-_Min
+=== RUN   TestValidateAttributes/Valid_KmsDataKeyReusePeriodSeconds_-_Max
+=== RUN   TestValidateAttributes/Invalid_KmsDataKeyReusePeriodSeconds_-_Too_Low
+=== RUN   TestValidateAttributes/Invalid_KmsDataKeyReusePeriodSeconds_-_Too_High
+=== RUN   TestValidateAttributes/Valid_SqsManagedSseEnabled
+=== RUN   TestValidateAttributes/Invalid_SqsManagedSseEnabled
+=== RUN   TestValidateAttributes/Valid_KmsMasterKeyId
+=== RUN   TestValidateAttributes/Invalid_KmsMasterKeyId_-_Empty
+=== RUN   TestValidateAttributes/Mixed_Valid_Attributes
+--- PASS: TestValidateAttributes (0.00s)
+    --- PASS: TestValidateAttributes/Valid_Policy (0.00s)
+    --- PASS: TestValidateAttributes/Invalid_Policy_-_Malformed_JSON (0.00s)
+    --- PASS: TestValidateAttributes/Valid_KmsDataKeyReusePeriodSeconds_-_Min (0.00s)
+    --- PASS: TestValidateAttributes/Valid_KmsDataKeyReusePeriodSeconds_-_Max (0.00s)
+    --- PASS: TestValidateAttributes/Invalid_KmsDataKeyReusePeriodSeconds_-_Too_Low (0.00s)
+    --- PASS: TestValidateAttributes/Invalid_KmsDataKeyReusePeriodSeconds_-_Too_High (0.00s)
+    --- PASS: TestValidateAttributes/Valid_SqsManagedSseEnabled (0.00s)
+    --- PASS: TestValidateAttributes/Invalid_SqsManagedSseEnabled (0.00s)
+    --- PASS: TestValidateAttributes/Valid_KmsMasterKeyId (0.00s)
+    --- PASS: TestValidateAttributes/Invalid_KmsMasterKeyId_-_Empty (0.00s)
+    --- PASS: TestValidateAttributes/Mixed_Valid_Attributes (0.00s)
+=== RUN   TestProperty_CreateQueue_NameValidation
+    handlers_verification_test.go:51: FDB not available
+--- SKIP: TestProperty_CreateQueue_NameValidation (0.00s)
+=== RUN   TestBVA_CreateQueue_NameBoundaries
+    handlers_verification_test.go:51: FDB not available
+--- SKIP: TestBVA_CreateQueue_NameBoundaries (0.00s)
+=== RUN   TestEP_SetQueueAttributes
+    handlers_verification_test.go:51: FDB not available
+--- SKIP: TestEP_SetQueueAttributes (0.00s)
+=== RUN   TestBVA_BatchOperations_Limits
+    handlers_verification_test.go:51: FDB not available
+--- SKIP: TestBVA_BatchOperations_Limits (0.00s)
+=== RUN   TestEP_GetQueueAttributes_Validation
+    handlers_verification_test.go:51: FDB not available
+--- SKIP: TestEP_GetQueueAttributes_Validation (0.00s)
+=== RUN   TestBVA_SimpleHandlers
+    handlers_verification_test.go:51: FDB not available
+--- SKIP: TestBVA_SimpleHandlers (0.01s)
+=== RUN   TestBVA_SendMessage_Attributes
+    handlers_verification_test.go:51: FDB not available
+--- SKIP: TestBVA_SendMessage_Attributes (0.00s)
+=== RUN   TestBVA_ListQueues_MaxResults
+    handlers_verification_test.go:51: FDB not available
+--- SKIP: TestBVA_ListQueues_MaxResults (0.00s)
+=== RUN   TestBVA_DeleteMessageBatch_Size
+    handlers_verification_test.go:51: FDB not available
+--- SKIP: TestBVA_DeleteMessageBatch_Size (0.00s)
+=== RUN   TestBVA_ChangeMessageVisibility_Timeout
+    handlers_verification_test.go:51: FDB not available
+--- SKIP: TestBVA_ChangeMessageVisibility_Timeout (0.00s)
+=== RUN   TestBVA_ListDLQ_MaxResults
+    handlers_verification_test.go:51: FDB not available
+--- SKIP: TestBVA_ListDLQ_MaxResults (0.00s)
+=== RUN   TestEP_Tags_Validation
+    handlers_verification_test.go:51: FDB not available
+--- SKIP: TestEP_Tags_Validation (0.00s)
+=== RUN   TestFuzz_SendMessage_Body
+    handlers_verification_test.go:51: FDB not available
+--- SKIP: TestFuzz_SendMessage_Body (0.00s)
+=== RUN   TestConcurrency_HandlerDispatch
+    handlers_verification_test.go:51: FDB not available
+--- SKIP: TestConcurrency_HandlerDispatch (0.00s)
+=== RUN   TestEP_ReceiveMessage_Validation
+    handlers_verification_test.go:51: FDB not available
+--- SKIP: TestEP_ReceiveMessage_Validation (0.00s)
+=== RUN   TestProperty_AddPermission_LabelValidation
+    handlers_verification_test.go:51: FDB not available
+--- SKIP: TestProperty_AddPermission_LabelValidation (0.00s)
+=== RUN   TestBVA_StartMessageMoveTask_ARN
+    handlers_verification_test.go:51: FDB not available
+--- SKIP: TestBVA_StartMessageMoveTask_ARN (0.00s)
+=== RUN   TestIntegration_ServerLifecycle
+Checking FoundationDB cluster availability...
+WARNING: FoundationDB read check failed.
+    integration_test.go:134: Skipping test because FoundationDB is not available
+--- SKIP: TestIntegration_ServerLifecycle (0.00s)
+=== RUN   TestIntegration_CreateQueue
+    integration_test.go:149: Skipping test because FoundationDB is not available
+--- SKIP: TestIntegration_CreateQueue (0.00s)
+=== RUN   TestIntegration_GetQueueAttributes
+    integration_test.go:328: Skipping test because FoundationDB is not available
+--- SKIP: TestIntegration_GetQueueAttributes (0.00s)
+=== RUN   TestIntegration_ListDeletePurgeQueues
+    integration_test.go:413: Skipping test because FoundationDB is not available
+--- SKIP: TestIntegration_ListDeletePurgeQueues (0.00s)
+=== RUN   TestIntegration_NewFeatures
+    integration_test.go:573: Skipping test because FoundationDB is not available
+--- SKIP: TestIntegration_NewFeatures (0.00s)
+=== RUN   TestIntegration_SendMessageBatch
+    integration_test.go:866: Skipping test because FoundationDB is not available
+--- SKIP: TestIntegration_SendMessageBatch (0.00s)
+=== RUN   TestIntegration_FifoFairness
+    integration_test.go:1000: Skipping test because FoundationDB is not available
+--- SKIP: TestIntegration_FifoFairness (0.00s)
+=== RUN   TestIntegration_ChangeMessageVisibility
+    integration_test.go:1103: Skipping test because FoundationDB is not available
+--- SKIP: TestIntegration_ChangeMessageVisibility (0.00s)
+=== RUN   TestIntegration_ReceiveMessage_Validation
+    integration_test.go:1150: Skipping test because FoundationDB is not available
+--- SKIP: TestIntegration_ReceiveMessage_Validation (0.00s)
+=== RUN   TestMain
+FAIL	github.com/tabeth/concreteq	0.085s
+FAIL

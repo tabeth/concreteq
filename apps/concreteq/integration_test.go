@@ -22,6 +22,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tabeth/concreteq/models"
 	"github.com/tabeth/concreteq/store"
+	"github.com/tabeth/kiroku-core/libs/fdb/fdbtest"
 )
 
 // testApp holds dependencies for a test run.
@@ -31,57 +32,11 @@ type testApp struct {
 	baseURL string
 }
 
-var (
-	fdbChecked   bool
-	fdbAvailable bool
-)
-
 // setupIntegrationTest initializes a test server and a clean database.
 func setupIntegrationTest(t *testing.T) (*testApp, func()) {
 	t.Helper()
 
-	if fdbChecked {
-		if !fdbAvailable {
-			t.Skip("skipping FoundationDB tests: FDB previously found unavailable")
-		}
-	} else {
-		// --- Database Setup (adapted from store/fdb_test.go) ---
-		fdb.MustAPIVersion(730)
-		db, err := fdb.OpenDefault()
-		if err != nil {
-			fdbChecked = true
-			fdbAvailable = false
-			t.Logf("FoundationDB integration tests skipped: could not open default FDB database: %v", err)
-			t.Skip("skipping FoundationDB tests: could not open default FDB database")
-		}
-
-		// Verify connectivity with a timeout
-		done := make(chan error, 1) // Buffered to avoid goroutine leak
-		go func() {
-			_, err := db.ReadTransact(func(rtr fdb.ReadTransaction) (interface{}, error) {
-				rtr.Get(fdb.Key("healthcheck")).Get() // Force a read
-				return nil, nil
-			})
-			done <- err
-		}()
-
-		select {
-		case err := <-done:
-			fdbChecked = true
-			if err != nil {
-				fdbAvailable = false
-				t.Logf("FoundationDB integration tests skipped: could not connect to FDB: %v", err)
-				t.Skip("skipping FoundationDB tests: could not connect to FDB")
-			} else {
-				fdbAvailable = true
-			}
-		case <-time.After(2 * time.Second):
-			fdbChecked = true
-			fdbAvailable = false
-			t.Logf("FoundationDB integration tests skipped: connection to FDB timed out")
-			t.Skip("skipping FoundationDB tests: connection to FDB timed out")
-		}
-	}
+	fdbtest.SkipIfFDBUnavailable(t)
 
 	db, _ := fdb.OpenDefault() // Re-open or use existing, efficient enough
 
@@ -1256,6 +1211,7 @@ func TestIntegration_ReceiveMessage_Validation(t *testing.T) {
 }
 
 func TestMain(t *testing.T) {
+	fdbtest.SkipIfFDBUnavailable(t)
 	// Redirect log output to avoid polluting test output
 	oldFlags := log.Flags()
 	log.SetFlags(0)
@@ -2285,6 +2241,7 @@ func TestIntegration_StartMessageMoveTask_BackgroundProcessing(t *testing.T) {
 }
 
 func TestIntegration_Encryption_EndToEnd(t *testing.T) {
+	fdbtest.SkipIfFDBUnavailable(t)
 	// Setup a clean FDB store for this test
 	s, err := store.NewFDBStoreAtPath("test-encryption-" + time.Now().Format("20060102150405"))
 	require.NoError(t, err)
