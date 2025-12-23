@@ -9,17 +9,19 @@ import (
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tabeth/kiroku-core/libs/fdb/fdbtest"
 )
 
 var (
-	db_once sync.Once
-	db      fdb.Database
+	db_once  sync.Once
+	db       fdb.Database
 	testRoot Directory
 )
 
 func setupAllTests(t *testing.T) (fdb.Database, Directory) {
+	fdbtest.SkipIfFDBUnavailable(t)
 	db_once.Do(func() {
-		fdb.MustAPIVersion(730)
+		// fdb.MustAPIVersion is called by fdbtest.SkipIfFDBUnavailable -> sharedfdb.OpenDB
 		var err error
 		db, err = fdb.OpenDefault()
 		require.NoError(t, err)

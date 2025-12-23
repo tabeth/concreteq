@@ -11,17 +11,19 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tabeth/kiroku-core/libs/fdb/directory"
+	"github.com/tabeth/kiroku-core/libs/fdb/fdbtest"
 )
 
 var (
-	db_once sync.Once
-	db fdb.Database
+	db_once  sync.Once
+	db       fdb.Database
 	testRoot directory.Directory
 )
 
 func setupAllTests(t *testing.T) (fdb.Database, directory.Directory) {
+	fdbtest.SkipIfFDBUnavailable(t)
 	db_once.Do(func() {
-		fdb.MustAPIVersion(730)
+		// fdb.MustAPIVersion is called by fdbtest.SkipIfFDBUnavailable -> sharedfdb.OpenDB
 		var err error
 		db, err = fdb.OpenDefault()
 		require.NoError(t, err)
@@ -169,6 +171,7 @@ func newIsolatedDirectoryLayer(t *testing.T) directory.Directory {
 }
 
 func TestDirectoryLayer_Errors(t *testing.T) {
+	fdbtest.SkipIfFDBUnavailable(t)
 	db, err := fdb.OpenDefault()
 	require.NoError(t, err)
 
@@ -215,8 +218,8 @@ func TestDirectoryLayer_Errors(t *testing.T) {
 	assert.Error(t, err)
 }
 
-
 func TestDirectoryLayer_MoveRemovePartitions(t *testing.T) {
+	fdbtest.SkipIfFDBUnavailable(t)
 	db, err := fdb.OpenDefault()
 	require.NoError(t, err)
 
@@ -243,6 +246,7 @@ func TestDirectoryLayer_MoveRemovePartitions(t *testing.T) {
 }
 
 func TestDirectoryLayer_MoveTo_Layer(t *testing.T) {
+	fdbtest.SkipIfFDBUnavailable(t)
 	db, err := fdb.OpenDefault()
 	require.NoError(t, err)
 

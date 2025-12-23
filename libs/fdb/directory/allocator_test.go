@@ -9,6 +9,7 @@ import (
 	"github.com/apple/foundationdb/bindings/go/src/fdb/subspace"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tabeth/kiroku-core/libs/fdb/fdbtest"
 )
 
 func TestWindowSize(t *testing.T) {
@@ -20,7 +21,7 @@ func TestWindowSize(t *testing.T) {
 }
 
 func TestHCA_Allocate(t *testing.T) {
-	fdb.MustAPIVersion(730)
+	fdbtest.SkipIfFDBUnavailable(t)
 	db, err := fdb.OpenDefault()
 	require.NoError(t, err)
 
@@ -45,7 +46,7 @@ func TestHCA_Allocate(t *testing.T) {
 }
 
 func TestHCA_Allocate_WindowAdvancement(t *testing.T) {
-	fdb.MustAPIVersion(730)
+	fdbtest.SkipIfFDBUnavailable(t)
 	db, err := fdb.OpenDefault()
 	require.NoError(t, err)
 
