@@ -96,3 +96,25 @@ type DeleteTableRequest struct {
 type DeleteTableResponse struct {
 	TableDescription TableDescription `json:"TableDescription"`
 }
+
+// ListTablesRequest mirrors the JSON request body for the ListTables action.
+type ListTablesRequest struct {
+	ExclusiveStartTableName string `json:"ExclusiveStartTableName"`
+	Limit                   int    `json:"Limit"`
+}
+
+// ListTablesResponse mirrors the JSON response for a successful ListTables action.
+type ListTablesResponse struct {
+	TableNames             []string `json:"TableNames"`
+	LastEvaluatedTableName string   `json:"LastEvaluatedTableName,omitempty"`
+}
+
+// DescribeTableRequest mirrors the JSON request body for the DescribeTable action.
+type DescribeTableRequest struct {
+	TableName string `json:"TableName"`
+}
+
+// DescribeTableResponse mirrors the JSON response for a successful DescribeTable action.
+type DescribeTableResponse struct {
+	Table TableDescription `json:"Table"`
+}

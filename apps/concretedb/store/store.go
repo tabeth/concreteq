@@ -24,4 +24,8 @@ type Store interface {
 	// DeleteTable deletes the table - effectively the reverse of CreateTable
 	// Attempting to delete a table that is not present results in an error.
 	DeleteTable(ctx context.Context, tableName string) (*models.Table, error)
+
+	// ListTables lists the tables in the database.
+	// It supports pagination via limit and exclusiveStartTableName.
+	ListTables(ctx context.Context, limit int, exclusiveStartTableName string) ([]string, string, error)
 }

@@ -14,6 +14,8 @@ import (
 type TableServicer interface {
 	CreateTable(ctx context.Context, table *models.Table) (*models.Table, error)
 	DeleteTable(ctx context.Context, tableName string) (*models.Table, error)
+	ListTables(ctx context.Context, limit int, exclusiveStartTableName string) ([]string, string, error)
+	GetTable(ctx context.Context, tableName string) (*models.Table, error)
 }
 
 // TableService contains the business logic for table operations.
@@ -71,6 +73,38 @@ func (s *TableService) DeleteTable(ctx context.Context, tableName string) (*mode
 	}
 
 	return deletedTable, nil
+}
+
+// ListTables retrieves a list of table names.
+func (s *TableService) ListTables(ctx context.Context, limit int, exclusiveStartTableName string) ([]string, string, error) {
+	// Simple validation
+	if limit < 0 {
+		return nil, "", models.New("ValidationException", "Limit must be non-negative")
+	}
+
+	tableNames, lastEvaluatedTableName, err := s.store.ListTables(ctx, limit, exclusiveStartTableName)
+	if err != nil {
+		return nil, "", models.New("InternalFailure", fmt.Sprintf("failed to list tables: %v", err))
+	}
+
+	return tableNames, lastEvaluatedTableName, nil
+}
+
+// GetTable retrieves a table's metadata by name.
+func (s *TableService) GetTable(ctx context.Context, tableName string) (*models.Table, error) {
+	if tableName == "" {
+		return nil, models.New("ValidationException", "TableName cannot be empty")
+	}
+
+	table, err := s.store.GetTable(ctx, tableName)
+	if err != nil {
+		return nil, models.New("InternalFailure", fmt.Sprintf("failed to get table: %v", err))
+	}
+	if table == nil {
+		return nil, models.New("ResourceNotFoundException", fmt.Sprintf("Table not found: %s", tableName))
+	}
+
+	return table, nil
 }
 
 // validateTable performs business rule validation on the internal db model. In general all table validation

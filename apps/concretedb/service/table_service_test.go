@@ -14,6 +14,7 @@ type mockStore struct {
 	CreateTableFunc func(ctx context.Context, table *models.Table) error
 	GetTableFunc    func(ctx context.Context, tableName string) (*models.Table, error)
 	DeleteTableFunc func(ctx context.Context, tableName string) (*models.Table, error) // <-- ADD THIS
+	ListTablesFunc  func(ctx context.Context, limit int, exclusiveStartTableName string) ([]string, string, error)
 }
 
 func (m *mockStore) CreateTable(ctx context.Context, table *models.Table) error {
@@ -27,6 +28,10 @@ func (m *mockStore) GetTable(ctx context.Context, tableName string) (*models.Tab
 // Add this method to satisfy the st.Store interface
 func (m *mockStore) DeleteTable(ctx context.Context, tableName string) (*models.Table, error) {
 	return m.DeleteTableFunc(ctx, tableName)
+}
+
+func (m *mockStore) ListTables(ctx context.Context, limit int, exclusiveStartTableName string) ([]string, string, error) {
+	return m.ListTablesFunc(ctx, limit, exclusiveStartTableName)
 }
 
 func TestTableService_DeleteTable_NotFound(t *testing.T) {
@@ -117,5 +122,157 @@ func TestTableService_CreateTable_ResourceInUse(t *testing.T) {
 
 	if apiErr.Type != "ResourceInUseException" {
 		t.Errorf("expected error type ResourceInUseException, got %s", apiErr.Type)
+	}
+}
+
+func TestTableService_ListTables(t *testing.T) {
+	mock := &mockStore{
+		ListTablesFunc: func(ctx context.Context, limit int, exclusiveStartTableName string) ([]string, string, error) {
+			return []string{"t1", "t2"}, "t2", nil
+		},
+	}
+	service := NewTableService(mock)
+
+	names, lastEval, err := service.ListTables(context.Background(), 10, "")
+	if err != nil {
+		t.Fatalf("ListTables failed: %v", err)
+	}
+	if len(names) != 2 {
+		t.Errorf("expected 2 names, got %d", len(names))
+	}
+	if lastEval != "t2" {
+		t.Errorf("expected lastEval 't2', got '%s'", lastEval)
+	}
+}
+
+func TestTableService_GetTable_Success(t *testing.T) {
+	mock := &mockStore{
+		GetTableFunc: func(ctx context.Context, tableName string) (*models.Table, error) {
+			return &models.Table{TableName: tableName, Status: models.StatusActive}, nil
+		},
+	}
+	service := NewTableService(mock)
+
+	table, err := service.GetTable(context.Background(), "my-table")
+	if err != nil {
+		t.Fatalf("GetTable failed: %v", err)
+	}
+	if table.TableName != "my-table" {
+		t.Errorf("expected table name 'my-table', got '%s'", table.TableName)
+	}
+}
+
+func TestTableService_ListTables_Error(t *testing.T) {
+	mock := &mockStore{
+		ListTablesFunc: func(ctx context.Context, limit int, exclusiveStartTableName string) ([]string, string, error) {
+			return nil, "", errors.New("db error")
+		},
+	}
+	service := NewTableService(mock)
+
+	_, _, err := service.ListTables(context.Background(), 10, "")
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	var apiErr *models.APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("expected *models.APIError, got %T", err)
+	}
+	if apiErr.Type != "InternalFailure" {
+		t.Errorf("expected InternalFailure, got %s", apiErr.Type)
+	}
+}
+
+func TestTableService_ListTables_InvalidLimit(t *testing.T) {
+	service := NewTableService(&mockStore{})
+	_, _, err := service.ListTables(context.Background(), -1, "")
+	if err == nil {
+		t.Fatal("expected error for invalid limit")
+	}
+	var apiErr *models.APIError
+	if errors.As(err, &apiErr) {
+		if apiErr.Type != "ValidationException" {
+			t.Errorf("expected ValidationException, got %s", apiErr.Type)
+		}
+	}
+}
+
+func TestTableService_GetTable_Error(t *testing.T) {
+	mock := &mockStore{
+		GetTableFunc: func(ctx context.Context, tableName string) (*models.Table, error) {
+			return nil, errors.New("db error")
+		},
+	}
+	service := NewTableService(mock)
+
+	_, err := service.GetTable(context.Background(), "t")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	var apiErr *models.APIError
+	if !errors.As(err, &apiErr) || apiErr.Type != "InternalFailure" {
+		t.Errorf("expected InternalFailure APIError")
+	}
+}
+
+func TestTableService_GetTable_EmptyName(t *testing.T) {
+	service := NewTableService(&mockStore{})
+	_, err := service.GetTable(context.Background(), "")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	var apiErr *models.APIError
+	if !errors.As(err, &apiErr) || apiErr.Type != "ValidationException" {
+		t.Errorf("expected ValidationException")
+	}
+}
+
+func TestTableService_DeleteTable_GenericError(t *testing.T) {
+	mock := &mockStore{
+		DeleteTableFunc: func(ctx context.Context, tableName string) (*models.Table, error) {
+			return nil, errors.New("generic error")
+		},
+	}
+	service := NewTableService(mock)
+	_, err := service.DeleteTable(context.Background(), "t")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	var apiErr *models.APIError
+	if !errors.As(err, &apiErr) || apiErr.Type != "InternalFailure" {
+		t.Errorf("expected InternalFailure")
+	}
+}
+
+func TestTableService_DeleteTable_EmptyName(t *testing.T) {
+	service := NewTableService(&mockStore{})
+	_, err := service.DeleteTable(context.Background(), "")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	var apiErr *models.APIError
+	if !errors.As(err, &apiErr) || apiErr.Type != "ValidationException" {
+		t.Errorf("expected ValidationException")
+	}
+}
+
+func TestTableService_CreateTable_StoreError(t *testing.T) {
+	mock := &mockStore{
+		CreateTableFunc: func(ctx context.Context, table *models.Table) error {
+			return errors.New("random error")
+		},
+	}
+	service := NewTableService(mock)
+	table := &models.Table{
+		TableName: "test",
+		KeySchema: []models.KeySchemaElement{{AttributeName: "id", KeyType: "HASH"}},
+	}
+	_, err := service.CreateTable(context.Background(), table)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	var apiErr *models.APIError
+	if !errors.As(err, &apiErr) || apiErr.Type != "InternalFailure" {
+		t.Errorf("expected InternalFailure")
 	}
 }

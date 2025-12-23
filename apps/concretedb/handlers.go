@@ -116,3 +116,45 @@ func mapRequestToDBTable(req *models.CreateTableRequest) *models.Table {
 	}
 	return dbTable
 }
+
+// listTablesHandler handles the API logic for the ListTables action.
+func (h *DynamoDBHandler) listTablesHandler(w http.ResponseWriter, r *http.Request) {
+	var req models.ListTablesRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, "SerializationException", "Could not decode request body.", http.StatusBadRequest)
+		return
+	}
+
+	tableNames, lastEval, err := h.tableService.ListTables(r.Context(), req.Limit, req.ExclusiveStartTableName)
+	if err != nil {
+		writeAPIError(w, err, http.StatusBadRequest)
+		return
+	}
+
+	resp := models.ListTablesResponse{
+		TableNames:             tableNames,
+		LastEvaluatedTableName: lastEval,
+	}
+	writeSuccess(w, resp, http.StatusOK)
+}
+
+// describeTableHandler handles the API logic for the DescribeTable action.
+func (h *DynamoDBHandler) describeTableHandler(w http.ResponseWriter, r *http.Request) {
+	var req models.DescribeTableRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, "SerializationException", "Could not decode request body.", http.StatusBadRequest)
+		return
+	}
+
+	table, err := h.tableService.GetTable(r.Context(), req.TableName)
+	if err != nil {
+		writeAPIError(w, err, http.StatusBadRequest)
+		return
+	}
+
+	apiDesc := mapDBTableToAPIDescription(table)
+	resp := models.DescribeTableResponse{
+		Table: apiDesc,
+	}
+	writeSuccess(w, resp, http.StatusOK)
+}

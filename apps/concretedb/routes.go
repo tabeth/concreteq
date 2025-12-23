@@ -32,6 +32,10 @@ func (h *DynamoDBHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// ADDED: Route for the DeleteTable action
 	case "DynamoDB_20120810.DeleteTable":
 		h.deleteTableHandler(w, r)
+	case "DynamoDB_20120810.ListTables":
+		h.listTablesHandler(w, r)
+	case "DynamoDB_20120810.DescribeTable":
+		h.describeTableHandler(w, r)
 	default:
 		writeError(w, "UnknownOperationException", "The requested operation is not supported.", http.StatusBadRequest)
 	}
@@ -51,7 +55,11 @@ func writeError(w http.ResponseWriter, errType, message string, statusCode int) 
 func writeAPIError(w http.ResponseWriter, err error, statusCode int) {
 	var apiErr *models.APIError
 	if errors.As(err, &apiErr) {
-		writeError(w, apiErr.Type, apiErr.Message, statusCode)
+		code := statusCode
+		if apiErr.Type == "InternalFailure" {
+			code = http.StatusInternalServerError
+		}
+		writeError(w, apiErr.Type, apiErr.Message, code)
 	} else {
 		// Fallback for unexpected errors
 		writeError(w, "InternalFailure", err.Error(), http.StatusInternalServerError)

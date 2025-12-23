@@ -32,10 +32,8 @@ func NewFoundationDBStore(db fdb.Database) *FoundationDBStore {
 func (s *FoundationDBStore) CreateTable(ctx context.Context, table *models.Table) error {
 	fmt.Println("Creating table :", table.TableName)
 	_, err := s.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
-		// Default to StatusCreating
-		if table.Status == "" {
-			table.Status = models.StatusCreating
-		}
+		// Simulating instant provisioning for ConcreteDB
+		table.Status = models.StatusActive
 
 		// Marshal the table metadata to JSON
 		tableBytes, err := json.Marshal(table)
@@ -140,20 +138,14 @@ func (s *FoundationDBStore) DeleteTable(ctx context.Context, tableName string) (
 			return nil, err
 		}
 
-		// Mark as deleting
+		// Mark as deleting (optional if we really delete it immediately, but good for return value)
 		table.Status = models.StatusDeleting
 
-		tableBytes, err := json.Marshal(&table)
-		if err != nil {
+		// Actually delete the directory (metadata + data)
+		// This removes the prefix mapping and all data under it.
+		if _, err := s.dir.Remove(tr, []string{"tables", tableName}); err != nil {
 			return nil, err
 		}
-
-		tr.Set(metaKey, tableBytes)
-
-		// In a real implementation, we might kick off an async job to remove() the directory later
-		// For now, we just update status.
-		// If we wanted to actually delete data:
-		// s.dir.Remove(tr, []string{"tables", tableName})
 
 		return &table, nil
 	})
@@ -162,4 +154,47 @@ func (s *FoundationDBStore) DeleteTable(ctx context.Context, tableName string) (
 		return nil, err
 	}
 	return val.(*models.Table), nil
+}
+
+func (s *FoundationDBStore) ListTables(ctx context.Context, limit int, exclusiveStartTableName string) ([]string, string, error) {
+	// We fetch one more than the limit to determine if there are more tables.
+	// If limit is 0 (unspecified), we can pick a default, or just pass 0 if fdb supports it (usually means all).
+	// DynamoDB default is usually larger, but let's stick to user request.
+	// If the user didn't specify a limit, we might want to default to 100 or something.
+	fetchLimit := limit
+	if fetchLimit > 0 {
+		fetchLimit++
+	} else {
+		fetchLimit = 101 // Default fetch size if none provided
+	}
+
+	res, err := s.db.ReadTransact(func(rtr fdb.ReadTransaction) (interface{}, error) {
+		options := directory.ListOptions{
+			Limit: fetchLimit,
+			After: exclusiveStartTableName,
+		}
+		return s.dir.List(rtr, []string{"tables"}, options)
+	})
+	if err != nil {
+		return nil, "", err
+	}
+
+	tableNames := res.([]string)
+	lastEvaluatedTableName := ""
+
+	if limit > 0 && len(tableNames) > limit {
+		// We have more results than requested
+		lastEvaluatedTableName = tableNames[limit-1]
+		tableNames = tableNames[:limit]
+	} else if len(tableNames) > 0 {
+		// If we didn't hit the limit (or no limit was set but we fetched default),
+		// we check if we need pagination.
+		// If fetchLimit was set to 101 (default) and we got 101, then we have a LEK.
+		if limit == 0 && len(tableNames) == 101 {
+			lastEvaluatedTableName = tableNames[100-1] // The 100th item is the last one we return
+			tableNames = tableNames[:100]
+		}
+	}
+
+	return tableNames, lastEvaluatedTableName, nil
 }

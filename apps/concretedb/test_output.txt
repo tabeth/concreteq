@@ -1,0 +1,37 @@
+2025/12/23 22:12:12 Started integration fdbserver on port 4691 with pid 263199
+2025/12/23 22:12:17 FDB initialized successfully for integration tests
+=== RUN   TestIntegration_TableLifecycle
+Checking FoundationDB cluster availability...
+FoundationDB cluster is available. Proceeding with tests.
+Creating FDB store.
+=== RUN   TestIntegration_TableLifecycle/CreateTable
+Creating table : integ-test-table
+    integration_test.go:157: Expected TableStatus ACTIVE, got CREATING
+=== RUN   TestIntegration_TableLifecycle/ListTables
+=== RUN   TestIntegration_TableLifecycle/DescribeTable
+=== RUN   TestIntegration_TableLifecycle/DeleteTable
+=== RUN   TestIntegration_TableLifecycle/VerifyDeletion
+    integration_test.go:243: Expected 400 after deletion, got 200
+--- FAIL: TestIntegration_TableLifecycle (0.05s)
+    --- FAIL: TestIntegration_TableLifecycle/CreateTable (0.01s)
+    --- PASS: TestIntegration_TableLifecycle/ListTables (0.00s)
+    --- PASS: TestIntegration_TableLifecycle/DescribeTable (0.00s)
+    --- PASS: TestIntegration_TableLifecycle/DeleteTable (0.01s)
+    --- FAIL: TestIntegration_TableLifecycle/VerifyDeletion (0.00s)
+FAIL
+FAIL	github.com/tabeth/concretedb	5.369s
+testing: warning: no tests to run
+PASS
+ok  	github.com/tabeth/concretedb/config	(cached) [no tests to run]
+testing: warning: no tests to run
+PASS
+ok  	github.com/tabeth/concretedb/models	(cached) [no tests to run]
+testing: warning: no tests to run
+PASS
+ok  	github.com/tabeth/concretedb/service	(cached) [no tests to run]
+2025/12/23 22:11:11 Started fdbserver on port 4690 with pid 262064
+2025/12/23 22:11:16 FDB initialized successfully
+testing: warning: no tests to run
+PASS
+ok  	github.com/tabeth/concretedb/store	(cached) [no tests to run]
+FAIL
