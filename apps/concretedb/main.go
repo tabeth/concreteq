@@ -1,38 +1,96 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"strconv"
+	"time"
 
-	"github.com/go-chi/chi/v5"
-	"github.com/go-chi/chi/v5/middleware"
+	"github.com/apple/foundationdb/bindings/go/src/fdb"
+	"github.com/tabeth/concretedb/config"
+	"github.com/tabeth/concretedb/service"
 	"github.com/tabeth/concretedb/store"
-	"github.com/tabeth/kiroku-core/libs/fdb"
 )
 
 func main() {
-	db, err := fdb.OpenDB(730)
-	if err != nil {
-		log.Fatalf("Failed to open FDB: %v", err)
+	logger := log.New(os.Stdout, "concretedb: ", log.LstdFlags|log.Lshortfile)
+
+	// 1. Load application configuration
+	cfg := config.NewConfig()
+
+	// 2. Initialize FoundationDB
+	fdb.MustAPIVersion(710)
+	var fdbConn fdb.Database
+	type fdbConnResult struct {
+		db  fdb.Database
+		err error
+	}
+	fdbChan := make(chan fdbConnResult, 1)
+	go func() {
+		db, err := fdb.OpenDefault()
+		fdbChan <- fdbConnResult{db: db, err: err}
+
+	}()
+
+	select {
+	case res := <-fdbChan:
+		if res.err != nil {
+			logger.Fatalf("Failed to connecto FoundationDB. Make sure it's up, or diagnose. Error: %v", res.err)
+		}
+		fdbConn = res.db
+		logger.Println("Successfully connected to FoundationDB.")
+
+	// Parameterize this in some configuration
+	case <-time.After(10 * time.Second):
+		logger.Fatalf("Failed to connect to FoundationDB after 10 seconds")
 	}
 
-	_, err = store.NewFDBStore(db)
-	if err != nil {
-		log.Fatalf("Failed to create store: %v", err)
-	}
+	// Note: In a real long-running server, you'd manage this connection
+	// more carefully, but for now, we don't close it.
 
-	r := chi.NewRouter()
-	r.Use(middleware.Logger)
-	r.Use(middleware.Recoverer)
+	// 3. Initialize layers, injecting dependencies
+	fdbStore := store.NewFoundationDBStore(fdbConn)
+	tableService := service.NewTableService(fdbStore)
+	apiHandler := NewDynamoDBHandler(tableService)
 
-	r.Get("/", func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("ConcreteDB is running"))
+	// 4. Configure HTTP server with a new router
+	mux := http.NewServeMux()
+
+	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprintln(w, "OK")
 	})
 
-	// TODO: Add API handlers using st
+	mux.Handle("/", apiHandler)
 
-	log.Println("Starting ConcreteDB on :8080")
-	if err := http.ListenAndServe(":8080", r); err != nil {
-		log.Fatalf("Server failed: %v", err)
+	// 5. Start the server
+	portStr := strconv.Itoa(cfg.Port)
+	addr := ":" + portStr
+
+	// Wrap our main router with the timeout middleware.
+	handlerWithTimeout := TimeoutMiddleware(mux)
+
+	server := &http.Server{
+		Addr:    addr,
+		Handler: handlerWithTimeout, // Use our new multiplexer
+
+		// ReadTimeout is the maximum duration for reading the entire
+		// request, including the body. Protects against slow clients.
+		ReadTimeout: 15 * time.Second,
+
+		// WriteTimeout is the maximum duration before timing out
+		// writes of the response.
+		WriteTimeout: 15 * time.Second,
+
+		// IdleTimeout is the maximum amount of time to wait for the
+		// next request when keep-alives are enabled.
+		IdleTimeout: 60 * time.Second,
+	}
+
+	logger.Printf("Server starting on port %s, health check available at /health", portStr)
+	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		logger.Fatalf("could not start server: %v", err)
 	}
 }
