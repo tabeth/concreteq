@@ -40,7 +40,7 @@ func (h *DynamoDBHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func writeError(w http.ResponseWriter, errType, message string, statusCode int) {
 	w.Header().Set("Content-Type", "application/x-amz-json-1.0")
 	w.WriteHeader(statusCode)
-	errResp := ErrorResponse{
+	errResp := models.ErrorResponse{
 		Type:    errType,
 		Message: message,
 	}

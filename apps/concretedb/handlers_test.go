@@ -53,7 +53,7 @@ func TestCreateTableHandler_Success(t *testing.T) {
 		t.Errorf("expected status OK; got %v", resp.Status)
 	}
 
-	var respBody CreateTableResponse
+	var respBody models.CreateTableResponse
 	if err := json.NewDecoder(resp.Body).Decode(&respBody); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
@@ -91,7 +91,7 @@ func TestCreateTableHandler_ResourceInUse(t *testing.T) {
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Errorf("expected status Bad Request; got %v", resp.Status)
 	}
-	var errBody ErrorResponse
+	var errBody models.ErrorResponse
 	json.NewDecoder(resp.Body).Decode(&errBody)
 	if errBody.Type != "ResourceInUseException" {
 		t.Errorf("expected error type ResourceInUseException, got %s", errBody.Type)
@@ -130,7 +130,7 @@ func TestDeleteTableHandler_Success(t *testing.T) {
 		t.Errorf("expected status OK; got %v", resp.Status)
 	}
 
-	var respBody DeleteTableResponse
+	var respBody models.DeleteTableResponse
 	json.NewDecoder(resp.Body).Decode(&respBody)
 	if respBody.TableDescription.TableStatus != "DELETING" {
 		t.Errorf("expected table status DELETING, got %s", respBody.TableDescription.TableStatus)

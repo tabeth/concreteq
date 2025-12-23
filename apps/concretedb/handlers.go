@@ -10,7 +10,7 @@ import (
 
 // createTableHandler handles the API logic for the CreateTable action.
 func (h *DynamoDBHandler) createTableHandler(w http.ResponseWriter, r *http.Request) {
-	var req CreateTableRequest
+	var req models.CreateTableRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, "SerializationException", "Could not decode request body.", http.StatusBadRequest)
 		return
@@ -33,7 +33,7 @@ func (h *DynamoDBHandler) createTableHandler(w http.ResponseWriter, r *http.Requ
 
 // deleteTableHandler handles the API logic for the DeleteTable action.
 func (h *DynamoDBHandler) deleteTableHandler(w http.ResponseWriter, r *http.Request) {
-	var req DeleteTableRequest
+	var req models.DeleteTableRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, "SerializationException", "Could not decode request body.", http.StatusBadRequest)
 		return
@@ -53,14 +53,14 @@ func (h *DynamoDBHandler) deleteTableHandler(w http.ResponseWriter, r *http.Requ
 
 // mapDBTableToDeleteResponse converts the internal DB model to the API response for DeleteTable.
 // This is very similar to the CreateTable mapping.
-func mapDBTableToDeleteResponse(table *models.Table) *DeleteTableResponse {
+func mapDBTableToDeleteResponse(table *models.Table) *models.DeleteTableResponse {
 	apiDesc := mapDBTableToAPIDescription(table)
-	return &DeleteTableResponse{TableDescription: apiDesc}
+	return &models.DeleteTableResponse{TableDescription: apiDesc}
 }
 
 // Helper function to avoid code duplication between create and delete responses.
-func mapDBTableToAPIDescription(table *models.Table) TableDescription {
-	apiDesc := TableDescription{
+func mapDBTableToAPIDescription(table *models.Table) models.TableDescription {
+	apiDesc := models.TableDescription{
 		TableName:        table.TableName,
 		TableStatus:      string(table.Status),
 		ItemCount:        0, // In a real system, you'd have these values
@@ -68,31 +68,31 @@ func mapDBTableToAPIDescription(table *models.Table) TableDescription {
 		CreationDateTime: float64(table.CreationDateTime.Unix()),
 	}
 	for _, ad := range table.AttributeDefinitions {
-		apiDesc.AttributeDefinitions = append(apiDesc.AttributeDefinitions, AttributeDefinition{
+		apiDesc.AttributeDefinitions = append(apiDesc.AttributeDefinitions, models.AttributeDefinition{
 			AttributeName: ad.AttributeName,
 			AttributeType: ad.AttributeType,
 		})
 	}
 	for _, kse := range table.KeySchema {
-		apiDesc.KeySchema = append(apiDesc.KeySchema, KeySchemaElement{
+		apiDesc.KeySchema = append(apiDesc.KeySchema, models.KeySchemaElement{
 			AttributeName: kse.AttributeName,
 			KeyType:       kse.KeyType,
 		})
 	}
-	apiDesc.ProvisionedThroughput = ProvisionedThroughput{
+	apiDesc.ProvisionedThroughput = models.ProvisionedThroughput{
 		ReadCapacityUnits:  table.ProvisionedThroughput.ReadCapacityUnits,
 		WriteCapacityUnits: table.ProvisionedThroughput.WriteCapacityUnits,
 	}
 	return apiDesc
 }
 
-func mapDBTableToCreateResponse(table *models.Table) *CreateTableResponse {
+func mapDBTableToCreateResponse(table *models.Table) *models.CreateTableResponse {
 	apiDesc := mapDBTableToAPIDescription(table)
-	return &CreateTableResponse{TableDescription: apiDesc}
+	return &models.CreateTableResponse{TableDescription: apiDesc}
 }
 
 // mapRequestToDBTable is responsible for converting API types to DB types.
-func mapRequestToDBTable(req *CreateTableRequest) *models.Table {
+func mapRequestToDBTable(req *models.CreateTableRequest) *models.Table {
 	dbTable := &models.Table{
 		TableName:        req.TableName,
 		Status:           models.StatusCreating,

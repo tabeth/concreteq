@@ -1,0 +1,13 @@
+# Binaries
+*.test
+*.out
+bin/
+
+# FDB
+.fdb/
+trace.*.xml
+trace.*.json
+fdb.cluster
+
+# Logs
+*.log

@@ -1,4 +1,42 @@
-package main
+package models
+
+import "time"
+
+// APIError is a custom error type that holds DynamoDB-compatible error info.
+// By placing it in its own package, we avoid import cycles.
+type APIError struct {
+	Type    string
+	Message string
+}
+
+func (e *APIError) Error() string {
+	return e.Message
+}
+
+func New(typ, msg string) *APIError {
+	return &APIError{Type: typ, Message: msg}
+}
+
+// TableStatus represents the lifecycle status of a table.
+type TableStatus string
+
+const (
+	StatusCreating TableStatus = "CREATING"
+	StatusActive   TableStatus = "ACTIVE"
+	// For now, "DELETING" won't be used since we will block on deletion when you call DeleteTable. Once things are queued this will be used.
+	StatusDeleting TableStatus = "DELETING"
+)
+
+// Table is the canonical internal representation of a table's metadata.
+// This is the struct that will be persisted in FoundationDB.
+type Table struct {
+	TableName             string
+	Status                TableStatus
+	KeySchema             []KeySchemaElement
+	AttributeDefinitions  []AttributeDefinition
+	ProvisionedThroughput ProvisionedThroughput
+	CreationDateTime      time.Time
+}
 
 // AttributeDefinition corresponds to the DynamoDB AttributeDefinition type.
 type AttributeDefinition struct {
