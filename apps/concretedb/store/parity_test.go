@@ -105,7 +105,7 @@ func TestFoundationDBStore_ConsistentRead(t *testing.T) {
 	store.PutItem(ctx, tableName, item, "", nil, nil, "")
 
 	// 2. GetItem with ConsistentRead=true
-	attrs, err := store.GetItem(ctx, tableName, map[string]models.AttributeValue{"pk": {S: &pk}}, true)
+	attrs, err := store.GetItem(ctx, tableName, map[string]models.AttributeValue{"pk": {S: &pk}}, "", nil, true)
 	if err != nil {
 		t.Fatalf("GetItem with ConsistentRead=true failed: %v", err)
 	}

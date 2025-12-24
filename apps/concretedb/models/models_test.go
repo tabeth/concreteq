@@ -14,8 +14,15 @@ func TestAPIError(t *testing.T) {
 	if err.Message != "MyMessage" {
 		t.Errorf("expected Message 'MyMessage', got '%s'", err.Message)
 	}
-	if err.Error() != "MyMessage" {
-		t.Errorf("expected Error() to return 'MyMessage', got '%s'", err.Error())
+	if err.Error() != "MyType: MyMessage" {
+		t.Errorf("expected Error() to return 'MyType: MyMessage', got '%s'", err.Error())
+	}
+}
+
+func TestAPIError_NoType(t *testing.T) {
+	err := &APIError{Message: "Just a message"}
+	if err.Error() != "Just a message" {
+		t.Errorf("expected Error() to return 'Just a message', got '%s'", err.Error())
 	}
 }
 

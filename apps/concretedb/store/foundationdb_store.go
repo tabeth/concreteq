@@ -372,17 +372,22 @@ func (s *FoundationDBStore) Query(ctx context.Context, tableName string, indexNa
 			switch skOp {
 			case "=":
 				k, _ := getSKKey(skVals[0])
-				r.Begin = fdb.FirstGreaterOrEqual(k)
-				r.End = fdb.FirstGreaterThan(k)
+				pr, _ := fdb.PrefixRange(k)
+				r.Begin = fdb.FirstGreaterOrEqual(pr.Begin)
+				r.End = fdb.FirstGreaterOrEqual(pr.End)
 			case "<":
 				k, _ := getSKKey(skVals[0])
+				// All items with index_sk < target. Since keys have suffixes, pack(target) is before any k+suffix.
 				r.End = fdb.FirstGreaterOrEqual(k)
 			case "<=":
 				k, _ := getSKKey(skVals[0])
-				r.End = fdb.FirstGreaterThan(k)
+				pr, _ := fdb.PrefixRange(k)
+				r.End = fdb.FirstGreaterOrEqual(pr.End)
 			case ">":
 				k, _ := getSKKey(skVals[0])
-				r.Begin = fdb.FirstGreaterThan(k)
+				pr, _ := fdb.PrefixRange(k)
+				// All items with index_sk > target. Start after all items with target prefix.
+				r.Begin = fdb.FirstGreaterOrEqual(pr.End)
 			case ">=":
 				k, _ := getSKKey(skVals[0])
 				r.Begin = fdb.FirstGreaterOrEqual(k)
@@ -390,8 +395,9 @@ func (s *FoundationDBStore) Query(ctx context.Context, tableName string, indexNa
 				if len(skVals) >= 2 {
 					k1, _ := getSKKey(skVals[0])
 					k2, _ := getSKKey(skVals[1])
+					pr2, _ := fdb.PrefixRange(k2)
 					r.Begin = fdb.FirstGreaterOrEqual(k1)
-					r.End = fdb.FirstGreaterThan(k2)
+					r.End = fdb.FirstGreaterOrEqual(pr2.End)
 				}
 			case "begins_with":
 				skVal := skVals[0]
@@ -504,6 +510,9 @@ func (s *FoundationDBStore) Query(ctx context.Context, tableName string, indexNa
 
 // CreateTable persists a new table's metadata within a FoundationDB transaction.
 func (s *FoundationDBStore) CreateTable(ctx context.Context, table *models.Table) error {
+	if table.TableName == "" {
+		return models.New("ValidationException", "TableName cannot be empty")
+	}
 	fmt.Println("Creating table :", table.TableName)
 	_, err := s.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
 		// Simulating instant provisioning for ConcreteDB
@@ -826,7 +835,7 @@ func (s *FoundationDBStore) putItemInternal(tr fdb.Transaction, table *models.Ta
 }
 
 // GetItem retrieves an item by key.
-func (s *FoundationDBStore) GetItem(ctx context.Context, tableName string, key map[string]models.AttributeValue, consistentRead bool) (map[string]models.AttributeValue, error) {
+func (s *FoundationDBStore) GetItem(ctx context.Context, tableName string, key map[string]models.AttributeValue, projectionExpression string, expressionAttributeNames map[string]string, consistentRead bool) (map[string]models.AttributeValue, error) {
 	val, err := s.db.ReadTransact(func(rtr fdb.ReadTransaction) (interface{}, error) {
 		// 1. Get Table Metadata
 		table, err := s.getTableInternal(rtr, tableName)
@@ -865,6 +874,12 @@ func (s *FoundationDBStore) GetItem(ctx context.Context, tableName string, key m
 	if err := json.Unmarshal(valBytes, &item); err != nil {
 		return nil, err
 	}
+
+	// 5. Apply Projection
+	if projectionExpression != "" {
+		item = s.evaluator.ProjectItem(item, projectionExpression, expressionAttributeNames)
+	}
+
 	return item, nil
 }
 
@@ -1141,11 +1156,20 @@ func (s *FoundationDBStore) updateItemInternal(tr fdb.Transaction, table *models
 		}
 	}
 
-	// 5. Apply Update Expression (Simple implementation)
+	// 5. Apply Update Expression
+	changed := make(map[string]bool)
 	if updateExpression != "" {
-		// For MVP, simplistic parsing: "SET attr = :val"
-		if err := applyUpdateExpression(item, updateExpression, exprAttrNames, exprAttrValues); err != nil {
+		c, err := applyUpdateExpression(item, updateExpression, exprAttrNames, exprAttrValues)
+		if err != nil {
 			return nil, err
+		}
+		changed = c
+	}
+
+	// 5a. Validate PK not changed
+	for _, k := range table.KeySchema {
+		if changed[k.AttributeName] {
+			return nil, fmt.Errorf("cannot update attribute %s. This is part of the key", k.AttributeName)
 		}
 	}
 
@@ -1177,7 +1201,24 @@ func (s *FoundationDBStore) updateItemInternal(tr fdb.Transaction, table *models
 	if returnValues == "ALL_NEW" {
 		return item, nil
 	}
-	// TODO: Implement UPDATED_OLD / UPDATED_NEW
+	if returnValues == "UPDATED_OLD" {
+		res := make(map[string]models.AttributeValue)
+		for k := range changed {
+			if v, ok := oldItem[k]; ok {
+				res[k] = v
+			}
+		}
+		return res, nil
+	}
+	if returnValues == "UPDATED_NEW" {
+		res := make(map[string]models.AttributeValue)
+		for k := range changed {
+			if v, ok := item[k]; ok {
+				res[k] = v
+			}
+		}
+		return res, nil
+	}
 	return nil, nil // NONE
 }
 
@@ -1249,6 +1290,9 @@ func (s *FoundationDBStore) TransactGetItems(ctx context.Context, transactItems 
 			if err != nil {
 				return nil, err
 			}
+			if req.Get.ProjectionExpression != "" {
+				item = s.evaluator.ProjectItem(item, req.Get.ProjectionExpression, req.Get.ExpressionAttributeNames)
+			}
 			responses[i] = models.ItemResponse{Item: item}
 		}
 		return responses, nil
@@ -1315,51 +1359,112 @@ func (s *FoundationDBStore) TransactWriteItems(ctx context.Context, transactItem
 	return err
 }
 
-// Simple expression parser for MVP
-func applyUpdateExpression(item map[string]models.AttributeValue, expr string, names map[string]string, values map[string]models.AttributeValue) error {
-	if len(expr) < 4 || expr[:4] != "SET " {
-		return fmt.Errorf("only SET expressions supported in MVP")
-	}
+// Simple expression parser for MVP supporting SET and REMOVE
+func applyUpdateExpression(item map[string]models.AttributeValue, expr string, names map[string]string, values map[string]models.AttributeValue) (map[string]bool, error) {
+	changed := make(map[string]bool)
+	expr = strings.TrimSpace(expr)
 
-	body := expr[4:]
-	assignments := strings.Split(body, ",")
+	// Split by major sections (SET, REMOVE)
+	sections := make(map[string]string)
+	currentSection := ""
+	var sectionWords []string
 
-	for _, assignment := range assignments {
-		assignment = strings.TrimSpace(assignment)
-		parts := strings.Split(assignment, "=")
-		if len(parts) != 2 {
-			return fmt.Errorf("invalid assignment: %s", assignment)
-		}
-
-		lhs := strings.TrimSpace(parts[0])
-		rhs := strings.TrimSpace(parts[1])
-
-		// Resolve LHS (Attribute Name)
-		realName := lhs
-		if strings.HasPrefix(lhs, "#") {
-			if name, ok := names[lhs]; ok {
-				realName = name
-			} else {
-				return fmt.Errorf("missing expression attribute name: %s", lhs)
+	words := strings.Fields(expr)
+	for _, word := range words {
+		upper := strings.ToUpper(word)
+		if upper == "SET" || upper == "REMOVE" || upper == "ADD" || upper == "DELETE" {
+			if currentSection != "" {
+				sections[currentSection] = strings.Join(sectionWords, " ")
 			}
-		}
-
-		// Resolve RHS (Value)
-		var val models.AttributeValue
-		if strings.HasPrefix(rhs, ":") {
-			if v, ok := values[rhs]; ok {
-				val = v
-			} else {
-				return fmt.Errorf("missing expression attribute value: %s", rhs)
-			}
+			currentSection = upper
+			sectionWords = nil
 		} else {
-			return fmt.Errorf("only literal values with ':' prefix supported in MVP")
+			sectionWords = append(sectionWords, word)
 		}
-
-		item[realName] = val
+	}
+	if currentSection != "" {
+		sections[currentSection] = strings.Join(sectionWords, " ")
 	}
 
-	return nil
+	// If no section keyword, assume SET for backward compatibility with very simple expressions
+	if currentSection == "" && expr != "" {
+		sections["SET"] = expr
+	}
+
+	// Helpers
+	resolve := func(name string) (string, error) {
+		if strings.HasPrefix(name, "#") {
+			if n, ok := names[name]; ok {
+				return n, nil
+			}
+			return "", fmt.Errorf("missing expression attribute name: %s", name)
+		}
+		return name, nil
+	}
+
+	// Process SET
+	if body, ok := sections["SET"]; ok {
+		assignments := strings.Split(body, ",")
+		for _, assignment := range assignments {
+			assignment = strings.TrimSpace(assignment)
+			if assignment == "" {
+				continue
+			}
+			parts := strings.Split(assignment, "=")
+			if len(parts) != 2 {
+				return nil, fmt.Errorf("invalid assignment: %s", assignment)
+			}
+
+			lhs := strings.TrimSpace(parts[0])
+			rhs := strings.TrimSpace(parts[1])
+
+			realName, err := resolve(lhs)
+			if err != nil {
+				return nil, err
+			}
+
+			// Resolve RHS (Value)
+			var val models.AttributeValue
+			if strings.HasPrefix(rhs, ":") {
+				if v, ok := values[rhs]; ok {
+					val = v
+				} else {
+					return nil, fmt.Errorf("missing expression attribute value: %s", rhs)
+				}
+			} else {
+				return nil, fmt.Errorf("only literal values with ':' prefix supported in MVP")
+			}
+
+			item[realName] = val
+			changed[realName] = true
+		}
+	}
+
+	// Process REMOVE
+	if body, ok := sections["REMOVE"]; ok {
+		attrs := strings.Split(body, ",")
+		for _, a := range attrs {
+			name := strings.TrimSpace(a)
+			if name == "" {
+				continue
+			}
+			realName, err := resolve(name)
+			if err != nil {
+				return nil, err
+			}
+			delete(item, realName)
+			changed[realName] = true
+		}
+	}
+
+	if _, ok := sections["ADD"]; ok {
+		return nil, fmt.Errorf("ADD expression not yet supported in MVP")
+	}
+	if _, ok := sections["DELETE"]; ok {
+		return nil, fmt.Errorf("DELETE expression not yet supported in MVP")
+	}
+
+	return changed, nil
 }
 
 // BatchGetItem retrieves multiple items from multiple tables.
@@ -1413,6 +1518,9 @@ func (s *FoundationDBStore) BatchGetItem(ctx context.Context, requestItems map[s
 				var item map[string]models.AttributeValue
 				if err := json.Unmarshal(valBytes, &item); err != nil {
 					return nil, err
+				}
+				if ka, ok := requestItems[f.tableName]; ok && ka.ProjectionExpression != "" {
+					item = s.evaluator.ProjectItem(item, ka.ProjectionExpression, ka.ExpressionAttributeNames)
 				}
 				output[f.tableName] = append(output[f.tableName], item)
 			}
@@ -1560,8 +1668,14 @@ func (s *FoundationDBStore) ListStreams(ctx context.Context, tableName string, l
 	if exclusiveStartStreamArn != "" {
 		// Format: arn:aws:dynamodb:local:000000000000:table/TableName/stream/Timestamp
 		parts := strings.Split(exclusiveStartStreamArn, "/")
-		if len(parts) >= 2 && strings.Contains(parts[len(parts)-3], "table") {
-			startTableName = parts[len(parts)-2]
+		if len(parts) >= 2 {
+			// Find the table part. Usually it's in the part that contains ":table"
+			for i, p := range parts {
+				if (p == "table" || strings.Contains(p, ":table")) && i+1 < len(parts) {
+					startTableName = parts[i+1]
+					break
+				}
+			}
 		}
 	}
 	// If tableName filter is provided, we just check that one table.

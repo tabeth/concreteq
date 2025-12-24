@@ -226,14 +226,10 @@ func toFDBElement(v models.AttributeValue) (tuple.TupleElement, error) {
 		return *v.S, nil
 	}
 	if v.N != nil {
-		// Store as string or number? FDB tuple supports numbers.
-		// DynamoDB numbers are strings.
-		// Ideally convert to float/int for sorting?
-		// For MVP, store as string to match DynamoDB N type raw storage, but sorting will be lexicographical string sorting.
-		// DynamoDB sorts numbers numerically.
-		// We should try to parse float.
 		return *v.N, nil
 	}
-	// ... other types ...
+	if v.B != nil {
+		return v.B, nil
+	}
 	return nil, fmt.Errorf("unsupported index key type")
 }

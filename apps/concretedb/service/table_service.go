@@ -161,7 +161,16 @@ func (s *TableService) PutItem(ctx context.Context, request *models.PutItemReque
 		}
 		return nil, models.New("InternalFailure", fmt.Sprintf("failed to put item: %v", err))
 	}
-	return &models.PutItemResponse{Attributes: attributes}, nil
+	resp := &models.PutItemResponse{Attributes: attributes}
+	if request.ReturnConsumedCapacity != "" && request.ReturnConsumedCapacity != "NONE" {
+		size := EstimateItemSize(request.Item)
+		units := CalculateWriteCapacity(size)
+		resp.ConsumedCapacity = BuildConsumedCapacity(request.TableName, units, false)
+	}
+	if request.ReturnItemCollectionMetrics != "" && request.ReturnItemCollectionMetrics != "NONE" {
+		resp.ItemCollectionMetrics = BuildItemCollectionMetrics(request.TableName, request.Item)
+	}
+	return resp, nil
 }
 
 // GetItem retrieves an item by key.
@@ -173,14 +182,20 @@ func (s *TableService) GetItem(ctx context.Context, request *models.GetItemReque
 		return nil, models.New("ValidationException", "Key cannot be empty")
 	}
 
-	item, err := s.store.GetItem(ctx, request.TableName, request.Key, request.ConsistentRead)
+	item, err := s.store.GetItem(ctx, request.TableName, request.Key, request.ProjectionExpression, request.ExpressionAttributeNames, request.ConsistentRead)
 	if err != nil {
 		return nil, models.New("InternalFailure", fmt.Sprintf("failed to get item: %v", err))
 	}
 	// Note: Item not found just returns nil, nil in DynamoDB GetItem (with empty Item in response),
 	// unless we specifically want to distinguish. The store returns nil, nil.
 	// The API handler will map this to an empty Item field if nil.
-	return &models.GetItemResponse{Item: item}, nil
+	resp := &models.GetItemResponse{Item: item}
+	if request.ReturnConsumedCapacity != "" && request.ReturnConsumedCapacity != "NONE" {
+		size := EstimateItemSize(item)
+		units := CalculateReadCapacity(size, request.ConsistentRead)
+		resp.ConsumedCapacity = BuildConsumedCapacity(request.TableName, units, true)
+	}
+	return resp, nil
 }
 
 // DeleteItem deletes an item by key.
@@ -200,7 +215,15 @@ func (s *TableService) DeleteItem(ctx context.Context, request *models.DeleteIte
 		}
 		return nil, models.New("InternalFailure", fmt.Sprintf("failed to delete item: %v", err))
 	}
-	return &models.DeleteItemResponse{Attributes: attributes}, nil
+	resp := &models.DeleteItemResponse{Attributes: attributes}
+	if request.ReturnConsumedCapacity != "" && request.ReturnConsumedCapacity != "NONE" {
+		// Minimum 1 WCU for delete
+		resp.ConsumedCapacity = BuildConsumedCapacity(request.TableName, 1.0, false)
+	}
+	if request.ReturnItemCollectionMetrics != "" && request.ReturnItemCollectionMetrics != "NONE" {
+		resp.ItemCollectionMetrics = BuildItemCollectionMetrics(request.TableName, request.Key)
+	}
+	return resp, nil
 }
 
 // validateTable performs business rule validation on the internal db model. In general all table validation
@@ -234,7 +257,17 @@ func (s *TableService) UpdateItem(ctx context.Context, request *models.UpdateIte
 		return nil, models.New("InternalFailure", fmt.Sprintf("failed to update item: %v", err))
 	}
 
-	return &models.UpdateItemResponse{Attributes: attributes}, nil
+	resp := &models.UpdateItemResponse{Attributes: attributes}
+	if request.ReturnConsumedCapacity != "" && request.ReturnConsumedCapacity != "NONE" {
+		// UpdateItem consumes WCU based on the new item size.
+		// Since we don't have the final item here, we approximate with 1.0 or based on Attributes if ALL_NEW.
+		// For now 1.0 as approximation.
+		resp.ConsumedCapacity = BuildConsumedCapacity(request.TableName, 1.0, false)
+	}
+	if request.ReturnItemCollectionMetrics != "" && request.ReturnItemCollectionMetrics != "NONE" {
+		resp.ItemCollectionMetrics = BuildItemCollectionMetrics(request.TableName, request.Key)
+	}
+	return resp, nil
 }
 
 // Scan retrieves items from the table.
@@ -252,12 +285,23 @@ func (s *TableService) Scan(ctx context.Context, input *models.ScanRequest) (*mo
 		return nil, models.New("InternalFailure", fmt.Sprintf("failed to scan table: %v", err))
 	}
 
-	return &models.ScanResponse{
+	resp := &models.ScanResponse{
 		Items:            items,
 		Count:            int32(len(items)),
 		ScannedCount:     int32(len(items)), // For now same as Count
 		LastEvaluatedKey: lastKey,
-	}, nil
+	}
+
+	if input.ReturnConsumedCapacity != "" && input.ReturnConsumedCapacity != "NONE" {
+		totalSize := 0
+		for _, itm := range items {
+			totalSize += EstimateItemSize(itm)
+		}
+		units := CalculateReadCapacity(totalSize, input.ConsistentRead)
+		resp.ConsumedCapacity = BuildConsumedCapacity(input.TableName, units, true)
+	}
+
+	return resp, nil
 }
 
 // Query retrieves items based on key conditions (partition key equality).
@@ -280,12 +324,23 @@ func (s *TableService) Query(ctx context.Context, input *models.QueryRequest) (*
 
 	val := int32(len(items))
 
-	return &models.QueryResponse{
+	resp := &models.QueryResponse{
 		Items:            items,
 		Count:            val,
 		ScannedCount:     val,
 		LastEvaluatedKey: lastKey,
-	}, nil
+	}
+
+	if input.ReturnConsumedCapacity != "" && input.ReturnConsumedCapacity != "NONE" {
+		totalSize := 0
+		for _, itm := range items {
+			totalSize += EstimateItemSize(itm)
+		}
+		units := CalculateReadCapacity(totalSize, input.ConsistentRead)
+		resp.ConsumedCapacity = BuildConsumedCapacity(input.TableName, units, true)
+	}
+
+	return resp, nil
 }
 
 // BatchGetItem retrieves items from multiple tables.
@@ -302,10 +357,28 @@ func (s *TableService) BatchGetItem(ctx context.Context, input *models.BatchGetI
 		return nil, models.New("InternalFailure", fmt.Sprintf("failed to batch get items: %v", err))
 	}
 
-	return &models.BatchGetItemResponse{
+	resp := &models.BatchGetItemResponse{
 		Responses:       responses,
 		UnprocessedKeys: unprocessed,
-	}, nil
+	}
+
+	if input.ReturnConsumedCapacity != "" && input.ReturnConsumedCapacity != "NONE" {
+		for tableName, items := range responses {
+			totalSize := 0
+			for _, itm := range items {
+				totalSize += EstimateItemSize(itm)
+			}
+			// BatchGetItem consistency is per-table in RequestItems
+			consistent := false
+			if tableReq, ok := input.RequestItems[tableName]; ok {
+				consistent = tableReq.ConsistentRead
+			}
+			units := CalculateReadCapacity(totalSize, consistent)
+			resp.ConsumedCapacity = append(resp.ConsumedCapacity, *BuildConsumedCapacity(tableName, units, true))
+		}
+	}
+
+	return resp, nil
 }
 
 // BatchWriteItem writes/deletes items in multiple tables.
@@ -331,9 +404,41 @@ func (s *TableService) BatchWriteItem(ctx context.Context, input *models.BatchWr
 		return nil, models.New("InternalFailure", fmt.Sprintf("failed to batch write items: %v", err))
 	}
 
-	return &models.BatchWriteItemResponse{
+	resp := &models.BatchWriteItemResponse{
 		UnprocessedItems: unprocessed,
-	}, nil
+	}
+
+	if input.ReturnConsumedCapacity != "" && input.ReturnConsumedCapacity != "NONE" {
+		for tableName, reqs := range input.RequestItems {
+			totalSize := 0
+			for _, req := range reqs {
+				if req.PutRequest != nil {
+					totalSize += EstimateItemSize(req.PutRequest.Item)
+				} else {
+					totalSize += 1024 // Approximate delete as 1KB
+				}
+			}
+			units := CalculateWriteCapacity(totalSize)
+			resp.ConsumedCapacity = append(resp.ConsumedCapacity, *BuildConsumedCapacity(tableName, units, false))
+		}
+	}
+
+	if input.ReturnItemCollectionMetrics != "" && input.ReturnItemCollectionMetrics != "NONE" {
+		resp.ItemCollectionMetrics = make(map[string][]models.ItemCollectionMetrics)
+		for tableName, reqs := range input.RequestItems {
+			for _, req := range reqs {
+				var key map[string]models.AttributeValue
+				if req.PutRequest != nil {
+					key = req.PutRequest.Item
+				} else {
+					key = req.DeleteRequest.Key
+				}
+				resp.ItemCollectionMetrics[tableName] = append(resp.ItemCollectionMetrics[tableName], *BuildItemCollectionMetrics(tableName, key))
+			}
+		}
+	}
+
+	return resp, nil
 }
 
 func (s *TableService) TransactGetItems(ctx context.Context, input *models.TransactGetItemsRequest) (*models.TransactGetItemsResponse, error) {
@@ -350,9 +455,26 @@ func (s *TableService) TransactGetItems(ctx context.Context, input *models.Trans
 		return nil, err
 	}
 
-	return &models.TransactGetItemsResponse{
+	resp := &models.TransactGetItemsResponse{
 		Responses: responses,
-	}, nil
+	}
+
+	if input.ReturnConsumedCapacity != "" && input.ReturnConsumedCapacity != "NONE" {
+		tableUnits := make(map[string]float64)
+		for i, r := range responses {
+			if r.Item != nil {
+				size := EstimateItemSize(r.Item)
+				consistent := input.TransactItems[i].Get.ConsistentRead
+				units := CalculateReadCapacity(size, consistent)
+				tableUnits[input.TransactItems[i].Get.TableName] += units
+			}
+		}
+		for tableName, units := range tableUnits {
+			resp.ConsumedCapacity = append(resp.ConsumedCapacity, *BuildConsumedCapacity(tableName, units, true))
+		}
+	}
+
+	return resp, nil
 }
 
 func (s *TableService) TransactWriteItems(ctx context.Context, input *models.TransactWriteItemsRequest) (*models.TransactWriteItemsResponse, error) {
@@ -373,7 +495,56 @@ func (s *TableService) TransactWriteItems(ctx context.Context, input *models.Tra
 		return nil, err
 	}
 
-	return &models.TransactWriteItemsResponse{}, nil
+	resp := &models.TransactWriteItemsResponse{}
+
+	if input.ReturnConsumedCapacity != "" && input.ReturnConsumedCapacity != "NONE" {
+		tableUnits := make(map[string]float64)
+		for _, item := range input.TransactItems {
+			var tableName string
+			var size int
+			if item.Put != nil {
+				tableName = item.Put.TableName
+				size = EstimateItemSize(item.Put.Item)
+			} else if item.Delete != nil {
+				tableName = item.Delete.TableName
+				size = 1024
+			} else if item.Update != nil {
+				tableName = item.Update.TableName
+				size = 1024
+			} else if item.ConditionCheck != nil {
+				tableName = item.ConditionCheck.TableName
+				size = 1024
+			}
+			tableUnits[tableName] += CalculateWriteCapacity(size)
+		}
+		for tableName, units := range tableUnits {
+			resp.ConsumedCapacity = append(resp.ConsumedCapacity, *BuildConsumedCapacity(tableName, units, false))
+		}
+	}
+
+	if input.ReturnItemCollectionMetrics != "" && input.ReturnItemCollectionMetrics != "NONE" {
+		resp.ItemCollectionMetrics = make(map[string][]models.ItemCollectionMetrics)
+		for _, item := range input.TransactItems {
+			var tableName string
+			var key map[string]models.AttributeValue
+			if item.Put != nil {
+				tableName = item.Put.TableName
+				key = item.Put.Item
+			} else if item.Delete != nil {
+				tableName = item.Delete.TableName
+				key = item.Delete.Key
+			} else if item.Update != nil {
+				tableName = item.Update.TableName
+				key = item.Update.Key
+			} else if item.ConditionCheck != nil {
+				tableName = item.ConditionCheck.TableName
+				key = item.ConditionCheck.Key
+			}
+			resp.ItemCollectionMetrics[tableName] = append(resp.ItemCollectionMetrics[tableName], *BuildItemCollectionMetrics(tableName, key))
+		}
+	}
+
+	return resp, nil
 }
 
 // Stream Operations

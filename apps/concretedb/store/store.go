@@ -37,7 +37,7 @@ type Store interface {
 
 	// GetItem retrieves an item from the table by its key.
 	// It returns nil, nil if the item is not found.
-	GetItem(ctx context.Context, tableName string, key map[string]models.AttributeValue, consistentRead bool) (map[string]models.AttributeValue, error)
+	GetItem(ctx context.Context, tableName string, key map[string]models.AttributeValue, projectionExpression string, expressionAttributeNames map[string]string, consistentRead bool) (map[string]models.AttributeValue, error)
 
 	// DeleteItem deletes an item from the table by its key.
 	// It is idempotent and succeeds even if the item does not exist.

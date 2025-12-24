@@ -10,6 +10,9 @@ type APIError struct {
 }
 
 func (e *APIError) Error() string {
+	if e.Type != "" {
+		return e.Type + ": " + e.Message
+	}
 	return e.Message
 }
 
@@ -194,62 +197,102 @@ type AttributeValue struct {
 	BOOL *bool `json:"BOOL,omitempty"`
 }
 
+// Capacity represents the capacity units consumed by an operation.
+type Capacity struct {
+	ReadCapacityUnits  float64 `json:"ReadCapacityUnits,omitempty"`
+	WriteCapacityUnits float64 `json:"WriteCapacityUnits,omitempty"`
+	CapacityUnits      float64 `json:"CapacityUnits,omitempty"`
+}
+
+// ConsumedCapacity represents the capacity consumed by an operation on a table and its indexes.
+type ConsumedCapacity struct {
+	TableName              string              `json:"TableName,omitempty"`
+	CapacityUnits          float64             `json:"CapacityUnits,omitempty"`
+	ReadCapacityUnits      float64             `json:"ReadCapacityUnits,omitempty"`
+	WriteCapacityUnits     float64             `json:"WriteCapacityUnits,omitempty"`
+	Table                  *Capacity           `json:"Table,omitempty"`
+	LocalSecondaryIndexes  map[string]Capacity `json:"LocalSecondaryIndexes,omitempty"`
+	GlobalSecondaryIndexes map[string]Capacity `json:"GlobalSecondaryIndexes,omitempty"`
+}
+
+// ItemCollectionMetrics represents metrics for item collections.
+type ItemCollectionMetrics struct {
+	ItemCollectionKey   map[string]AttributeValue `json:"ItemCollectionKey,omitempty"`
+	SizeEstimateRangeGB []float64                 `json:"SizeEstimateRangeGB,omitempty"`
+}
+
 // PutItemRequest mirrors the JSON request body for the PutItem action.
 type PutItemRequest struct {
-	TableName                 string                    `json:"TableName"`
-	Item                      map[string]AttributeValue `json:"Item"`
-	ConditionExpression       string                    `json:"ConditionExpression,omitempty"`
-	ExpressionAttributeNames  map[string]string         `json:"ExpressionAttributeNames,omitempty"`
-	ExpressionAttributeValues map[string]AttributeValue `json:"ExpressionAttributeValues,omitempty"`
-	ReturnValues              string                    `json:"ReturnValues,omitempty"` // NONE, ALL_OLD
+	TableName                   string                    `json:"TableName"`
+	Item                        map[string]AttributeValue `json:"Item"`
+	ConditionExpression         string                    `json:"ConditionExpression,omitempty"`
+	ExpressionAttributeNames    map[string]string         `json:"ExpressionAttributeNames,omitempty"`
+	ExpressionAttributeValues   map[string]AttributeValue `json:"ExpressionAttributeValues,omitempty"`
+	ReturnValues                string                    `json:"ReturnValues,omitempty"` // NONE, ALL_OLD
+	ReturnConsumedCapacity      string                    `json:"ReturnConsumedCapacity,omitempty"`
+	ReturnItemCollectionMetrics string                    `json:"ReturnItemCollectionMetrics,omitempty"`
 }
 
 // PutItemResponse mirrors the JSON response for the PutItem action.
 type PutItemResponse struct {
-	Attributes map[string]AttributeValue `json:"Attributes,omitempty"`
+	Attributes            map[string]AttributeValue `json:"Attributes,omitempty"`
+	ConsumedCapacity      *ConsumedCapacity         `json:"ConsumedCapacity,omitempty"`
+	ItemCollectionMetrics *ItemCollectionMetrics    `json:"ItemCollectionMetrics,omitempty"`
 }
 
 // GetItemRequest mirrors the JSON request body for the GetItem action.
 type GetItemRequest struct {
-	TableName      string                    `json:"TableName"`
-	Key            map[string]AttributeValue `json:"Key"`
-	ConsistentRead bool                      `json:"ConsistentRead,omitempty"`
+	TableName                string                    `json:"TableName"`
+	Key                      map[string]AttributeValue `json:"Key"`
+	ConsistentRead           bool                      `json:"ConsistentRead,omitempty"`
+	ProjectionExpression     string                    `json:"ProjectionExpression,omitempty"`
+	ExpressionAttributeNames map[string]string         `json:"ExpressionAttributeNames,omitempty"`
+	ReturnConsumedCapacity   string                    `json:"ReturnConsumedCapacity,omitempty"`
 }
 
 // GetItemResponse mirrors the JSON response for the GetItem action.
 type GetItemResponse struct {
-	Item map[string]AttributeValue `json:"Item,omitempty"`
+	Item             map[string]AttributeValue `json:"Item,omitempty"`
+	ConsumedCapacity *ConsumedCapacity         `json:"ConsumedCapacity,omitempty"`
 }
 
 // DeleteItemRequest mirrors the JSON request body for the DeleteItem action.
 type DeleteItemRequest struct {
-	TableName                 string                    `json:"TableName"`
-	Key                       map[string]AttributeValue `json:"Key"`
-	ConditionExpression       string                    `json:"ConditionExpression,omitempty"`
-	ExpressionAttributeNames  map[string]string         `json:"ExpressionAttributeNames,omitempty"`
-	ExpressionAttributeValues map[string]AttributeValue `json:"ExpressionAttributeValues,omitempty"`
-	ReturnValues              string                    `json:"ReturnValues,omitempty"` // NONE, ALL_OLD
+	TableName                   string                    `json:"TableName"`
+	Key                         map[string]AttributeValue `json:"Key"`
+	ConditionExpression         string                    `json:"ConditionExpression,omitempty"`
+	ExpressionAttributeNames    map[string]string         `json:"ExpressionAttributeNames,omitempty"`
+	ExpressionAttributeValues   map[string]AttributeValue `json:"ExpressionAttributeValues,omitempty"`
+	ReturnValues                string                    `json:"ReturnValues,omitempty"` // NONE, ALL_OLD
+	ReturnConsumedCapacity      string                    `json:"ReturnConsumedCapacity,omitempty"`
+	ReturnItemCollectionMetrics string                    `json:"ReturnItemCollectionMetrics,omitempty"`
 }
 
 // DeleteItemResponse mirrors the JSON response for the DeleteItem action.
 type DeleteItemResponse struct {
-	Attributes map[string]AttributeValue `json:"Attributes,omitempty"`
+	Attributes            map[string]AttributeValue `json:"Attributes,omitempty"`
+	ConsumedCapacity      *ConsumedCapacity         `json:"ConsumedCapacity,omitempty"`
+	ItemCollectionMetrics *ItemCollectionMetrics    `json:"ItemCollectionMetrics,omitempty"`
 }
 
 // UpdateItemRequest mirrors the JSON request body for the UpdateItem action.
 type UpdateItemRequest struct {
-	TableName                 string                    `json:"TableName"`
-	Key                       map[string]AttributeValue `json:"Key"`
-	UpdateExpression          string                    `json:"UpdateExpression"`
-	ConditionExpression       string                    `json:"ConditionExpression,omitempty"`
-	ExpressionAttributeNames  map[string]string         `json:"ExpressionAttributeNames,omitempty"`
-	ExpressionAttributeValues map[string]AttributeValue `json:"ExpressionAttributeValues,omitempty"`
-	ReturnValues              string                    `json:"ReturnValues,omitempty"` // NONE, ALL_OLD, UPDATED_OLD, ALL_NEW, UPDATED_NEW
+	TableName                   string                    `json:"TableName"`
+	Key                         map[string]AttributeValue `json:"Key"`
+	UpdateExpression            string                    `json:"UpdateExpression"`
+	ConditionExpression         string                    `json:"ConditionExpression,omitempty"`
+	ExpressionAttributeNames    map[string]string         `json:"ExpressionAttributeNames,omitempty"`
+	ExpressionAttributeValues   map[string]AttributeValue `json:"ExpressionAttributeValues,omitempty"`
+	ReturnValues                string                    `json:"ReturnValues,omitempty"` // NONE, ALL_OLD, UPDATED_OLD, ALL_NEW, UPDATED_NEW
+	ReturnConsumedCapacity      string                    `json:"ReturnConsumedCapacity,omitempty"`
+	ReturnItemCollectionMetrics string                    `json:"ReturnItemCollectionMetrics,omitempty"`
 }
 
 // UpdateItemResponse mirrors the JSON response for the UpdateItem action.
 type UpdateItemResponse struct {
-	Attributes map[string]AttributeValue `json:"Attributes,omitempty"`
+	Attributes            map[string]AttributeValue `json:"Attributes,omitempty"`
+	ConsumedCapacity      *ConsumedCapacity         `json:"ConsumedCapacity,omitempty"`
+	ItemCollectionMetrics *ItemCollectionMetrics    `json:"ItemCollectionMetrics,omitempty"`
 }
 
 // ScanRequest mirrors the JSON request body for the Scan action.
@@ -262,6 +305,7 @@ type ScanRequest struct {
 	ExpressionAttributeNames  map[string]string         `json:"ExpressionAttributeNames,omitempty"`
 	ExpressionAttributeValues map[string]AttributeValue `json:"ExpressionAttributeValues,omitempty"`
 	ConsistentRead            bool                      `json:"ConsistentRead,omitempty"`
+	ReturnConsumedCapacity    string                    `json:"ReturnConsumedCapacity,omitempty"`
 }
 
 // ScanResponse mirrors the JSON response for the Scan action.
@@ -270,6 +314,7 @@ type ScanResponse struct {
 	Count            int32                       `json:"Count"`
 	ScannedCount     int32                       `json:"ScannedCount"`
 	LastEvaluatedKey map[string]AttributeValue   `json:"LastEvaluatedKey,omitempty"`
+	ConsumedCapacity *ConsumedCapacity           `json:"ConsumedCapacity,omitempty"`
 }
 
 // QueryRequest mirrors the JSON request body for the Query action.
@@ -285,6 +330,7 @@ type QueryRequest struct {
 	ExclusiveStartKey         map[string]AttributeValue `json:"ExclusiveStartKey,omitempty"`
 	ScanIndexForward          *bool                     `json:"ScanIndexForward,omitempty"`
 	ConsistentRead            bool                      `json:"ConsistentRead,omitempty"`
+	ReturnConsumedCapacity    string                    `json:"ReturnConsumedCapacity,omitempty"`
 }
 
 // QueryResponse mirrors the JSON response for the Query action.
@@ -293,6 +339,7 @@ type QueryResponse struct {
 	Count            int32                       `json:"Count"`
 	ScannedCount     int32                       `json:"ScannedCount"`
 	LastEvaluatedKey map[string]AttributeValue   `json:"LastEvaluatedKey,omitempty"`
+	ConsumedCapacity *ConsumedCapacity           `json:"ConsumedCapacity,omitempty"`
 }
 
 // KeysAndAttributes represents the keys and attributes to get for a table in BatchGetItem.
@@ -312,8 +359,9 @@ type BatchGetItemRequest struct {
 
 // BatchGetItemResponse mirrors the JSON response for the BatchGetItem action.
 type BatchGetItemResponse struct {
-	Responses       map[string][]map[string]AttributeValue `json:"Responses,omitempty"`
-	UnprocessedKeys map[string]KeysAndAttributes           `json:"UnprocessedKeys,omitempty"`
+	Responses        map[string][]map[string]AttributeValue `json:"Responses,omitempty"`
+	UnprocessedKeys  map[string]KeysAndAttributes           `json:"UnprocessedKeys,omitempty"`
+	ConsumedCapacity []ConsumedCapacity                     `json:"ConsumedCapacity,omitempty"`
 }
 
 // WriteRequest represents a single write request (Put or Delete) in BatchWriteItem.
@@ -340,8 +388,9 @@ type BatchWriteItemRequest struct {
 
 // BatchWriteItemResponse mirrors the JSON response for the BatchWriteItem action.
 type BatchWriteItemResponse struct {
-	UnprocessedItems      map[string][]WriteRequest `json:"UnprocessedItems,omitempty"`
-	ItemCollectionMetrics map[string][]interface{}  `json:"ItemCollectionMetrics,omitempty"` // Placeholder
+	UnprocessedItems      map[string][]WriteRequest          `json:"UnprocessedItems,omitempty"`
+	ItemCollectionMetrics map[string][]ItemCollectionMetrics `json:"ItemCollectionMetrics,omitempty"`
+	ConsumedCapacity      []ConsumedCapacity                 `json:"ConsumedCapacity,omitempty"`
 }
 
 // TransactGetItem represents a single get item request within a transaction.
@@ -362,8 +411,8 @@ type ItemResponse struct {
 
 // TransactGetItemsResponse mirrors the JSON response for the TransactGetItems action.
 type TransactGetItemsResponse struct {
-	Responses        []ItemResponse `json:"Responses,omitempty"`
-	ConsumedCapacity []interface{}  `json:"ConsumedCapacity,omitempty"`
+	Responses        []ItemResponse     `json:"Responses,omitempty"`
+	ConsumedCapacity []ConsumedCapacity `json:"ConsumedCapacity,omitempty"`
 }
 
 // ConditionCheck represents a check that must pass for the transaction to succeed.
@@ -395,6 +444,6 @@ type TransactWriteItemsRequest struct {
 
 // TransactWriteItemsResponse mirrors the JSON response for the TransactWriteItems action.
 type TransactWriteItemsResponse struct {
-	ConsumedCapacity      []interface{}            `json:"ConsumedCapacity,omitempty"`
-	ItemCollectionMetrics map[string][]interface{} `json:"ItemCollectionMetrics,omitempty"`
+	ConsumedCapacity      []ConsumedCapacity                 `json:"ConsumedCapacity,omitempty"`
+	ItemCollectionMetrics map[string][]ItemCollectionMetrics `json:"ItemCollectionMetrics,omitempty"`
 }
