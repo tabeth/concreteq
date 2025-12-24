@@ -156,18 +156,21 @@ type AttributeValue struct {
 
 // PutItemRequest mirrors the JSON request body for the PutItem action.
 type PutItemRequest struct {
-	TableName string                    `json:"TableName"`
-	Item      map[string]AttributeValue `json:"Item"`
+	TableName    string                    `json:"TableName"`
+	Item         map[string]AttributeValue `json:"Item"`
+	ReturnValues string                    `json:"ReturnValues,omitempty"` // NONE, ALL_OLD
 }
 
 // PutItemResponse mirrors the JSON response for the PutItem action.
-// For MVP, this is empty as we don't support ReturnValues yet.
-type PutItemResponse struct{}
+type PutItemResponse struct {
+	Attributes map[string]AttributeValue `json:"Attributes,omitempty"`
+}
 
 // GetItemRequest mirrors the JSON request body for the GetItem action.
 type GetItemRequest struct {
-	TableName string                    `json:"TableName"`
-	Key       map[string]AttributeValue `json:"Key"`
+	TableName      string                    `json:"TableName"`
+	Key            map[string]AttributeValue `json:"Key"`
+	ConsistentRead bool                      `json:"ConsistentRead,omitempty"`
 }
 
 // GetItemResponse mirrors the JSON response for the GetItem action.
@@ -177,9 +180,70 @@ type GetItemResponse struct {
 
 // DeleteItemRequest mirrors the JSON request body for the DeleteItem action.
 type DeleteItemRequest struct {
-	TableName string                    `json:"TableName"`
-	Key       map[string]AttributeValue `json:"Key"`
+	TableName    string                    `json:"TableName"`
+	Key          map[string]AttributeValue `json:"Key"`
+	ReturnValues string                    `json:"ReturnValues,omitempty"` // NONE, ALL_OLD
 }
 
 // DeleteItemResponse mirrors the JSON response for the DeleteItem action.
-type DeleteItemResponse struct{}
+type DeleteItemResponse struct {
+	Attributes map[string]AttributeValue `json:"Attributes,omitempty"`
+}
+
+// UpdateItemRequest mirrors the JSON request body for the UpdateItem action.
+type UpdateItemRequest struct {
+	TableName                 string                    `json:"TableName"`
+	Key                       map[string]AttributeValue `json:"Key"`
+	UpdateExpression          string                    `json:"UpdateExpression"`
+	ExpressionAttributeNames  map[string]string         `json:"ExpressionAttributeNames,omitempty"`
+	ExpressionAttributeValues map[string]AttributeValue `json:"ExpressionAttributeValues,omitempty"`
+	ReturnValues              string                    `json:"ReturnValues,omitempty"` // NONE, ALL_OLD, UPDATED_OLD, ALL_NEW, UPDATED_NEW
+}
+
+// UpdateItemResponse mirrors the JSON response for the UpdateItem action.
+type UpdateItemResponse struct {
+	Attributes map[string]AttributeValue `json:"Attributes,omitempty"`
+}
+
+// ScanRequest mirrors the JSON request body for the Scan action.
+type ScanRequest struct {
+	TableName                 string                    `json:"TableName"`
+	Limit                     int32                     `json:"Limit,omitempty"`
+	ExclusiveStartKey         map[string]AttributeValue `json:"ExclusiveStartKey,omitempty"`
+	FilterExpression          string                    `json:"FilterExpression,omitempty"`
+	ProjectionExpression      string                    `json:"ProjectionExpression,omitempty"`
+	ExpressionAttributeNames  map[string]string         `json:"ExpressionAttributeNames,omitempty"`
+	ExpressionAttributeValues map[string]AttributeValue `json:"ExpressionAttributeValues,omitempty"`
+	ConsistentRead            bool                      `json:"ConsistentRead,omitempty"`
+}
+
+// ScanResponse mirrors the JSON response for the Scan action.
+type ScanResponse struct {
+	Items            []map[string]AttributeValue `json:"Items"`
+	Count            int32                       `json:"Count"`
+	ScannedCount     int32                       `json:"ScannedCount"`
+	LastEvaluatedKey map[string]AttributeValue   `json:"LastEvaluatedKey,omitempty"`
+}
+
+// QueryRequest mirrors the JSON request body for the Query action.
+type QueryRequest struct {
+	TableName                 string                    `json:"TableName"`
+	IndexName                 string                    `json:"IndexName,omitempty"` // Not supported in MVP yet
+	KeyConditionExpression    string                    `json:"KeyConditionExpression"`
+	FilterExpression          string                    `json:"FilterExpression,omitempty"`
+	ProjectionExpression      string                    `json:"ProjectionExpression,omitempty"`
+	ExpressionAttributeNames  map[string]string         `json:"ExpressionAttributeNames,omitempty"`
+	ExpressionAttributeValues map[string]AttributeValue `json:"ExpressionAttributeValues,omitempty"`
+	Limit                     int32                     `json:"Limit,omitempty"`
+	ExclusiveStartKey         map[string]AttributeValue `json:"ExclusiveStartKey,omitempty"`
+	ScanIndexForward          *bool                     `json:"ScanIndexForward,omitempty"`
+	ConsistentRead            bool                      `json:"ConsistentRead,omitempty"`
+}
+
+// QueryResponse mirrors the JSON response for the Query action.
+type QueryResponse struct {
+	Items            []map[string]AttributeValue `json:"Items"`
+	Count            int32                       `json:"Count"`
+	ScannedCount     int32                       `json:"ScannedCount"`
+	LastEvaluatedKey map[string]AttributeValue   `json:"LastEvaluatedKey,omitempty"`
+}

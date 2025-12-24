@@ -42,6 +42,12 @@ func (h *DynamoDBHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.getItemHandler(w, r)
 	case "DynamoDB_20120810.DeleteItem":
 		h.deleteItemHandler(w, r)
+	case "DynamoDB_20120810.UpdateItem":
+		h.UpdateItemHandler(w, r)
+	case "DynamoDB_20120810.Scan":
+		h.ScanHandler(w, r)
+	case "DynamoDB_20120810.Query":
+		h.QueryHandler(w, r)
 	default:
 		writeError(w, "UnknownOperationException", "The requested operation is not supported.", http.StatusBadRequest)
 	}

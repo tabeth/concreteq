@@ -4,28 +4,426 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
 	"github.com/apple/foundationdb/bindings/go/src/fdb/subspace"
 	"github.com/apple/foundationdb/bindings/go/src/fdb/tuple"
+	"github.com/tabeth/concretedb/expression"
 	"github.com/tabeth/concretedb/models"
 	"github.com/tabeth/kiroku-core/libs/fdb/directory"
 )
 
 // FoundationDBStore implements the Store interface using FoundationDB.
 type FoundationDBStore struct {
-	db  fdb.Database
-	dir directory.Directory
+	db        fdb.Database
+	dir       directory.Directory
+	evaluator *expression.Evaluator
 }
 
 // NewFoundationDBStore creates a new store connected to FoundationDB.
 func NewFoundationDBStore(db fdb.Database) *FoundationDBStore {
 	fmt.Println("Creating FDB store.")
 	return &FoundationDBStore{
-		db: db,
-		// Initialize Directory Layer with a prefix for isolation
-		dir: directory.NewDirectoryLayer(subspace.Sub(tuple.Tuple{"concretedb"}), subspace.Sub(tuple.Tuple{"content"}), true),
+		db:        db,
+		dir:       directory.NewDirectoryLayer(subspace.Sub(tuple.Tuple{"concretedb"}), subspace.Sub(tuple.Tuple{"content"}), true),
+		evaluator: expression.NewEvaluator(),
 	}
+}
+
+// ... (retain other methods) ...
+
+// Scan scans the table.
+func (s *FoundationDBStore) Scan(ctx context.Context, tableName string, filterExpression string, projectionExpression string, expressionAttributeNames map[string]string, expressionAttributeValues map[string]models.AttributeValue, limit int32, exclusiveStartKey map[string]models.AttributeValue, consistentRead bool) ([]map[string]models.AttributeValue, map[string]models.AttributeValue, error) {
+	// First check table metadata existence (consistency check)
+	table, err := s.GetTable(ctx, tableName)
+	if err != nil {
+		return nil, nil, err
+	}
+	if table == nil {
+		return nil, nil, ErrTableNotFound
+	}
+
+	res, err := s.db.ReadTransact(func(rtr fdb.ReadTransaction) (interface{}, error) {
+		// Open the directory for this table
+		tableDir, err := s.dir.Open(rtr, []string{"tables", tableName}, nil)
+		if err != nil {
+			return nil, err
+		}
+
+		// Determine Range
+		var r fdb.Range
+		if len(exclusiveStartKey) > 0 {
+			keyTuple, err := s.buildKeyTuple(table, exclusiveStartKey)
+			if err != nil {
+				return nil, err
+			}
+			startFDBKey := tableDir.Pack(append(tuple.Tuple{"data"}, keyTuple...))
+			// Start reading *after* the exclusive start key
+			// Note: We need the end of the data range for this table.
+			dataPrefix := tableDir.Pack(tuple.Tuple{"data"})
+			pr, _ := fdb.PrefixRange(dataPrefix)
+
+			r = fdb.SelectorRange{
+				Begin: fdb.FirstGreaterThan(startFDBKey),
+				End:   fdb.FirstGreaterOrEqual(pr.End),
+			}
+		} else {
+			// Scan the entire "data" subspace for the table
+			dataPrefix := tableDir.Pack(tuple.Tuple{"data"})
+			r, _ = fdb.PrefixRange(dataPrefix)
+		}
+
+		// Options
+		opts := fdb.RangeOptions{}
+		if limit > 0 {
+			opts.Limit = int(limit)
+		}
+
+		// Perform Range Read
+		iter := rtr.GetRange(r, opts).Iterator()
+
+		var items []map[string]models.AttributeValue
+		var lastProcessedItem map[string]models.AttributeValue
+		var itemsRead int
+
+		for iter.Advance() {
+			kv, err := iter.Get()
+			if err != nil {
+				return nil, err
+			}
+
+			// Deserialize value
+			var item map[string]models.AttributeValue
+			if len(kv.Value) > 0 {
+				err = json.Unmarshal(kv.Value, &item)
+				if err != nil {
+					return nil, fmt.Errorf("failed to unmarshal item: %v", err)
+				}
+
+				lastProcessedItem = item
+				itemsRead++
+
+				// Evaluate Filter
+				match, err := s.evaluator.EvaluateFilter(item, filterExpression, expressionAttributeNames, expressionAttributeValues)
+				if err != nil {
+					return nil, err
+				}
+				if match {
+					item = s.evaluator.ProjectItem(item, projectionExpression, expressionAttributeNames)
+					items = append(items, item)
+				}
+			}
+		}
+
+		// Determine LastEvaluatedKey
+		// If we read 'limit' items, we return LastEvaluatedKey of the last read item.
+		// Note: FDB GetRange honors limit. So if iterator exhausted, we likely didn't hit limit unless exact match.
+		// Wait, FDB GetRange stops AT limit.
+		// So if itemsRead == limit, we have a LEK.
+		var lastEvaluatedKey map[string]models.AttributeValue
+		if limit > 0 && itemsRead == int(limit) && lastProcessedItem != nil {
+			lastEvaluatedKey = make(map[string]models.AttributeValue)
+			for _, ks := range table.KeySchema {
+				if val, ok := lastProcessedItem[ks.AttributeName]; ok {
+					lastEvaluatedKey[ks.AttributeName] = val
+				}
+			}
+		}
+
+		return struct {
+			Items   []map[string]models.AttributeValue
+			LastKey map[string]models.AttributeValue
+		}{items, lastEvaluatedKey}, nil
+	})
+
+	if err != nil {
+		return nil, nil, err
+	}
+
+	result := res.(struct {
+		Items   []map[string]models.AttributeValue
+		LastKey map[string]models.AttributeValue
+	})
+	return result.Items, result.LastKey, nil
+}
+
+// Query queries the table.
+func (s *FoundationDBStore) Query(ctx context.Context, tableName string, keyConditionExpression string, filterExpression string, projectionExpression string, expressionAttributeNames map[string]string, expressionAttributeValues map[string]models.AttributeValue, limit int32, exclusiveStartKey map[string]models.AttributeValue, consistentRead bool) ([]map[string]models.AttributeValue, map[string]models.AttributeValue, error) {
+	// 1. Get Table Metadata
+	table, err := s.GetTable(ctx, tableName)
+	if err != nil {
+		return nil, nil, err
+	}
+	if table == nil {
+		return nil, nil, ErrTableNotFound
+	}
+
+	// 2. Parse Key Condition
+	var pkHashName, pkRangeName string
+	for _, k := range table.KeySchema {
+		if k.KeyType == "HASH" {
+			pkHashName = k.AttributeName
+		} else if k.KeyType == "RANGE" {
+			pkRangeName = k.AttributeName
+		}
+	}
+	if pkHashName == "" {
+		return nil, nil, fmt.Errorf("invalid table schema: no HASH key")
+	}
+
+	// Simple Parser Logic (reused)
+	rawParts := strings.Split(keyConditionExpression, " AND ")
+	var parts []string
+	for i := 0; i < len(rawParts); i++ {
+		p := rawParts[i]
+		if strings.Contains(p, "BETWEEN") {
+			if i+1 < len(rawParts) {
+				p = p + " AND " + rawParts[i+1]
+				i++
+			}
+		}
+		parts = append(parts, p)
+	}
+
+	var pkValue *models.AttributeValue
+	var skOp string
+	var skVals []*models.AttributeValue
+
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if strings.Contains(part, pkHashName) && strings.Contains(part, "=") {
+			subParts := strings.SplitN(part, "=", 2)
+			if len(subParts) == 2 {
+				valPlaceholder := strings.TrimSpace(subParts[1])
+				if v, ok := expressionAttributeValues[valPlaceholder]; ok {
+					val := v
+					pkValue = &val
+				}
+			}
+		} else if pkRangeName != "" && strings.Contains(part, pkRangeName) {
+			// SK Conditions
+			if strings.HasPrefix(part, "begins_with") {
+				skOp = "begins_with"
+				start := strings.Index(part, ",")
+				end := strings.Index(part, ")")
+				if start > 0 && end > start {
+					valPlaceholder := strings.TrimSpace(part[start+1 : end])
+					if v, ok := expressionAttributeValues[valPlaceholder]; ok {
+						val := v
+						skVals = append(skVals, &val)
+					}
+				}
+			} else {
+				ops := []string{"<=", ">=", "<", ">", "=", "BETWEEN", "IN"}
+				foundOp := ""
+				for _, op := range ops {
+					if strings.Contains(part, op) {
+						foundOp = op
+						break
+					}
+				}
+				// Robust search
+				if strings.Contains(part, "<=") {
+					foundOp = "<="
+				} else if strings.Contains(part, ">=") {
+					foundOp = ">="
+				} else if strings.Contains(part, "<") {
+					foundOp = "<"
+				} else if strings.Contains(part, ">") {
+					foundOp = ">"
+				} else if strings.Contains(part, "=") {
+					foundOp = "="
+				} else if strings.Contains(part, "BETWEEN") {
+					foundOp = "BETWEEN"
+				}
+
+				if foundOp != "" {
+					skOp = foundOp
+					sub := strings.SplitN(part, foundOp, 2)
+					if len(sub) == 2 {
+						rhs := strings.TrimSpace(sub[1])
+						if foundOp == "BETWEEN" {
+							betweens := strings.Split(rhs, " AND ")
+							if len(betweens) == 2 {
+								v1 := strings.TrimSpace(betweens[0])
+								v2 := strings.TrimSpace(betweens[1])
+								if val1, ok := expressionAttributeValues[v1]; ok {
+									val := val1
+									skVals = append(skVals, &val)
+								}
+								if val2, ok := expressionAttributeValues[v2]; ok {
+									val := val2
+									skVals = append(skVals, &val)
+								}
+							}
+						} else {
+							if v, ok := expressionAttributeValues[rhs]; ok {
+								val := v
+								skVals = append(skVals, &val)
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	if pkValue == nil {
+		if len(expressionAttributeValues) == 1 {
+			for _, v := range expressionAttributeValues {
+				val := v
+				pkValue = &val
+				break
+			}
+		}
+	}
+	if pkValue == nil {
+		return nil, nil, fmt.Errorf("could not resolve Partition Key value")
+	}
+
+	res, err := s.db.ReadTransact(func(rtr fdb.ReadTransaction) (interface{}, error) {
+		tableDir, err := s.dir.Open(rtr, []string{"tables", tableName}, nil)
+		if err != nil {
+			return nil, err
+		}
+		pkTupleElem, err := toTupleElement(*pkValue)
+		if err != nil {
+			return nil, err
+		}
+		prefixKey := tableDir.Pack(tuple.Tuple{"data", pkTupleElem})
+		pr, err := fdb.PrefixRange(prefixKey)
+		if err != nil {
+			return nil, err
+		}
+
+		r := fdb.SelectorRange{
+			Begin: fdb.FirstGreaterOrEqual(pr.Begin),
+			End:   fdb.FirstGreaterOrEqual(pr.End),
+		}
+
+		if skOp != "" && len(skVals) > 0 {
+			getSKKey := func(val *models.AttributeValue) (fdb.Key, error) {
+				tElem, err := toTupleElement(*val)
+				if err != nil {
+					return nil, err
+				}
+				return tableDir.Pack(append(tuple.Tuple{"data", pkTupleElem}, tElem)), nil
+			}
+			switch skOp {
+			case "=":
+				k, _ := getSKKey(skVals[0])
+				r.Begin = fdb.FirstGreaterOrEqual(k)
+				r.End = fdb.FirstGreaterThan(k)
+			case "<":
+				k, _ := getSKKey(skVals[0])
+				r.End = fdb.FirstGreaterOrEqual(k)
+			case "<=":
+				k, _ := getSKKey(skVals[0])
+				r.End = fdb.FirstGreaterThan(k)
+			case ">":
+				k, _ := getSKKey(skVals[0])
+				r.Begin = fdb.FirstGreaterThan(k)
+			case ">=":
+				k, _ := getSKKey(skVals[0])
+				r.Begin = fdb.FirstGreaterOrEqual(k)
+			case "BETWEEN":
+				if len(skVals) >= 2 {
+					k1, _ := getSKKey(skVals[0])
+					k2, _ := getSKKey(skVals[1])
+					r.Begin = fdb.FirstGreaterOrEqual(k1)
+					r.End = fdb.FirstGreaterThan(k2)
+				}
+			case "begins_with":
+				skVal := skVals[0]
+				if skVal.S != nil {
+					k1, _ := getSKKey(skVal)
+					str := *skVal.S
+					strNext := str + "\x00"
+					for i := len(str) - 1; i >= 0; i-- {
+						if str[i] < 0xff {
+							strNext = str[:i] + string(str[i]+1)
+							break
+						}
+					}
+					avNext := models.AttributeValue{S: &strNext}
+					k2, _ := getSKKey(&avNext)
+					r.Begin = fdb.FirstGreaterOrEqual(k1)
+					r.End = fdb.FirstGreaterOrEqual(k2)
+				} else {
+					return nil, fmt.Errorf("begins_with SK must be string")
+				}
+			default:
+				return nil, fmt.Errorf("unsupported SK operator: %s", skOp)
+			}
+		}
+
+		if len(exclusiveStartKey) > 0 {
+			keyTuple, err := s.buildKeyTuple(table, exclusiveStartKey)
+			if err != nil {
+				return nil, err
+			}
+			startFDBKey := tableDir.Pack(append(tuple.Tuple{"data"}, keyTuple...))
+			r.Begin = fdb.FirstGreaterThan(startFDBKey)
+		}
+
+		opts := fdb.RangeOptions{}
+		if limit > 0 {
+			opts.Limit = int(limit)
+		}
+		iter := rtr.GetRange(r, opts).Iterator()
+
+		var items []map[string]models.AttributeValue
+		var lastProcessedItem map[string]models.AttributeValue
+		var itemsRead int
+
+		for iter.Advance() {
+			kv, err := iter.Get()
+			if err != nil {
+				return nil, err
+			}
+			var item map[string]models.AttributeValue
+			if len(kv.Value) > 0 {
+				_ = json.Unmarshal(kv.Value, &item)
+
+				lastProcessedItem = item
+				itemsRead++
+
+				// Evaluate Filter
+				match, err := s.evaluator.EvaluateFilter(item, filterExpression, expressionAttributeNames, expressionAttributeValues)
+				if err != nil {
+					return nil, err
+				}
+				if match {
+					item = s.evaluator.ProjectItem(item, projectionExpression, expressionAttributeNames)
+					items = append(items, item)
+				}
+			}
+		}
+
+		var lastEvaluatedKey map[string]models.AttributeValue
+		if limit > 0 && itemsRead == int(limit) && lastProcessedItem != nil {
+			lastEvaluatedKey = make(map[string]models.AttributeValue)
+			for _, ks := range table.KeySchema {
+				if val, ok := lastProcessedItem[ks.AttributeName]; ok {
+					lastEvaluatedKey[ks.AttributeName] = val
+				}
+			}
+		}
+
+		return struct {
+			Items   []map[string]models.AttributeValue
+			LastKey map[string]models.AttributeValue
+		}{items, lastEvaluatedKey}, nil
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	result := res.(struct {
+		Items   []map[string]models.AttributeValue
+		LastKey map[string]models.AttributeValue
+	})
+	return result.Items, result.LastKey, nil
 }
 
 // CreateTable persists a new table's metadata within a FoundationDB transaction.
@@ -200,10 +598,9 @@ func (s *FoundationDBStore) ListTables(ctx context.Context, limit int, exclusive
 }
 
 // PutItem writes an item to the table.
-func (s *FoundationDBStore) PutItem(ctx context.Context, tableName string, item map[string]models.AttributeValue) error {
-	_, err := s.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
+func (s *FoundationDBStore) PutItem(ctx context.Context, tableName string, item map[string]models.AttributeValue, returnValues string) (map[string]models.AttributeValue, error) {
+	val, err := s.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
 		// 1. Get Table Metadata to understand Key Schema
-		// Note: In an optimized system, we would cache this.
 		table, err := s.getTableInternal(tr, tableName)
 		if err != nil {
 			return nil, err
@@ -218,6 +615,14 @@ func (s *FoundationDBStore) PutItem(ctx context.Context, tableName string, item 
 			return nil, err
 		}
 
+		var oldItem map[string]models.AttributeValue
+		if returnValues == "ALL_OLD" {
+			oldItem, err = s.getItemInternal(tr, table, keyTuple)
+			if err != nil {
+				return nil, err
+			}
+		}
+
 		// 3. Serialize Item
 		itemBytes, err := json.Marshal(item)
 		if err != nil {
@@ -225,7 +630,6 @@ func (s *FoundationDBStore) PutItem(ctx context.Context, tableName string, item 
 		}
 
 		// 4. Store
-		// Path: ["tables", tableName] -> Pack("data", <pk_tuple>)
 		tableDir, err := s.dir.Open(tr, []string{"tables", tableName}, nil)
 		if err != nil {
 			return nil, err
@@ -233,13 +637,19 @@ func (s *FoundationDBStore) PutItem(ctx context.Context, tableName string, item 
 		itemKey := tableDir.Pack(append(tuple.Tuple{"data"}, keyTuple...))
 		tr.Set(itemKey, itemBytes)
 
-		return nil, nil
+		return oldItem, nil
 	})
-	return err
+	if err != nil {
+		return nil, err
+	}
+	if val == nil {
+		return nil, nil
+	}
+	return val.(map[string]models.AttributeValue), nil
 }
 
 // GetItem retrieves an item by key.
-func (s *FoundationDBStore) GetItem(ctx context.Context, tableName string, key map[string]models.AttributeValue) (map[string]models.AttributeValue, error) {
+func (s *FoundationDBStore) GetItem(ctx context.Context, tableName string, key map[string]models.AttributeValue, consistentRead bool) (map[string]models.AttributeValue, error) {
 	val, err := s.db.ReadTransact(func(rtr fdb.ReadTransaction) (interface{}, error) {
 		// 1. Get Table Metadata
 		table, err := s.getTableInternal(rtr, tableName)
@@ -247,7 +657,7 @@ func (s *FoundationDBStore) GetItem(ctx context.Context, tableName string, key m
 			return nil, err
 		}
 		if table == nil {
-			return nil, nil // Table not found implies item not found
+			return nil, ErrTableNotFound
 		}
 
 		// 2. Extract Key Fields from the *request key map*
@@ -282,21 +692,29 @@ func (s *FoundationDBStore) GetItem(ctx context.Context, tableName string, key m
 }
 
 // DeleteItem deletes an item by key.
-func (s *FoundationDBStore) DeleteItem(ctx context.Context, tableName string, key map[string]models.AttributeValue) error {
-	_, err := s.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
+func (s *FoundationDBStore) DeleteItem(ctx context.Context, tableName string, key map[string]models.AttributeValue, returnValues string) (map[string]models.AttributeValue, error) {
+	val, err := s.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
 		// 1. Get Table Metadata
 		table, err := s.getTableInternal(tr, tableName)
 		if err != nil {
 			return nil, err
 		}
 		if table == nil {
-			return nil, models.New("ResourceNotFoundException", "Requested resource not found")
+			return nil, ErrTableNotFound
 		}
 
 		// 2. Extract Key Fields
 		keyTuple, err := s.buildKeyTuple(table, key)
 		if err != nil {
 			return nil, err
+		}
+
+		var oldItem map[string]models.AttributeValue
+		if returnValues == "ALL_OLD" {
+			oldItem, err = s.getItemInternal(tr, table, keyTuple)
+			if err != nil {
+				return nil, err
+			}
 		}
 
 		// 3. Delete
@@ -307,9 +725,15 @@ func (s *FoundationDBStore) DeleteItem(ctx context.Context, tableName string, ke
 		itemKey := tableDir.Pack(append(tuple.Tuple{"data"}, keyTuple...))
 		tr.Clear(itemKey)
 
-		return nil, nil
+		return oldItem, nil
 	})
-	return err
+	if err != nil {
+		return nil, err
+	}
+	if val == nil {
+		return nil, nil
+	}
+	return val.(map[string]models.AttributeValue), nil
 }
 
 // Helpers
@@ -338,6 +762,27 @@ func (s *FoundationDBStore) getTableInternal(rtr fdb.ReadTransaction, tableName 
 		return nil, err
 	}
 	return &table, nil
+}
+
+func (s *FoundationDBStore) getItemInternal(rt fdb.ReadTransaction, table *models.Table, keyTuple []tuple.TupleElement) (map[string]models.AttributeValue, error) {
+	tableDir, err := s.dir.Open(rt, []string{"tables", table.TableName}, nil)
+	if err != nil {
+		return nil, err
+	}
+	itemKey := tableDir.Pack(append(tuple.Tuple{"data"}, keyTuple...))
+	valBytes, err := rt.Get(itemKey).Get()
+	if err != nil {
+		return nil, err
+	}
+	if len(valBytes) == 0 {
+		return nil, nil
+	}
+
+	var item map[string]models.AttributeValue
+	if err := json.Unmarshal(valBytes, &item); err != nil {
+		return nil, err
+	}
+	return item, nil
 }
 
 func (s *FoundationDBStore) buildKeyTuple(table *models.Table, item map[string]models.AttributeValue) ([]tuple.TupleElement, error) {
@@ -402,4 +847,138 @@ func toTupleElement(av models.AttributeValue) (tuple.TupleElement, error) {
 	// ... other types ...
 	// For PKs, usually only S, N, B are allowed.
 	return nil, fmt.Errorf("unsupported key type or null")
+}
+
+// UpdateItem updates an item.
+func (s *FoundationDBStore) UpdateItem(ctx context.Context, tableName string, key map[string]models.AttributeValue, updateExpression string, exprAttrNames map[string]string, exprAttrValues map[string]models.AttributeValue, returnValues string) (map[string]models.AttributeValue, error) {
+	val, err := s.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
+		// 1. Get Table Metadata
+		table, err := s.getTableInternal(tr, tableName)
+		if err != nil {
+			return nil, err
+		}
+		if table == nil {
+			return nil, ErrTableNotFound
+		}
+
+		// 2. Extract Key Fields
+		keyTuple, err := s.buildKeyTuple(table, key)
+		if err != nil {
+			return nil, err
+		}
+
+		// 3. Open Directory
+		tableDir, err := s.dir.Open(tr, []string{"tables", tableName}, nil)
+		if err != nil {
+			return nil, err
+		}
+		itemKey := tableDir.Pack(append(tuple.Tuple{"data"}, keyTuple...))
+
+		// 4. Read Existing Item
+		existingBytes, err := tr.Get(itemKey).Get()
+		if err != nil {
+			return nil, err
+		}
+
+		var item map[string]models.AttributeValue
+		if existingBytes != nil {
+			if err := json.Unmarshal(existingBytes, &item); err != nil {
+				return nil, err
+			}
+		} else {
+			// Item doesn't exist. Create new one initialized with Key.
+			item = make(map[string]models.AttributeValue)
+			for k, v := range key {
+				item[k] = v
+			}
+		}
+
+		// Capture old item if needed
+		oldItem := make(map[string]models.AttributeValue)
+		if returnValues == "ALL_OLD" || returnValues == "UPDATED_OLD" {
+			for k, v := range item {
+				oldItem[k] = v
+			}
+		}
+
+		// 5. Apply Update Expression (Simple implementation)
+		if updateExpression != "" {
+			// For MVP, simplistic parsing: "SET attr = :val"
+			if err := applyUpdateExpression(item, updateExpression, exprAttrNames, exprAttrValues); err != nil {
+				return nil, err
+			}
+		}
+
+		// 6. Serialize and Write
+		itemBytes, err := json.Marshal(item)
+		if err != nil {
+			return nil, err
+		}
+		tr.Set(itemKey, itemBytes)
+
+		// 7. Handle ReturnValues
+		if returnValues == "ALL_OLD" {
+			return oldItem, nil
+		}
+		if returnValues == "ALL_NEW" {
+			return item, nil
+		}
+		// TODO: Implement UPDATED_OLD / UPDATED_NEW
+		return nil, nil // NONE
+	})
+
+	if err != nil {
+		return nil, err
+	}
+	if v, ok := val.(map[string]models.AttributeValue); ok {
+		return v, nil
+	}
+	return nil, nil
+}
+
+// Simple expression parser for MVP
+func applyUpdateExpression(item map[string]models.AttributeValue, expr string, names map[string]string, values map[string]models.AttributeValue) error {
+	if len(expr) < 4 || expr[:4] != "SET " {
+		return fmt.Errorf("only SET expressions supported in MVP")
+	}
+
+	body := expr[4:]
+	assignments := strings.Split(body, ",")
+
+	for _, assignment := range assignments {
+		assignment = strings.TrimSpace(assignment)
+		parts := strings.Split(assignment, "=")
+		if len(parts) != 2 {
+			return fmt.Errorf("invalid assignment: %s", assignment)
+		}
+
+		lhs := strings.TrimSpace(parts[0])
+		rhs := strings.TrimSpace(parts[1])
+
+		// Resolve LHS (Attribute Name)
+		realName := lhs
+		if strings.HasPrefix(lhs, "#") {
+			if name, ok := names[lhs]; ok {
+				realName = name
+			} else {
+				return fmt.Errorf("missing expression attribute name: %s", lhs)
+			}
+		}
+
+		// Resolve RHS (Value)
+		var val models.AttributeValue
+		if strings.HasPrefix(rhs, ":") {
+			if v, ok := values[rhs]; ok {
+				val = v
+			} else {
+				return fmt.Errorf("missing expression attribute value: %s", rhs)
+			}
+		} else {
+			return fmt.Errorf("only literal values with ':' prefix supported in MVP")
+		}
+
+		item[realName] = val
+	}
+
+	return nil
 }

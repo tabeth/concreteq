@@ -167,12 +167,14 @@ func (h *DynamoDBHandler) putItemHandler(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	if err := h.tableService.PutItem(r.Context(), req.TableName, req.Item); err != nil {
+	// 2. Call the service
+	resp, err := h.tableService.PutItem(r.Context(), &req)
+	if err != nil {
 		writeAPIError(w, err, http.StatusBadRequest)
 		return
 	}
 
-	writeSuccess(w, models.PutItemResponse{}, http.StatusOK)
+	writeSuccess(w, resp, http.StatusOK)
 }
 
 // getItemHandler handles the API logic for the GetItem action.
@@ -183,14 +185,13 @@ func (h *DynamoDBHandler) getItemHandler(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	item, err := h.tableService.GetItem(r.Context(), req.TableName, req.Key)
+	resp, err := h.tableService.GetItem(r.Context(), &req)
 	if err != nil {
 		writeAPIError(w, err, http.StatusBadRequest)
 		return
 	}
 
 	// If item is nil, we still return success but with an empty/omitted Item field in the response.
-	resp := models.GetItemResponse{Item: item}
 	writeSuccess(w, resp, http.StatusOK)
 }
 
@@ -202,10 +203,62 @@ func (h *DynamoDBHandler) deleteItemHandler(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	if err := h.tableService.DeleteItem(r.Context(), req.TableName, req.Key); err != nil {
+	resp, err := h.tableService.DeleteItem(r.Context(), &req)
+	if err != nil {
 		writeAPIError(w, err, http.StatusBadRequest)
 		return
 	}
 
-	writeSuccess(w, models.DeleteItemResponse{}, http.StatusOK)
+	writeSuccess(w, resp, http.StatusOK)
+}
+
+// UpdateItemHandler handles UpdateItem requests.
+func (h *DynamoDBHandler) UpdateItemHandler(w http.ResponseWriter, r *http.Request) {
+	var req models.UpdateItemRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, "SerializationException", "Could not decode request body", http.StatusBadRequest)
+		return
+	}
+
+	resp, err := h.tableService.UpdateItem(r.Context(), &req)
+	if err != nil {
+		writeAPIError(w, err, http.StatusBadRequest)
+		return
+	}
+
+	writeSuccess(w, resp, http.StatusOK)
+}
+
+// ScanHandler handles Scan requests.
+func (h *DynamoDBHandler) ScanHandler(w http.ResponseWriter, r *http.Request) {
+	var req models.ScanRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, "SerializationException", "Could not decode request body", http.StatusBadRequest)
+		return
+	}
+
+	resp, err := h.tableService.Scan(r.Context(), &req)
+	if err != nil {
+		writeAPIError(w, err, http.StatusBadRequest)
+		return
+	}
+
+	writeSuccess(w, resp, http.StatusOK)
+}
+
+// QueryHandler handles Query requests.
+func (h *DynamoDBHandler) QueryHandler(w http.ResponseWriter, r *http.Request) {
+	var req models.QueryRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, "SerializationException", "Could not decode request body", http.StatusBadRequest)
+		return
+	}
+
+	resp, err := h.tableService.Query(r.Context(), &req)
+	if err != nil {
+		writeAPIError(w, err, http.StatusBadRequest)
+		return
+	}
+
+	writeSuccess(w, resp, http.StatusOK)
 }

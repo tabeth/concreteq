@@ -18,9 +18,12 @@ type TableServicer interface {
 	GetTable(ctx context.Context, tableName string) (*models.Table, error)
 
 	// Item Operations
-	PutItem(ctx context.Context, tableName string, item map[string]models.AttributeValue) error
-	GetItem(ctx context.Context, tableName string, key map[string]models.AttributeValue) (map[string]models.AttributeValue, error)
-	DeleteItem(ctx context.Context, tableName string, key map[string]models.AttributeValue) error
+	PutItem(ctx context.Context, request *models.PutItemRequest) (*models.PutItemResponse, error)
+	GetItem(ctx context.Context, request *models.GetItemRequest) (*models.GetItemResponse, error)
+	DeleteItem(ctx context.Context, request *models.DeleteItemRequest) (*models.DeleteItemResponse, error)
+	UpdateItem(ctx context.Context, request *models.UpdateItemRequest) (*models.UpdateItemResponse, error)
+	Scan(ctx context.Context, input *models.ScanRequest) (*models.ScanResponse, error)
+	Query(ctx context.Context, input *models.QueryRequest) (*models.QueryResponse, error)
 }
 
 // TableService contains the business logic for table operations.
@@ -115,59 +118,61 @@ func (s *TableService) GetTable(ctx context.Context, tableName string) (*models.
 // Item Operations
 
 // PutItem writes an item to the table.
-func (s *TableService) PutItem(ctx context.Context, tableName string, item map[string]models.AttributeValue) error {
-	if tableName == "" {
-		return models.New("ValidationException", "TableName cannot be empty")
+func (s *TableService) PutItem(ctx context.Context, request *models.PutItemRequest) (*models.PutItemResponse, error) {
+	if request.TableName == "" {
+		return nil, models.New("ValidationException", "TableName cannot be empty")
 	}
-	if len(item) == 0 {
-		return models.New("ValidationException", "Item cannot be empty")
+	if len(request.Item) == 0 {
+		return nil, models.New("ValidationException", "Item cannot be empty")
 	}
 
-	if err := s.store.PutItem(ctx, tableName, item); err != nil {
+	attributes, err := s.store.PutItem(ctx, request.TableName, request.Item, request.ReturnValues)
+	if err != nil {
 		if errors.Is(err, store.ErrTableNotFound) {
-			return models.New("ResourceNotFoundException", fmt.Sprintf("Table not found: %s", tableName))
+			return nil, models.New("ResourceNotFoundException", fmt.Sprintf("Table not found: %s", request.TableName))
 		}
-		return models.New("InternalFailure", fmt.Sprintf("failed to put item: %v", err))
+		return nil, models.New("InternalFailure", fmt.Sprintf("failed to put item: %v", err))
 	}
-	return nil
+	return &models.PutItemResponse{Attributes: attributes}, nil
 }
 
 // GetItem retrieves an item by key.
-func (s *TableService) GetItem(ctx context.Context, tableName string, key map[string]models.AttributeValue) (map[string]models.AttributeValue, error) {
-	if tableName == "" {
+func (s *TableService) GetItem(ctx context.Context, request *models.GetItemRequest) (*models.GetItemResponse, error) {
+	if request.TableName == "" {
 		return nil, models.New("ValidationException", "TableName cannot be empty")
 	}
-	if len(key) == 0 {
+	if len(request.Key) == 0 {
 		return nil, models.New("ValidationException", "Key cannot be empty")
 	}
 
-	item, err := s.store.GetItem(ctx, tableName, key)
+	item, err := s.store.GetItem(ctx, request.TableName, request.Key, request.ConsistentRead)
 	if err != nil {
 		return nil, models.New("InternalFailure", fmt.Sprintf("failed to get item: %v", err))
 	}
 	// Note: Item not found just returns nil, nil in DynamoDB GetItem (with empty Item in response),
 	// unless we specifically want to distinguish. The store returns nil, nil.
 	// The API handler will map this to an empty Item field if nil.
-	return item, nil
+	return &models.GetItemResponse{Item: item}, nil
 }
 
 // DeleteItem deletes an item by key.
-func (s *TableService) DeleteItem(ctx context.Context, tableName string, key map[string]models.AttributeValue) error {
-	if tableName == "" {
-		return models.New("ValidationException", "TableName cannot be empty")
+func (s *TableService) DeleteItem(ctx context.Context, request *models.DeleteItemRequest) (*models.DeleteItemResponse, error) {
+	if request.TableName == "" {
+		return nil, models.New("ValidationException", "TableName cannot be empty")
 	}
-	if len(key) == 0 {
-		return models.New("ValidationException", "Key cannot be empty")
+	if len(request.Key) == 0 {
+		return nil, models.New("ValidationException", "Key cannot be empty")
 	}
 
-	if err := s.store.DeleteItem(ctx, tableName, key); err != nil {
+	attributes, err := s.store.DeleteItem(ctx, request.TableName, request.Key, request.ReturnValues)
+	if err != nil {
 		// DeleteItem in DynamoDB is idempotent.
 		if errors.Is(err, store.ErrTableNotFound) {
-			return models.New("ResourceNotFoundException", fmt.Sprintf("Table not found: %s", tableName))
+			return nil, models.New("ResourceNotFoundException", fmt.Sprintf("Table not found: %s", request.TableName))
 		}
-		return models.New("InternalFailure", fmt.Sprintf("failed to delete item: %v", err))
+		return nil, models.New("InternalFailure", fmt.Sprintf("failed to delete item: %v", err))
 	}
-	return nil
+	return &models.DeleteItemResponse{Attributes: attributes}, nil
 }
 
 // validateTable performs business rule validation on the internal db model. In general all table validation
@@ -181,4 +186,76 @@ func validateTable(table *models.Table) error {
 		return models.New("ValidationException", "KeySchema cannot be empty")
 	}
 	return nil
+}
+
+// UpdateItem updates an item.
+func (s *TableService) UpdateItem(ctx context.Context, request *models.UpdateItemRequest) (*models.UpdateItemResponse, error) {
+	if request.TableName == "" {
+		return nil, models.New("ValidationException", "TableName cannot be empty")
+	}
+	if len(request.Key) == 0 {
+		return nil, models.New("ValidationException", "Key cannot be empty")
+	}
+
+	// Call the store
+	attributes, err := s.store.UpdateItem(ctx, request.TableName, request.Key, request.UpdateExpression, request.ExpressionAttributeNames, request.ExpressionAttributeValues, request.ReturnValues)
+	if err != nil {
+		if errors.Is(err, store.ErrTableNotFound) {
+			return nil, models.New("ResourceNotFoundException", fmt.Sprintf("Table not found: %s", request.TableName))
+		}
+		return nil, models.New("InternalFailure", fmt.Sprintf("failed to update item: %v", err))
+	}
+
+	return &models.UpdateItemResponse{Attributes: attributes}, nil
+}
+
+// Scan retrieves items from the table.
+func (s *TableService) Scan(ctx context.Context, input *models.ScanRequest) (*models.ScanResponse, error) {
+	if input.TableName == "" {
+		return nil, models.New("ValidationException", "TableName cannot be empty")
+	}
+
+	// Call the store
+	items, lastKey, err := s.store.Scan(ctx, input.TableName, input.FilterExpression, input.ProjectionExpression, input.ExpressionAttributeNames, input.ExpressionAttributeValues, input.Limit, input.ExclusiveStartKey, input.ConsistentRead)
+	if err != nil {
+		if errors.Is(err, store.ErrTableNotFound) {
+			return nil, models.New("ResourceNotFoundException", fmt.Sprintf("Table not found: %s", input.TableName))
+		}
+		return nil, models.New("InternalFailure", fmt.Sprintf("failed to scan table: %v", err))
+	}
+
+	return &models.ScanResponse{
+		Items:            items,
+		Count:            int32(len(items)),
+		ScannedCount:     int32(len(items)), // For now same as Count
+		LastEvaluatedKey: lastKey,
+	}, nil
+}
+
+// Query retrieves items based on key conditions (partition key equality).
+func (s *TableService) Query(ctx context.Context, input *models.QueryRequest) (*models.QueryResponse, error) {
+	if input.TableName == "" {
+		return nil, models.New("ValidationException", "TableName cannot be empty")
+	}
+	if input.KeyConditionExpression == "" {
+		return nil, models.New("ValidationException", "KeyConditionExpression cannot be empty")
+	}
+
+	// Call the store
+	items, lastKey, err := s.store.Query(ctx, input.TableName, input.KeyConditionExpression, input.FilterExpression, input.ProjectionExpression, input.ExpressionAttributeNames, input.ExpressionAttributeValues, input.Limit, input.ExclusiveStartKey, input.ConsistentRead)
+	if err != nil {
+		if errors.Is(err, store.ErrTableNotFound) {
+			return nil, models.New("ResourceNotFoundException", fmt.Sprintf("Table not found: %s", input.TableName))
+		}
+		return nil, models.New("InternalFailure", fmt.Sprintf("failed to query table: %v", err))
+	}
+
+	val := int32(len(items))
+
+	return &models.QueryResponse{
+		Items:            items,
+		Count:            val,
+		ScannedCount:     val,
+		LastEvaluatedKey: lastKey,
+	}, nil
 }
