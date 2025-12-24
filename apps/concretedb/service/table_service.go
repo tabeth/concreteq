@@ -16,6 +16,11 @@ type TableServicer interface {
 	DeleteTable(ctx context.Context, tableName string) (*models.Table, error)
 	ListTables(ctx context.Context, limit int, exclusiveStartTableName string) ([]string, string, error)
 	GetTable(ctx context.Context, tableName string) (*models.Table, error)
+
+	// Item Operations
+	PutItem(ctx context.Context, tableName string, item map[string]models.AttributeValue) error
+	GetItem(ctx context.Context, tableName string, key map[string]models.AttributeValue) (map[string]models.AttributeValue, error)
+	DeleteItem(ctx context.Context, tableName string, key map[string]models.AttributeValue) error
 }
 
 // TableService contains the business logic for table operations.
@@ -105,6 +110,64 @@ func (s *TableService) GetTable(ctx context.Context, tableName string) (*models.
 	}
 
 	return table, nil
+}
+
+// Item Operations
+
+// PutItem writes an item to the table.
+func (s *TableService) PutItem(ctx context.Context, tableName string, item map[string]models.AttributeValue) error {
+	if tableName == "" {
+		return models.New("ValidationException", "TableName cannot be empty")
+	}
+	if len(item) == 0 {
+		return models.New("ValidationException", "Item cannot be empty")
+	}
+
+	if err := s.store.PutItem(ctx, tableName, item); err != nil {
+		if errors.Is(err, store.ErrTableNotFound) {
+			return models.New("ResourceNotFoundException", fmt.Sprintf("Table not found: %s", tableName))
+		}
+		return models.New("InternalFailure", fmt.Sprintf("failed to put item: %v", err))
+	}
+	return nil
+}
+
+// GetItem retrieves an item by key.
+func (s *TableService) GetItem(ctx context.Context, tableName string, key map[string]models.AttributeValue) (map[string]models.AttributeValue, error) {
+	if tableName == "" {
+		return nil, models.New("ValidationException", "TableName cannot be empty")
+	}
+	if len(key) == 0 {
+		return nil, models.New("ValidationException", "Key cannot be empty")
+	}
+
+	item, err := s.store.GetItem(ctx, tableName, key)
+	if err != nil {
+		return nil, models.New("InternalFailure", fmt.Sprintf("failed to get item: %v", err))
+	}
+	// Note: Item not found just returns nil, nil in DynamoDB GetItem (with empty Item in response),
+	// unless we specifically want to distinguish. The store returns nil, nil.
+	// The API handler will map this to an empty Item field if nil.
+	return item, nil
+}
+
+// DeleteItem deletes an item by key.
+func (s *TableService) DeleteItem(ctx context.Context, tableName string, key map[string]models.AttributeValue) error {
+	if tableName == "" {
+		return models.New("ValidationException", "TableName cannot be empty")
+	}
+	if len(key) == 0 {
+		return models.New("ValidationException", "Key cannot be empty")
+	}
+
+	if err := s.store.DeleteItem(ctx, tableName, key); err != nil {
+		// DeleteItem in DynamoDB is idempotent.
+		if errors.Is(err, store.ErrTableNotFound) {
+			return models.New("ResourceNotFoundException", fmt.Sprintf("Table not found: %s", tableName))
+		}
+		return models.New("InternalFailure", fmt.Sprintf("failed to delete item: %v", err))
+	}
+	return nil
 }
 
 // validateTable performs business rule validation on the internal db model. In general all table validation

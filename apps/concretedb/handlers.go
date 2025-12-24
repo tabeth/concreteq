@@ -158,3 +158,54 @@ func (h *DynamoDBHandler) describeTableHandler(w http.ResponseWriter, r *http.Re
 	}
 	writeSuccess(w, resp, http.StatusOK)
 }
+
+// putItemHandler handles the API logic for the PutItem action.
+func (h *DynamoDBHandler) putItemHandler(w http.ResponseWriter, r *http.Request) {
+	var req models.PutItemRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, "SerializationException", "Could not decode request body.", http.StatusBadRequest)
+		return
+	}
+
+	if err := h.tableService.PutItem(r.Context(), req.TableName, req.Item); err != nil {
+		writeAPIError(w, err, http.StatusBadRequest)
+		return
+	}
+
+	writeSuccess(w, models.PutItemResponse{}, http.StatusOK)
+}
+
+// getItemHandler handles the API logic for the GetItem action.
+func (h *DynamoDBHandler) getItemHandler(w http.ResponseWriter, r *http.Request) {
+	var req models.GetItemRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, "SerializationException", "Could not decode request body.", http.StatusBadRequest)
+		return
+	}
+
+	item, err := h.tableService.GetItem(r.Context(), req.TableName, req.Key)
+	if err != nil {
+		writeAPIError(w, err, http.StatusBadRequest)
+		return
+	}
+
+	// If item is nil, we still return success but with an empty/omitted Item field in the response.
+	resp := models.GetItemResponse{Item: item}
+	writeSuccess(w, resp, http.StatusOK)
+}
+
+// deleteItemHandler handles the API logic for the DeleteItem action.
+func (h *DynamoDBHandler) deleteItemHandler(w http.ResponseWriter, r *http.Request) {
+	var req models.DeleteItemRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, "SerializationException", "Could not decode request body.", http.StatusBadRequest)
+		return
+	}
+
+	if err := h.tableService.DeleteItem(r.Context(), req.TableName, req.Key); err != nil {
+		writeAPIError(w, err, http.StatusBadRequest)
+		return
+	}
+
+	writeSuccess(w, models.DeleteItemResponse{}, http.StatusOK)
+}

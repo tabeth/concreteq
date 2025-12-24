@@ -36,6 +36,12 @@ func (h *DynamoDBHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.listTablesHandler(w, r)
 	case "DynamoDB_20120810.DescribeTable":
 		h.describeTableHandler(w, r)
+	case "DynamoDB_20120810.PutItem":
+		h.putItemHandler(w, r)
+	case "DynamoDB_20120810.GetItem":
+		h.getItemHandler(w, r)
+	case "DynamoDB_20120810.DeleteItem":
+		h.deleteItemHandler(w, r)
 	default:
 		writeError(w, "UnknownOperationException", "The requested operation is not supported.", http.StatusBadRequest)
 	}
@@ -59,7 +65,7 @@ func writeAPIError(w http.ResponseWriter, err error, statusCode int) {
 		if apiErr.Type == "InternalFailure" {
 			code = http.StatusInternalServerError
 		}
-		writeError(w, apiErr.Type, apiErr.Message, code)
+		writeError(w, apiErr.Type, apiErr.Error(), code)
 	} else {
 		// Fallback for unexpected errors
 		writeError(w, "InternalFailure", err.Error(), http.StatusInternalServerError)

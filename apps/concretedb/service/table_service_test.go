@@ -15,6 +15,10 @@ type mockStore struct {
 	GetTableFunc    func(ctx context.Context, tableName string) (*models.Table, error)
 	DeleteTableFunc func(ctx context.Context, tableName string) (*models.Table, error) // <-- ADD THIS
 	ListTablesFunc  func(ctx context.Context, limit int, exclusiveStartTableName string) ([]string, string, error)
+	// Item Operations
+	PutItemFunc    func(ctx context.Context, tableName string, item map[string]models.AttributeValue) error
+	GetItemFunc    func(ctx context.Context, tableName string, key map[string]models.AttributeValue) (map[string]models.AttributeValue, error)
+	DeleteItemFunc func(ctx context.Context, tableName string, key map[string]models.AttributeValue) error
 }
 
 func (m *mockStore) CreateTable(ctx context.Context, table *models.Table) error {
@@ -32,6 +36,18 @@ func (m *mockStore) DeleteTable(ctx context.Context, tableName string) (*models.
 
 func (m *mockStore) ListTables(ctx context.Context, limit int, exclusiveStartTableName string) ([]string, string, error) {
 	return m.ListTablesFunc(ctx, limit, exclusiveStartTableName)
+}
+
+func (m *mockStore) PutItem(ctx context.Context, tableName string, item map[string]models.AttributeValue) error {
+	return m.PutItemFunc(ctx, tableName, item)
+}
+
+func (m *mockStore) GetItem(ctx context.Context, tableName string, key map[string]models.AttributeValue) (map[string]models.AttributeValue, error) {
+	return m.GetItemFunc(ctx, tableName, key)
+}
+
+func (m *mockStore) DeleteItem(ctx context.Context, tableName string, key map[string]models.AttributeValue) error {
+	return m.DeleteItemFunc(ctx, tableName, key)
 }
 
 func TestTableService_DeleteTable_NotFound(t *testing.T) {
@@ -97,6 +113,19 @@ func TestTableService_CreateTable_ValidationError(t *testing.T) {
 
 	if apiErr.Type != "ValidationException" {
 		t.Errorf("expected error type ValidationException, got %s", apiErr.Type)
+	}
+}
+
+func TestTableService_CreateTable_EmptyKeySchema(t *testing.T) {
+	service := NewTableService(&mockStore{})
+	table := &models.Table{
+		TableName: "valid-name",
+		KeySchema: []models.KeySchemaElement{}, // Empty
+	}
+	_, err := service.CreateTable(context.Background(), table)
+	var apiErr *models.APIError
+	if !errors.As(err, &apiErr) || apiErr.Type != "ValidationException" {
+		t.Errorf("expected ValidationException for empty KeySchema")
 	}
 }
 
@@ -274,5 +303,174 @@ func TestTableService_CreateTable_StoreError(t *testing.T) {
 	var apiErr *models.APIError
 	if !errors.As(err, &apiErr) || apiErr.Type != "InternalFailure" {
 		t.Errorf("expected InternalFailure")
+	}
+}
+
+// Item Operation Tests
+
+func TestTableService_PutItem(t *testing.T) {
+	mock := &mockStore{
+		PutItemFunc: func(ctx context.Context, tableName string, item map[string]models.AttributeValue) error {
+			if tableName == "error-table" {
+				return errors.New("store error")
+			}
+			if tableName == "missing-table" {
+				return st.ErrTableNotFound
+			}
+			return nil
+		},
+	}
+	service := NewTableService(mock)
+
+	// Success
+	err := service.PutItem(context.Background(), "t", map[string]models.AttributeValue{"id": {S: new(string)}})
+	if err != nil {
+		t.Errorf("expected success, got %v", err)
+	}
+
+	// Validation: Empty table name
+	err = service.PutItem(context.Background(), "", map[string]models.AttributeValue{"id": {S: new(string)}})
+	if err == nil {
+		t.Error("expected validation error for empty table name")
+	} else {
+		var apiErr *models.APIError
+		if !errors.As(err, &apiErr) || apiErr.Type != "ValidationException" {
+			t.Errorf("expected ValidationException, got %v", err)
+		}
+	}
+
+	// Validation: Empty item
+	err = service.PutItem(context.Background(), "t", nil)
+	if err == nil {
+		t.Error("expected validation error for empty item")
+	} else {
+		var apiErr *models.APIError
+		if !errors.As(err, &apiErr) || apiErr.Type != "ValidationException" {
+			t.Errorf("expected ValidationException, got %v", err)
+		}
+	}
+
+	// Store Error: Table Not Found
+	err = service.PutItem(context.Background(), "missing-table", map[string]models.AttributeValue{"id": {S: new(string)}})
+	if err == nil {
+		t.Error("expected error for missing table")
+	} else {
+		var apiErr *models.APIError
+		if !errors.As(err, &apiErr) || apiErr.Type != "ResourceNotFoundException" {
+			t.Errorf("expected ResourceNotFoundException, got %v", err)
+		}
+	}
+
+	// Store Error: Internal Failure
+	err = service.PutItem(context.Background(), "error-table", map[string]models.AttributeValue{"id": {S: new(string)}})
+	if err == nil {
+		t.Error("expected error for store failure")
+	} else {
+		var apiErr *models.APIError
+		if !errors.As(err, &apiErr) || apiErr.Type != "InternalFailure" {
+			t.Errorf("expected InternalFailure, got %v", err)
+		}
+	}
+}
+
+func TestTableService_GetItem(t *testing.T) {
+	mock := &mockStore{
+		GetItemFunc: func(ctx context.Context, tableName string, key map[string]models.AttributeValue) (map[string]models.AttributeValue, error) {
+			if tableName == "error-table" {
+				return nil, errors.New("store error")
+			}
+			if tableName == "success-table" {
+				return map[string]models.AttributeValue{"id": {S: new(string)}}, nil
+			}
+			return nil, nil
+		},
+	}
+	service := NewTableService(mock)
+
+	// Success
+	item, err := service.GetItem(context.Background(), "success-table", map[string]models.AttributeValue{"id": {S: new(string)}})
+	if err != nil {
+		t.Errorf("expected success, got %v", err)
+	}
+	if item == nil {
+		t.Error("expected item, got nil")
+	}
+
+	// Validation: Empty table name
+	_, err = service.GetItem(context.Background(), "", map[string]models.AttributeValue{"id": {S: new(string)}})
+	if err == nil {
+		t.Error("expected validation error for empty table name")
+	}
+
+	// Validation: Empty key
+	_, err = service.GetItem(context.Background(), "t", nil)
+	if err == nil {
+		t.Error("expected validation error for empty key")
+	}
+
+	// Store Error
+	_, err = service.GetItem(context.Background(), "error-table", map[string]models.AttributeValue{"id": {S: new(string)}})
+	if err == nil {
+		t.Error("expected error for store failure")
+	} else {
+		var apiErr *models.APIError
+		if !errors.As(err, &apiErr) || apiErr.Type != "InternalFailure" {
+			t.Errorf("expected InternalFailure, got %v", err)
+		}
+	}
+}
+
+func TestTableService_DeleteItem(t *testing.T) {
+	mock := &mockStore{
+		DeleteItemFunc: func(ctx context.Context, tableName string, key map[string]models.AttributeValue) error {
+			if tableName == "error-table" {
+				return errors.New("store error")
+			}
+			if tableName == "missing-table" {
+				return st.ErrTableNotFound
+			}
+			return nil
+		},
+	}
+	service := NewTableService(mock)
+
+	// Success
+	err := service.DeleteItem(context.Background(), "t", map[string]models.AttributeValue{"id": {S: new(string)}})
+	if err != nil {
+		t.Errorf("expected success, got %v", err)
+	}
+
+	// Validation: Empty table name
+	err = service.DeleteItem(context.Background(), "", map[string]models.AttributeValue{"id": {S: new(string)}})
+	if err == nil {
+		t.Error("expected validation error for empty table name")
+	}
+
+	// Validation: Empty key
+	err = service.DeleteItem(context.Background(), "t", nil)
+	if err == nil {
+		t.Error("expected validation error for empty key")
+	}
+
+	// Store Error: Table Not Found
+	err = service.DeleteItem(context.Background(), "missing-table", map[string]models.AttributeValue{"id": {S: new(string)}})
+	if err == nil {
+		t.Error("expected error for missing table")
+	} else {
+		var apiErr *models.APIError
+		if !errors.As(err, &apiErr) || apiErr.Type != "ResourceNotFoundException" {
+			t.Errorf("expected ResourceNotFoundException, got %v", err)
+		}
+	}
+
+	// Store Error: Internal Failure
+	err = service.DeleteItem(context.Background(), "error-table", map[string]models.AttributeValue{"id": {S: new(string)}})
+	if err == nil {
+		t.Error("expected error for store failure")
+	} else {
+		var apiErr *models.APIError
+		if !errors.As(err, &apiErr) || apiErr.Type != "InternalFailure" {
+			t.Errorf("expected InternalFailure, got %v", err)
+		}
 	}
 }

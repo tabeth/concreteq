@@ -198,3 +198,208 @@ func (s *FoundationDBStore) ListTables(ctx context.Context, limit int, exclusive
 
 	return tableNames, lastEvaluatedTableName, nil
 }
+
+// PutItem writes an item to the table.
+func (s *FoundationDBStore) PutItem(ctx context.Context, tableName string, item map[string]models.AttributeValue) error {
+	_, err := s.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
+		// 1. Get Table Metadata to understand Key Schema
+		// Note: In an optimized system, we would cache this.
+		table, err := s.getTableInternal(tr, tableName)
+		if err != nil {
+			return nil, err
+		}
+		if table == nil {
+			return nil, ErrTableNotFound
+		}
+
+		// 2. Extract Key Fields
+		keyTuple, err := s.buildKeyTuple(table, item)
+		if err != nil {
+			return nil, err
+		}
+
+		// 3. Serialize Item
+		itemBytes, err := json.Marshal(item)
+		if err != nil {
+			return nil, err
+		}
+
+		// 4. Store
+		// Path: ["tables", tableName] -> Pack("data", <pk_tuple>)
+		tableDir, err := s.dir.Open(tr, []string{"tables", tableName}, nil)
+		if err != nil {
+			return nil, err
+		}
+		itemKey := tableDir.Pack(append(tuple.Tuple{"data"}, keyTuple...))
+		tr.Set(itemKey, itemBytes)
+
+		return nil, nil
+	})
+	return err
+}
+
+// GetItem retrieves an item by key.
+func (s *FoundationDBStore) GetItem(ctx context.Context, tableName string, key map[string]models.AttributeValue) (map[string]models.AttributeValue, error) {
+	val, err := s.db.ReadTransact(func(rtr fdb.ReadTransaction) (interface{}, error) {
+		// 1. Get Table Metadata
+		table, err := s.getTableInternal(rtr, tableName)
+		if err != nil {
+			return nil, err
+		}
+		if table == nil {
+			return nil, nil // Table not found implies item not found
+		}
+
+		// 2. Extract Key Fields from the *request key map*
+		keyTuple, err := s.buildKeyTuple(table, key)
+		if err != nil {
+			return nil, err
+		}
+
+		// 3. Fetch
+		tableDir, err := s.dir.Open(rtr, []string{"tables", tableName}, nil)
+		if err != nil {
+			return nil, err
+		}
+		itemKey := tableDir.Pack(append(tuple.Tuple{"data"}, keyTuple...))
+		return rtr.Get(itemKey).Get()
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	valBytes, ok := val.([]byte)
+	if !ok || len(valBytes) == 0 {
+		return nil, nil
+	}
+
+	// 4. Deserialize
+	var item map[string]models.AttributeValue
+	if err := json.Unmarshal(valBytes, &item); err != nil {
+		return nil, err
+	}
+	return item, nil
+}
+
+// DeleteItem deletes an item by key.
+func (s *FoundationDBStore) DeleteItem(ctx context.Context, tableName string, key map[string]models.AttributeValue) error {
+	_, err := s.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
+		// 1. Get Table Metadata
+		table, err := s.getTableInternal(tr, tableName)
+		if err != nil {
+			return nil, err
+		}
+		if table == nil {
+			return nil, models.New("ResourceNotFoundException", "Requested resource not found")
+		}
+
+		// 2. Extract Key Fields
+		keyTuple, err := s.buildKeyTuple(table, key)
+		if err != nil {
+			return nil, err
+		}
+
+		// 3. Delete
+		tableDir, err := s.dir.Open(tr, []string{"tables", tableName}, nil)
+		if err != nil {
+			return nil, err
+		}
+		itemKey := tableDir.Pack(append(tuple.Tuple{"data"}, keyTuple...))
+		tr.Clear(itemKey)
+
+		return nil, nil
+	})
+	return err
+}
+
+// Helpers
+
+func (s *FoundationDBStore) getTableInternal(rtr fdb.ReadTransaction, tableName string) (*models.Table, error) {
+	exists, err := s.dir.Exists(rtr, []string{"tables", tableName})
+	if err != nil {
+		return nil, err
+	}
+	if !exists {
+		return nil, nil
+	}
+	tableDir, err := s.dir.Open(rtr, []string{"tables", tableName}, nil)
+	if err != nil {
+		return nil, err
+	}
+	val, err := rtr.Get(tableDir.Pack(tuple.Tuple{"metadata"})).Get()
+	if err != nil {
+		return nil, err
+	}
+	if val == nil {
+		return nil, nil
+	}
+	var table models.Table
+	if err := json.Unmarshal(val, &table); err != nil {
+		return nil, err
+	}
+	return &table, nil
+}
+
+func (s *FoundationDBStore) buildKeyTuple(table *models.Table, item map[string]models.AttributeValue) ([]tuple.TupleElement, error) {
+	var pkHashName, pkRangeName string
+	for _, k := range table.KeySchema {
+		if k.KeyType == "HASH" {
+			pkHashName = k.AttributeName
+		} else if k.KeyType == "RANGE" {
+			pkRangeName = k.AttributeName
+		}
+	}
+
+	if pkHashName == "" {
+		return nil, fmt.Errorf("table %s has no HASH key", table.TableName) // Should not happen for valid tables
+	}
+
+	hashVal, ok := item[pkHashName]
+	if !ok {
+		return nil, fmt.Errorf("missing HASH key: %s", pkHashName)
+	}
+	hashTupleElem, err := toTupleElement(hashVal)
+	if err != nil {
+		return nil, err
+	}
+
+	elems := []tuple.TupleElement{hashTupleElem}
+
+	if pkRangeName != "" {
+		rangeVal, ok := item[pkRangeName]
+		if !ok {
+			return nil, fmt.Errorf("missing RANGE key: %s", pkRangeName)
+		}
+		rangeTupleElem, err := toTupleElement(rangeVal)
+		if err != nil {
+			return nil, err
+		}
+		elems = append(elems, rangeTupleElem)
+	}
+
+	return elems, nil
+}
+
+func toTupleElement(av models.AttributeValue) (tuple.TupleElement, error) {
+	if av.S != nil {
+		return *av.S, nil
+	}
+	if av.N != nil {
+		// Store numbers as strings/bytes or convert?
+		// FDB Tuple layer supports integers and floats. DynamoDB numbers are arbitrary precision strings.
+		// For MVP simplicity and sorting correctness for common numbers, maybe store as string?
+		// Actually, DynamoDB strings sort differently than numbers.
+		// If we store as string in tuple, "10" comes before "2". That's wrong for numbers.
+		// We should try to parse as float64 or int64 if possible for ordering.
+		// But for exact equality matching (Hash key), string is fine.
+		// Range keys need proper ordering.
+		// Let's store as string for MVP to ensure round-trip accuracy, realizing range queries might be lexicographical on the string rep.
+		return *av.N, nil
+	}
+	if av.B != nil {
+		return []byte(*av.B), nil
+	}
+	// ... other types ...
+	// For PKs, usually only S, N, B are allowed.
+	return nil, fmt.Errorf("unsupported key type or null")
+}

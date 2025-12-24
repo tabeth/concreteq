@@ -118,3 +118,68 @@ type DescribeTableRequest struct {
 type DescribeTableResponse struct {
 	Table TableDescription `json:"Table"`
 }
+
+// AttributeValue represents the data for an attribute.
+// It is a union type, where only one field should be set.
+type AttributeValue struct {
+	// S represents a string attribute type.
+	// Example: "Bird"
+	S *string `json:"S,omitempty"`
+	// N represents a number attribute type. Numbers are sent as strings to handle arbitrary precision.
+	// Example: "123.45"
+	N *string `json:"N,omitempty"`
+	// B represents a binary attribute type. Base64 encoded string.
+	// Example: "dGhpcyBpcyBhIHRlc3Q="
+	B *string `json:"B,omitempty"`
+	// SS represents a string set attribute type.
+	// Example: ["Giraffe", "Hippo"]
+	SS []string `json:"SS,omitempty"`
+	// NS represents a number set attribute type.
+	// Example: ["42.2", "-19"]
+	NS []string `json:"NS,omitempty"`
+	// BS represents a binary set attribute type.
+	// Example: ["U3Vubnk=", "UmFpbnk="]
+	BS []string `json:"BS,omitempty"`
+	// M represents a map attribute type.
+	// Example: {"Name": {"S": "Joe"}, "Age": {"N": "35"}}
+	M map[string]AttributeValue `json:"M,omitempty"`
+	// L represents a list attribute type.
+	// Example: [{"S": "Cookies"}, {"S": "Coffee"}, {"N": "3.14159"}]
+	L []AttributeValue `json:"L,omitempty"`
+	// NULL represents a null attribute type.
+	// Example: true
+	NULL *bool `json:"NULL,omitempty"`
+	// BOOL represents a boolean attribute type.
+	// Example: true
+	BOOL *bool `json:"BOOL,omitempty"`
+}
+
+// PutItemRequest mirrors the JSON request body for the PutItem action.
+type PutItemRequest struct {
+	TableName string                    `json:"TableName"`
+	Item      map[string]AttributeValue `json:"Item"`
+}
+
+// PutItemResponse mirrors the JSON response for the PutItem action.
+// For MVP, this is empty as we don't support ReturnValues yet.
+type PutItemResponse struct{}
+
+// GetItemRequest mirrors the JSON request body for the GetItem action.
+type GetItemRequest struct {
+	TableName string                    `json:"TableName"`
+	Key       map[string]AttributeValue `json:"Key"`
+}
+
+// GetItemResponse mirrors the JSON response for the GetItem action.
+type GetItemResponse struct {
+	Item map[string]AttributeValue `json:"Item,omitempty"`
+}
+
+// DeleteItemRequest mirrors the JSON request body for the DeleteItem action.
+type DeleteItemRequest struct {
+	TableName string                    `json:"TableName"`
+	Key       map[string]AttributeValue `json:"Key"`
+}
+
+// DeleteItemResponse mirrors the JSON response for the DeleteItem action.
+type DeleteItemResponse struct{}

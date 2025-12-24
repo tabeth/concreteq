@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -18,6 +19,9 @@ type mockTableService struct {
 	DeleteTableFunc func(ctx context.Context, tableName string) (*models.Table, error)
 	ListTablesFunc  func(ctx context.Context, limit int, exclusiveStartTableName string) ([]string, string, error)
 	GetTableFunc    func(ctx context.Context, tableName string) (*models.Table, error)
+	PutItemFunc     func(ctx context.Context, tableName string, item map[string]models.AttributeValue) error
+	GetItemFunc     func(ctx context.Context, tableName string, key map[string]models.AttributeValue) (map[string]models.AttributeValue, error)
+	DeleteItemFunc  func(ctx context.Context, tableName string, key map[string]models.AttributeValue) error
 }
 
 // CreateTable is the method required to satisfy the interface.
@@ -31,6 +35,18 @@ func (m *mockTableService) ListTables(ctx context.Context, limit int, exclusiveS
 
 func (m *mockTableService) GetTable(ctx context.Context, tableName string) (*models.Table, error) {
 	return m.GetTableFunc(ctx, tableName)
+}
+
+func (m *mockTableService) PutItem(ctx context.Context, tableName string, item map[string]models.AttributeValue) error {
+	return m.PutItemFunc(ctx, tableName, item)
+}
+
+func (m *mockTableService) GetItem(ctx context.Context, tableName string, key map[string]models.AttributeValue) (map[string]models.AttributeValue, error) {
+	return m.GetItemFunc(ctx, tableName, key)
+}
+
+func (m *mockTableService) DeleteItem(ctx context.Context, tableName string, key map[string]models.AttributeValue) error {
+	return m.DeleteItemFunc(ctx, tableName, key)
 }
 
 func TestCreateTableHandler_Success(t *testing.T) {
@@ -269,6 +285,28 @@ func TestCreateTableHandler_ServiceError(t *testing.T) {
 	}
 }
 
+func TestCreateTableHandler_GenericError(t *testing.T) {
+	mockService := &mockTableService{
+		CreateTableFunc: func(ctx context.Context, table *models.Table) (*models.Table, error) {
+			return nil, errors.New("generic error") // Not an APIError
+		},
+	}
+	handler := NewDynamoDBHandler(mockService)
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	reqBody := `{"TableName": "test"}`
+	req, _ := http.NewRequest(http.MethodPost, server.URL, bytes.NewBufferString(reqBody))
+	req.Header.Set("X-Amz-Target", "DynamoDB_20120810.CreateTable")
+
+	resp, _ := http.DefaultClient.Do(req)
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Errorf("expected 500, got %d", resp.StatusCode)
+	}
+}
+
 func TestDeleteTableHandler_InvalidJSON(t *testing.T) {
 	handler := NewDynamoDBHandler(&mockTableService{})
 	server := httptest.NewServer(handler)
@@ -413,13 +451,252 @@ func TestListTablesHandler_InvalidJSON(t *testing.T) {
 	}
 }
 
-func TestDescribeTableHandler_InvalidJSON(t *testing.T) {
+func TestPutItemHandler(t *testing.T) {
+	// 1. Setup mock service
+	mockService := &mockTableService{
+		PutItemFunc: func(ctx context.Context, tableName string, item map[string]models.AttributeValue) error {
+			if tableName != "test-table" {
+				return models.New("ValidationException", "wrong table")
+			}
+			if item["id"].S == nil || *item["id"].S != "123" {
+				return models.New("ValidationException", "wrong item")
+			}
+			return nil
+		},
+	}
+	handler := NewDynamoDBHandler(mockService)
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	// 2. Request
+	reqBody := `{"TableName": "test-table", "Item": {"id": {"S": "123"}, "val": {"N": "456"}}}`
+	req, _ := http.NewRequest(http.MethodPost, server.URL, bytes.NewBufferString(reqBody))
+	req.Header.Set("X-Amz-Target", "DynamoDB_20120810.PutItem")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("expected status 200, got %d", resp.StatusCode)
+	}
+}
+
+func TestGetItemHandler_Success(t *testing.T) {
+	mockService := &mockTableService{
+		GetItemFunc: func(ctx context.Context, tableName string, key map[string]models.AttributeValue) (map[string]models.AttributeValue, error) {
+			s := "123"
+			if tableName == "test-table" && *key["id"].S == "123" {
+				return map[string]models.AttributeValue{
+					"id":  {S: &s},
+					"val": {S: &s},
+				}, nil
+			}
+			return nil, nil // Not found
+		},
+	}
+	handler := NewDynamoDBHandler(mockService)
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	reqBody := `{"TableName": "test-table", "Key": {"id": {"S": "123"}}}`
+	req, _ := http.NewRequest(http.MethodPost, server.URL, bytes.NewBufferString(reqBody))
+	req.Header.Set("X-Amz-Target", "DynamoDB_20120810.GetItem")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("expected status 200, got %d", resp.StatusCode)
+	}
+
+	var respBody models.GetItemResponse
+	json.NewDecoder(resp.Body).Decode(&respBody)
+	if respBody.Item == nil || *respBody.Item["val"].S != "123" {
+		t.Error("expected item to be returned")
+	}
+}
+
+func TestGetItemHandler_NotFound(t *testing.T) {
+	mockService := &mockTableService{
+		GetItemFunc: func(ctx context.Context, tableName string, key map[string]models.AttributeValue) (map[string]models.AttributeValue, error) {
+			return nil, nil // Not found
+		},
+	}
+	handler := NewDynamoDBHandler(mockService)
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	reqBody := `{"TableName": "test-table", "Key": {"id": {"S": "999"}}}`
+	req, _ := http.NewRequest(http.MethodPost, server.URL, bytes.NewBufferString(reqBody))
+	req.Header.Set("X-Amz-Target", "DynamoDB_20120810.GetItem")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Errorf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("expected status 200, got %d", resp.StatusCode)
+	}
+	var respBody models.GetItemResponse
+	json.NewDecoder(resp.Body).Decode(&respBody)
+	if respBody.Item != nil {
+		t.Error("expected empty item")
+	}
+}
+
+func TestDeleteItemHandler(t *testing.T) {
+	mockService := &mockTableService{
+		DeleteItemFunc: func(ctx context.Context, tableName string, key map[string]models.AttributeValue) error {
+			return nil
+		},
+	}
+	handler := NewDynamoDBHandler(mockService)
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	reqBody := `{"TableName": "test-table", "Key": {"id": {"S": "123"}}}`
+	req, _ := http.NewRequest(http.MethodPost, server.URL, bytes.NewBufferString(reqBody))
+	req.Header.Set("X-Amz-Target", "DynamoDB_20120810.DeleteItem")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Errorf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("expected status 200, got %d", resp.StatusCode)
+	}
+}
+
+func TestPutItemHandler_Error(t *testing.T) {
+	mockService := &mockTableService{
+		PutItemFunc: func(ctx context.Context, tableName string, item map[string]models.AttributeValue) error {
+			return models.New("InternalFailure", "fail")
+		},
+	}
+	handler := NewDynamoDBHandler(mockService)
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	reqBody := `{"TableName": "test-table", "Item": {"id": {"S": "123"}}}`
+	req, _ := http.NewRequest(http.MethodPost, server.URL, bytes.NewBufferString(reqBody))
+	req.Header.Set("X-Amz-Target", "DynamoDB_20120810.PutItem")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Errorf("expected status 500, got %d", resp.StatusCode)
+	}
+}
+
+func TestGetItemHandler_Error(t *testing.T) {
+	mockService := &mockTableService{
+		GetItemFunc: func(ctx context.Context, tableName string, key map[string]models.AttributeValue) (map[string]models.AttributeValue, error) {
+			return nil, models.New("InternalFailure", "fail")
+		},
+	}
+	handler := NewDynamoDBHandler(mockService)
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	reqBody := `{"TableName": "test-table", "Key": {"id": {"S": "123"}}}`
+	req, _ := http.NewRequest(http.MethodPost, server.URL, bytes.NewBufferString(reqBody))
+	req.Header.Set("X-Amz-Target", "DynamoDB_20120810.GetItem")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Errorf("expected status 500, got %d", resp.StatusCode)
+	}
+}
+
+func TestDeleteItemHandler_Error(t *testing.T) {
+	mockService := &mockTableService{
+		DeleteItemFunc: func(ctx context.Context, tableName string, key map[string]models.AttributeValue) error {
+			return models.New("InternalFailure", "fail")
+		},
+	}
+	handler := NewDynamoDBHandler(mockService)
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	reqBody := `{"TableName": "test-table", "Key": {"id": {"S": "123"}}}`
+	req, _ := http.NewRequest(http.MethodPost, server.URL, bytes.NewBufferString(reqBody))
+	req.Header.Set("X-Amz-Target", "DynamoDB_20120810.DeleteItem")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Errorf("expected status 500, got %d", resp.StatusCode)
+	}
+}
+
+func TestPutItemHandler_InvalidJSON(t *testing.T) {
 	handler := NewDynamoDBHandler(&mockTableService{})
 	server := httptest.NewServer(handler)
 	defer server.Close()
 
 	req, _ := http.NewRequest(http.MethodPost, server.URL, bytes.NewBufferString(`{`))
-	req.Header.Set("X-Amz-Target", "DynamoDB_20120810.DescribeTable")
+	req.Header.Set("X-Amz-Target", "DynamoDB_20120810.PutItem")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("expected status 400, got %d", resp.StatusCode)
+	}
+}
+
+func TestGetItemHandler_InvalidJSON(t *testing.T) {
+	handler := NewDynamoDBHandler(&mockTableService{})
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	req, _ := http.NewRequest(http.MethodPost, server.URL, bytes.NewBufferString(`{`))
+	req.Header.Set("X-Amz-Target", "DynamoDB_20120810.GetItem")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("expected status 400, got %d", resp.StatusCode)
+	}
+}
+
+func TestDeleteItemHandler_InvalidJSON(t *testing.T) {
+	handler := NewDynamoDBHandler(&mockTableService{})
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	req, _ := http.NewRequest(http.MethodPost, server.URL, bytes.NewBufferString(`{`))
+	req.Header.Set("X-Amz-Target", "DynamoDB_20120810.DeleteItem")
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
