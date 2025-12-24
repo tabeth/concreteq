@@ -159,7 +159,7 @@ func TestFoundationDBStore_Query_Filter(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, _, err := store.Query(ctx, tableName, tt.keyCond, tt.filter, "", nil, tt.vals, 0, nil, false)
+			result, _, err := store.Query(ctx, tableName, "", tt.keyCond, tt.filter, "", nil, tt.vals, 0, nil, false)
 			if err != nil {
 				t.Fatalf("Query failed: %v", err)
 			}

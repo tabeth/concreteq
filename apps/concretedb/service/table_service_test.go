@@ -21,7 +21,7 @@ type mockStore struct {
 	DeleteItemFunc func(ctx context.Context, tableName string, key map[string]models.AttributeValue, returnValues string) (map[string]models.AttributeValue, error)
 	UpdateItemFunc func(ctx context.Context, tableName string, key map[string]models.AttributeValue, updateExpression string, exprAttrNames map[string]string, exprAttrValues map[string]models.AttributeValue, returnValues string) (map[string]models.AttributeValue, error)
 	ScanFunc       func(ctx context.Context, tableName string, filterExpression string, projectionExpression string, exprAttrNames map[string]string, exprAttrValues map[string]models.AttributeValue, limit int32, exclusiveStartKey map[string]models.AttributeValue, consistentRead bool) ([]map[string]models.AttributeValue, map[string]models.AttributeValue, error)
-	QueryFunc      func(ctx context.Context, tableName string, keyConditionExpression string, filterExpression string, projectionExpression string, exprAttrNames map[string]string, expressionAttributeValues map[string]models.AttributeValue, limit int32, exclusiveStartKey map[string]models.AttributeValue, consistentRead bool) ([]map[string]models.AttributeValue, map[string]models.AttributeValue, error)
+	QueryFunc      func(ctx context.Context, tableName string, indexName string, keyConditionExpression string, filterExpression string, projectionExpression string, exprAttrNames map[string]string, expressionAttributeValues map[string]models.AttributeValue, limit int32, exclusiveStartKey map[string]models.AttributeValue, consistentRead bool) ([]map[string]models.AttributeValue, map[string]models.AttributeValue, error)
 }
 
 func (m *mockStore) CreateTable(ctx context.Context, table *models.Table) error {
@@ -61,8 +61,8 @@ func (m *mockStore) Scan(ctx context.Context, tableName string, filterExpression
 	return m.ScanFunc(ctx, tableName, filterExpression, projectionExpression, exprAttrNames, exprAttrValues, limit, exclusiveStartKey, consistentRead)
 }
 
-func (m *mockStore) Query(ctx context.Context, tableName string, keyConditionExpression string, filterExpression string, projectionExpression string, exprAttrNames map[string]string, expressionAttributeValues map[string]models.AttributeValue, limit int32, exclusiveStartKey map[string]models.AttributeValue, consistentRead bool) ([]map[string]models.AttributeValue, map[string]models.AttributeValue, error) {
-	return m.QueryFunc(ctx, tableName, keyConditionExpression, filterExpression, projectionExpression, exprAttrNames, expressionAttributeValues, limit, exclusiveStartKey, consistentRead)
+func (m *mockStore) Query(ctx context.Context, tableName string, indexName string, keyConditionExpression string, filterExpression string, projectionExpression string, exprAttrNames map[string]string, expressionAttributeValues map[string]models.AttributeValue, limit int32, exclusiveStartKey map[string]models.AttributeValue, consistentRead bool) ([]map[string]models.AttributeValue, map[string]models.AttributeValue, error) {
+	return m.QueryFunc(ctx, tableName, indexName, keyConditionExpression, filterExpression, projectionExpression, exprAttrNames, expressionAttributeValues, limit, exclusiveStartKey, consistentRead)
 }
 
 func TestTableService_DeleteTable_NotFound(t *testing.T) {
@@ -645,7 +645,7 @@ func TestTableService_Scan(t *testing.T) {
 
 func TestTableService_Query(t *testing.T) {
 	mock := &mockStore{
-		QueryFunc: func(ctx context.Context, tableName string, keyConditionExpression string, filterExpression string, projectionExpression string, exprAttrNames map[string]string, expressionAttributeValues map[string]models.AttributeValue, limit int32, exclusiveStartKey map[string]models.AttributeValue, consistentRead bool) ([]map[string]models.AttributeValue, map[string]models.AttributeValue, error) {
+		QueryFunc: func(ctx context.Context, tableName string, indexName string, keyConditionExpression string, filterExpression string, projectionExpression string, exprAttrNames map[string]string, expressionAttributeValues map[string]models.AttributeValue, limit int32, exclusiveStartKey map[string]models.AttributeValue, consistentRead bool) ([]map[string]models.AttributeValue, map[string]models.AttributeValue, error) {
 			if tableName == "error-table" {
 				return nil, nil, errors.New("store error")
 			}
@@ -759,7 +759,7 @@ func TestTableService_Scan_TableNotFound(t *testing.T) {
 
 func TestTableService_Query_TableNotFound(t *testing.T) {
 	mock := &mockStore{
-		QueryFunc: func(ctx context.Context, tableName string, keyConditionExpression string, filterExpression string, projectionExpression string, exprAttrNames map[string]string, expressionAttributeValues map[string]models.AttributeValue, limit int32, exclusiveStartKey map[string]models.AttributeValue, consistentRead bool) ([]map[string]models.AttributeValue, map[string]models.AttributeValue, error) {
+		QueryFunc: func(ctx context.Context, tableName string, indexName string, keyConditionExpression string, filterExpression string, projectionExpression string, exprAttrNames map[string]string, expressionAttributeValues map[string]models.AttributeValue, limit int32, exclusiveStartKey map[string]models.AttributeValue, consistentRead bool) ([]map[string]models.AttributeValue, map[string]models.AttributeValue, error) {
 			return nil, nil, st.ErrTableNotFound
 		},
 	}

@@ -119,7 +119,7 @@ func TestFoundationDBStore_Query_SortKeyConditions(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Query
-			items, _, err := store.Query(ctx, tableName, tt.cond, "", "", nil, tt.vals, 0, nil, false)
+			items, _, err := store.Query(ctx, tableName, "", tt.cond, "", "", nil, tt.vals, 0, nil, false)
 			if err != nil {
 				t.Fatalf("Query failed: %v", err)
 			}

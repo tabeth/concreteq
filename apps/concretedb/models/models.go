@@ -30,12 +30,41 @@ const (
 // Table is the canonical internal representation of a table's metadata.
 // This is the struct that will be persisted in FoundationDB.
 type Table struct {
-	TableName             string
-	Status                TableStatus
-	KeySchema             []KeySchemaElement
-	AttributeDefinitions  []AttributeDefinition
-	ProvisionedThroughput ProvisionedThroughput
-	CreationDateTime      time.Time
+	TableName              string
+	Status                 TableStatus
+	KeySchema              []KeySchemaElement
+	AttributeDefinitions   []AttributeDefinition
+	GlobalSecondaryIndexes []GlobalSecondaryIndex
+	LocalSecondaryIndexes  []LocalSecondaryIndex
+	ProvisionedThroughput  ProvisionedThroughput
+	CreationDateTime       time.Time
+}
+
+// Projection represents attributes that are copied (projected) from the table into an index.
+type Projection struct {
+	ProjectionType   string   `json:"ProjectionType"` // KEYS_ONLY, INCLUDE, ALL
+	NonKeyAttributes []string `json:"NonKeyAttributes,omitempty"`
+}
+
+// GlobalSecondaryIndex Represents the properties of a global secondary index.
+type GlobalSecondaryIndex struct {
+	IndexName             string                `json:"IndexName"`
+	KeySchema             []KeySchemaElement    `json:"KeySchema"`
+	Projection            Projection            `json:"Projection"`
+	ProvisionedThroughput ProvisionedThroughput `json:"ProvisionedThroughput"`
+	IndexStatus           string                `json:"IndexStatus,omitempty"` // CREATING, ACTIVE, DELETING, UPDATING
+	IndexSizeBytes        int64                 `json:"IndexSizeBytes,omitempty"`
+	ItemCount             int64                 `json:"ItemCount,omitempty"`
+}
+
+// LocalSecondaryIndex Represents the properties of a local secondary index.
+type LocalSecondaryIndex struct {
+	IndexName  string             `json:"IndexName"`
+	KeySchema  []KeySchemaElement `json:"KeySchema"`
+	Projection Projection         `json:"Projection"`
+	// LSI shares throughput with the table, so no ProvisionedThroughput field.
+	IndexSizeBytes int64 `json:"IndexSizeBytes,omitempty"`
+	ItemCount      int64 `json:"ItemCount,omitempty"`
 }
 
 // AttributeDefinition corresponds to the DynamoDB AttributeDefinition type.
@@ -58,22 +87,26 @@ type ProvisionedThroughput struct {
 
 // CreateTableRequest mirrors the JSON request body for the CreateTable action.
 type CreateTableRequest struct {
-	TableName             string                `json:"TableName"`
-	AttributeDefinitions  []AttributeDefinition `json:"AttributeDefinitions"`
-	KeySchema             []KeySchemaElement    `json:"KeySchema"`
-	ProvisionedThroughput ProvisionedThroughput `json:"ProvisionedThroughput"`
+	TableName              string                 `json:"TableName"`
+	AttributeDefinitions   []AttributeDefinition  `json:"AttributeDefinitions"`
+	KeySchema              []KeySchemaElement     `json:"KeySchema"`
+	GlobalSecondaryIndexes []GlobalSecondaryIndex `json:"GlobalSecondaryIndexes,omitempty"`
+	LocalSecondaryIndexes  []LocalSecondaryIndex  `json:"LocalSecondaryIndexes,omitempty"`
+	ProvisionedThroughput  ProvisionedThroughput  `json:"ProvisionedThroughput"`
 }
 
 // TableDescription is the core of the CreateTable response.
 type TableDescription struct {
-	TableName             string                `json:"TableName"`
-	TableStatus           string                `json:"TableStatus"`
-	AttributeDefinitions  []AttributeDefinition `json:"AttributeDefinitions"`
-	KeySchema             []KeySchemaElement    `json:"KeySchema"`
-	CreationDateTime      float64               `json:"CreationDateTime"` // Represented as Unix epoch time
-	ProvisionedThroughput ProvisionedThroughput `json:"ProvisionedThroughput"`
-	TableSizeBytes        int64                 `json:"TableSizeBytes"`
-	ItemCount             int64                 `json:"ItemCount"`
+	TableName              string                 `json:"TableName"`
+	TableStatus            string                 `json:"TableStatus"`
+	AttributeDefinitions   []AttributeDefinition  `json:"AttributeDefinitions"`
+	KeySchema              []KeySchemaElement     `json:"KeySchema"`
+	CreationDateTime       float64                `json:"CreationDateTime"` // Represented as Unix epoch time
+	ProvisionedThroughput  ProvisionedThroughput  `json:"ProvisionedThroughput"`
+	TableSizeBytes         int64                  `json:"TableSizeBytes"`
+	ItemCount              int64                  `json:"ItemCount"`
+	GlobalSecondaryIndexes []GlobalSecondaryIndex `json:"GlobalSecondaryIndexes,omitempty"`
+	LocalSecondaryIndexes  []LocalSecondaryIndex  `json:"LocalSecondaryIndexes,omitempty"`
 }
 
 // CreateTableResponse mirrors the JSON response for a successful CreateTable action.
@@ -228,7 +261,7 @@ type ScanResponse struct {
 // QueryRequest mirrors the JSON request body for the Query action.
 type QueryRequest struct {
 	TableName                 string                    `json:"TableName"`
-	IndexName                 string                    `json:"IndexName,omitempty"` // Not supported in MVP yet
+	IndexName                 string                    `json:"IndexName,omitempty"`
 	KeyConditionExpression    string                    `json:"KeyConditionExpression"`
 	FilterExpression          string                    `json:"FilterExpression,omitempty"`
 	ProjectionExpression      string                    `json:"ProjectionExpression,omitempty"`

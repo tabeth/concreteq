@@ -242,7 +242,7 @@ func (s *TableService) Query(ctx context.Context, input *models.QueryRequest) (*
 	}
 
 	// Call the store
-	items, lastKey, err := s.store.Query(ctx, input.TableName, input.KeyConditionExpression, input.FilterExpression, input.ProjectionExpression, input.ExpressionAttributeNames, input.ExpressionAttributeValues, input.Limit, input.ExclusiveStartKey, input.ConsistentRead)
+	items, lastKey, err := s.store.Query(ctx, input.TableName, input.IndexName, input.KeyConditionExpression, input.FilterExpression, input.ProjectionExpression, input.ExpressionAttributeNames, input.ExpressionAttributeValues, input.Limit, input.ExclusiveStartKey, input.ConsistentRead)
 	if err != nil {
 		if errors.Is(err, store.ErrTableNotFound) {
 			return nil, models.New("ResourceNotFoundException", fmt.Sprintf("Table not found: %s", input.TableName))

@@ -123,7 +123,7 @@ func TestFoundationDBStore_ConsistentRead(t *testing.T) {
 	}
 
 	// 4. Query with ConsistentRead=true
-	items, _, err = store.Query(ctx, tableName, "pk = :p", "", "", nil, map[string]models.AttributeValue{":p": {S: &pk}}, 0, nil, true)
+	items, _, err = store.Query(ctx, tableName, "", "pk = :p", "", "", nil, map[string]models.AttributeValue{":p": {S: &pk}}, 0, nil, true)
 	if err != nil {
 		t.Fatalf("Query with ConsistentRead=true failed: %v", err)
 	}

@@ -138,7 +138,7 @@ func TestFoundationDBStore_ItemOperations_NotFound(t *testing.T) {
 	}
 
 	// 5. Query
-	_, _, err = store.Query(ctx, "non-existent", "pk = :k", "", "", nil, map[string]models.AttributeValue{":k": {S: strPtr("1")}}, 0, nil, false)
+	_, _, err = store.Query(ctx, "non-existent", "", "pk = :k", "", "", nil, map[string]models.AttributeValue{":k": {S: strPtr("1")}}, 0, nil, false)
 	if err != ErrTableNotFound {
 		t.Errorf("Query: expected ErrTableNotFound, got %v", err)
 	}
@@ -223,7 +223,7 @@ func TestFoundationDBStore_Query_Comprehensive(t *testing.T) {
 	}
 
 	// 3. Query with Limit
-	items, lek, err := store.Query(ctx, tableName, "pk = :pk", "", "", nil, map[string]models.AttributeValue{":pk": {S: &pk}}, 2, nil, false)
+	items, lek, err := store.Query(ctx, tableName, "", "pk = :pk", "", "", nil, map[string]models.AttributeValue{":pk": {S: &pk}}, 2, nil, false)
 	if err != nil {
 		t.Fatalf("Query failed: %v", err)
 	}
@@ -235,7 +235,7 @@ func TestFoundationDBStore_Query_Comprehensive(t *testing.T) {
 	}
 
 	// 4. Query with ExclusiveStartKey
-	items2, _, err := store.Query(ctx, tableName, "pk = :pk", "", "", nil, map[string]models.AttributeValue{":pk": {S: &pk}}, 10, lek, false)
+	items2, _, err := store.Query(ctx, tableName, "", "pk = :pk", "", "", nil, map[string]models.AttributeValue{":pk": {S: &pk}}, 10, lek, false)
 	if err != nil {
 		t.Fatalf("Query with ESK failed: %v", err)
 	}
@@ -256,19 +256,19 @@ func TestFoundationDBStore_Query_Comprehensive(t *testing.T) {
 		t.Fatalf("setup corruption failed: %v", err)
 	}
 
-	_, _, err = store.Query(ctx, tableName, "pk = :pk", "", "", nil, map[string]models.AttributeValue{":pk": {S: &pk}}, 10, nil, false)
+	_, _, err = store.Query(ctx, tableName, "", "pk = :pk", "", "", nil, map[string]models.AttributeValue{":pk": {S: &pk}}, 10, nil, false)
 	if err == nil || !strings.Contains(err.Error(), "no HASH key") {
 		t.Errorf("expected error for no HASH key, got %v", err)
 	}
 
 	// 6. Query with missing placeholder
-	_, _, err = store.Query(ctx, "non-existent", "pk = :missing", "", "", nil, nil, 10, nil, false)
+	_, _, err = store.Query(ctx, "non-existent", "", "pk = :missing", "", "", nil, nil, 10, nil, false)
 	if err == nil {
 		t.Error("expected error for missing placeholder in Query")
 	}
 
 	// 7. Query with invalid ESK
-	_, _, err = store.Query(ctx, "list-tables-comprehensive", "pk = :pk", "", "", nil, map[string]models.AttributeValue{":pk": {S: strPtr("val")}}, 10, map[string]models.AttributeValue{"pk": {BOOL: boolPtr(true)}}, false)
+	_, _, err = store.Query(ctx, "list-tables-comprehensive", "", "pk = :pk", "", "", nil, map[string]models.AttributeValue{":pk": {S: strPtr("val")}}, 10, map[string]models.AttributeValue{"pk": {BOOL: boolPtr(true)}}, false)
 	if err == nil {
 		t.Error("expected error for invalid ESK in Query")
 	}
@@ -533,7 +533,7 @@ func TestFoundationDBStore_Query_EdgeCases(t *testing.T) {
 	})
 
 	// 1. Placeholder fallback (only one value provided, use as PK even if name doesn't match)
-	items, _, err := store.Query(ctx, tableName, "arbitrary = :v", "", "", nil, map[string]models.AttributeValue{
+	items, _, err := store.Query(ctx, tableName, "", "arbitrary = :v", "", "", nil, map[string]models.AttributeValue{
 		":v": {S: strPtr("val1")},
 	}, 0, nil, false)
 	if err != nil {
@@ -550,7 +550,7 @@ func TestFoundationDBStore_Query_EdgeCases(t *testing.T) {
 		"sk": {S: strPtr(ff + "suffix")},
 	}, "")
 
-	items, _, err = store.Query(ctx, tableName, "pk = :p AND begins_with(sk, :s)", "", "", nil, map[string]models.AttributeValue{
+	items, _, err = store.Query(ctx, tableName, "", "pk = :p AND begins_with(sk, :s)", "", "", nil, map[string]models.AttributeValue{
 		":p": {S: strPtr("pk1")},
 		":s": {S: strPtr(ff)},
 	}, 0, nil, false)
@@ -570,7 +570,7 @@ func TestFoundationDBStore_Query_EdgeCases(t *testing.T) {
 		}, "")
 	}
 
-	items, lek, err := store.Query(ctx, tableName, "pk = :p", "", "", nil, map[string]models.AttributeValue{
+	items, lek, err := store.Query(ctx, tableName, "", "pk = :p", "", "", nil, map[string]models.AttributeValue{
 		":p": {S: &pkLimit},
 	}, 2, nil, false)
 	if err != nil {
@@ -603,9 +603,9 @@ func TestFoundationDBStore_UpdateItem_ALL_OLD_NonExistent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UpdateItem failed: %v", err)
 	}
-	// It returns the "old" item which was initialized with PK
-	if *old["id"].S != "999" {
-		t.Errorf("expected old to have PK, got %v", old)
+	// DynamoDB behavior: If item didn't exist, ALL_OLD returns nothing (nil).
+	if old != nil && len(old) > 0 {
+		t.Errorf("expected nil/empty for ALL_OLD on non-existent item, got %v", old)
 	}
 }
 
@@ -661,7 +661,7 @@ func TestFoundationDBStore_Query_ResolvedPK_Fail(t *testing.T) {
 	})
 
 	// Multiple values, cannot resolve PK automatically if not named
-	_, _, err := store.Query(ctx, tableName, "something", "", "", nil, map[string]models.AttributeValue{
+	_, _, err := store.Query(ctx, tableName, "", "something", "", "", nil, map[string]models.AttributeValue{
 		":v1": {S: strPtr("1")},
 		":v2": {S: strPtr("2")},
 	}, 0, nil, false)
@@ -749,7 +749,7 @@ func TestFoundationDBStore_Query_AllOperators(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		items, _, err := store.Query(ctx, tableName, tt.expr, "", "", nil, tt.vals, 0, nil, false)
+		items, _, err := store.Query(ctx, tableName, "", tt.expr, "", "", nil, tt.vals, 0, nil, false)
 		if err != nil {
 			t.Errorf("Query(%s) failed: %v", tt.expr, err)
 			continue
@@ -788,7 +788,7 @@ func TestFoundationDBStore_FinalEdgeCases(t *testing.T) {
 	}
 
 	// 4. Query with bad ESK (hits line 359)
-	_, _, err = store.Query(ctx, tableName, "pk = :p", "", "", nil, map[string]models.AttributeValue{":p": {S: strPtr("1")}}, 0, map[string]models.AttributeValue{"bad": {S: strPtr("1")}}, false)
+	_, _, err = store.Query(ctx, tableName, "", "pk = :p", "", "", nil, map[string]models.AttributeValue{":p": {S: strPtr("1")}}, 0, map[string]models.AttributeValue{"bad": {S: strPtr("1")}}, false)
 	if err == nil {
 		t.Error("expected error for bad ESK in Query")
 	}
@@ -987,13 +987,13 @@ func TestFoundationDBStore_Query_SK_Edges(t *testing.T) {
 		":p": {S: strPtr("p1")},
 		":s": {N: strPtr("1")},
 	}
-	_, _, err := store.Query(ctx, tableName, "pk = :p AND begins_with(sk, :s)", "", "", nil, vals, 0, nil, false)
+	_, _, err := store.Query(ctx, tableName, "", "pk = :p AND begins_with(sk, :s)", "", "", nil, vals, 0, nil, false)
 	if err == nil {
 		t.Error("expected error for begins_with on numeric SK")
 	}
 
 	// 2. unsupported operator
-	_, _, err = store.Query(ctx, tableName, "pk = :p AND sk IN :s", "", "", nil, vals, 0, nil, false)
+	_, _, err = store.Query(ctx, tableName, "", "pk = :p AND sk IN :s", "", "", nil, vals, 0, nil, false)
 	if err == nil {
 		t.Error("expected error for unsupported SK operator")
 	}

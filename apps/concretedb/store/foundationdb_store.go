@@ -149,7 +149,7 @@ func (s *FoundationDBStore) Scan(ctx context.Context, tableName string, filterEx
 }
 
 // Query queries the table.
-func (s *FoundationDBStore) Query(ctx context.Context, tableName string, keyConditionExpression string, filterExpression string, projectionExpression string, expressionAttributeNames map[string]string, expressionAttributeValues map[string]models.AttributeValue, limit int32, exclusiveStartKey map[string]models.AttributeValue, consistentRead bool) ([]map[string]models.AttributeValue, map[string]models.AttributeValue, error) {
+func (s *FoundationDBStore) Query(ctx context.Context, tableName string, indexName string, keyConditionExpression string, filterExpression string, projectionExpression string, expressionAttributeNames map[string]string, expressionAttributeValues map[string]models.AttributeValue, limit int32, exclusiveStartKey map[string]models.AttributeValue, consistentRead bool) ([]map[string]models.AttributeValue, map[string]models.AttributeValue, error) {
 	// 1. Get Table Metadata
 	table, err := s.GetTable(ctx, tableName)
 	if err != nil {
@@ -159,9 +159,36 @@ func (s *FoundationDBStore) Query(ctx context.Context, tableName string, keyCond
 		return nil, nil, ErrTableNotFound
 	}
 
-	// 2. Parse Key Condition
+	// 2. Determine Key Schema (Table or Index)
+	targetKeySchema := table.KeySchema
+	if indexName != "" {
+		found := false
+		// check GSI
+		for _, gsi := range table.GlobalSecondaryIndexes {
+			if gsi.IndexName == indexName {
+				targetKeySchema = gsi.KeySchema
+				found = true
+				break
+			}
+		}
+		// check LSI
+		if !found {
+			for _, lsi := range table.LocalSecondaryIndexes {
+				if lsi.IndexName == indexName {
+					targetKeySchema = lsi.KeySchema
+					found = true
+					break
+				}
+			}
+		}
+		if !found {
+			return nil, nil, fmt.Errorf("index not found: %s", indexName)
+		}
+	}
+
+	// 3. Parse Key Condition
 	var pkHashName, pkRangeName string
-	for _, k := range table.KeySchema {
+	for _, k := range targetKeySchema {
 		if k.KeyType == "HASH" {
 			pkHashName = k.AttributeName
 		} else if k.KeyType == "RANGE" {
@@ -169,7 +196,7 @@ func (s *FoundationDBStore) Query(ctx context.Context, tableName string, keyCond
 		}
 	}
 	if pkHashName == "" {
-		return nil, nil, fmt.Errorf("invalid table schema: no HASH key")
+		return nil, nil, fmt.Errorf("invalid schema: no HASH key")
 	}
 
 	// Simple Parser Logic (reused)
@@ -283,15 +310,26 @@ func (s *FoundationDBStore) Query(ctx context.Context, tableName string, keyCond
 	}
 
 	res, err := s.db.ReadTransact(func(rtr fdb.ReadTransaction) (interface{}, error) {
-		tableDir, err := s.dir.Open(rtr, []string{"tables", tableName}, nil)
+		var subspace subspace.Subspace
+		var err error
+		if indexName != "" {
+			subspace, err = s.dir.Open(rtr, []string{"tables", tableName, "index", indexName}, nil)
+		} else {
+			td, err := s.dir.Open(rtr, []string{"tables", tableName}, nil)
+			if err != nil {
+				return nil, err
+			}
+			subspace = td.Sub(tuple.Tuple{"data"})
+		}
 		if err != nil {
 			return nil, err
 		}
+
 		pkTupleElem, err := toTupleElement(*pkValue)
 		if err != nil {
 			return nil, err
 		}
-		prefixKey := tableDir.Pack(tuple.Tuple{"data", pkTupleElem})
+		prefixKey := subspace.Pack(tuple.Tuple{pkTupleElem})
 		pr, err := fdb.PrefixRange(prefixKey)
 		if err != nil {
 			return nil, err
@@ -308,7 +346,7 @@ func (s *FoundationDBStore) Query(ctx context.Context, tableName string, keyCond
 				if err != nil {
 					return nil, err
 				}
-				return tableDir.Pack(append(tuple.Tuple{"data", pkTupleElem}, tElem)), nil
+				return subspace.Pack(tuple.Tuple{pkTupleElem, tElem}), nil
 			}
 			switch skOp {
 			case "=":
@@ -359,11 +397,23 @@ func (s *FoundationDBStore) Query(ctx context.Context, tableName string, keyCond
 		}
 
 		if len(exclusiveStartKey) > 0 {
-			keyTuple, err := s.buildKeyTuple(table, exclusiveStartKey)
-			if err != nil {
-				return nil, err
+			var keyTuple []tuple.TupleElement
+			var err error
+			if indexName != "" {
+				// Use helper from foundationdb_store_indexes.go
+				kt, err := s.buildIndexKeyTuple(table, targetKeySchema, exclusiveStartKey)
+				if err != nil {
+					return nil, err
+				}
+				keyTuple = kt
+			} else {
+				keyTuple, err = s.buildKeyTuple(table, exclusiveStartKey)
+				if err != nil {
+					return nil, err
+				}
 			}
-			startFDBKey := tableDir.Pack(append(tuple.Tuple{"data"}, keyTuple...))
+
+			startFDBKey := subspace.Pack(keyTuple)
 			r.Begin = fdb.FirstGreaterThan(startFDBKey)
 		}
 
@@ -463,6 +513,23 @@ func (s *FoundationDBStore) CreateTable(ctx context.Context, table *models.Table
 
 		// Save metadata
 		tr.Set(metaKey, tableBytes)
+
+		// Create directories for GSIs
+		for _, gsi := range table.GlobalSecondaryIndexes {
+			_, err := s.dir.CreateOrOpen(tr, []string{"tables", table.TableName, "index", gsi.IndexName}, nil)
+			if err != nil {
+				return nil, err
+			}
+		}
+
+		// Create directories for LSIs
+		for _, lsi := range table.LocalSecondaryIndexes {
+			_, err := s.dir.CreateOrOpen(tr, []string{"tables", table.TableName, "index", lsi.IndexName}, nil)
+			if err != nil {
+				return nil, err
+			}
+		}
+
 		return nil, nil
 	})
 	return err
@@ -615,12 +682,10 @@ func (s *FoundationDBStore) PutItem(ctx context.Context, tableName string, item 
 			return nil, err
 		}
 
-		var oldItem map[string]models.AttributeValue
-		if returnValues == "ALL_OLD" {
-			oldItem, err = s.getItemInternal(tr, table, keyTuple)
-			if err != nil {
-				return nil, err
-			}
+		// Always fetch old item for index maintenance
+		oldItem, err := s.getItemInternal(tr, table, keyTuple)
+		if err != nil {
+			return nil, err
 		}
 
 		// 3. Serialize Item
@@ -637,7 +702,15 @@ func (s *FoundationDBStore) PutItem(ctx context.Context, tableName string, item 
 		itemKey := tableDir.Pack(append(tuple.Tuple{"data"}, keyTuple...))
 		tr.Set(itemKey, itemBytes)
 
-		return oldItem, nil
+		// 5. Update Indexes
+		if err := s.updateIndexes(tr, table, oldItem, item); err != nil {
+			return nil, err
+		}
+
+		if returnValues == "ALL_OLD" {
+			return oldItem, nil
+		}
+		return nil, nil
 	})
 	if err != nil {
 		return nil, err
@@ -709,12 +782,10 @@ func (s *FoundationDBStore) DeleteItem(ctx context.Context, tableName string, ke
 			return nil, err
 		}
 
-		var oldItem map[string]models.AttributeValue
-		if returnValues == "ALL_OLD" {
-			oldItem, err = s.getItemInternal(tr, table, keyTuple)
-			if err != nil {
-				return nil, err
-			}
+		// Always fetch old item for index maintenance
+		oldItem, err := s.getItemInternal(tr, table, keyTuple)
+		if err != nil {
+			return nil, err
 		}
 
 		// 3. Delete
@@ -725,7 +796,15 @@ func (s *FoundationDBStore) DeleteItem(ctx context.Context, tableName string, ke
 		itemKey := tableDir.Pack(append(tuple.Tuple{"data"}, keyTuple...))
 		tr.Clear(itemKey)
 
-		return oldItem, nil
+		// 4. Update Indexes
+		if err := s.updateIndexes(tr, table, oldItem, nil); err != nil {
+			return nil, err
+		}
+
+		if returnValues == "ALL_OLD" {
+			return oldItem, nil
+		}
+		return nil, nil
 	})
 	if err != nil {
 		return nil, err
@@ -786,8 +865,12 @@ func (s *FoundationDBStore) getItemInternal(rt fdb.ReadTransaction, table *model
 }
 
 func (s *FoundationDBStore) buildKeyTuple(table *models.Table, item map[string]models.AttributeValue) ([]tuple.TupleElement, error) {
+	return s.buildKeyTupleFromSchema(table.KeySchema, item)
+}
+
+func (s *FoundationDBStore) buildKeyTupleFromSchema(keySchema []models.KeySchemaElement, item map[string]models.AttributeValue) ([]tuple.TupleElement, error) {
 	var pkHashName, pkRangeName string
-	for _, k := range table.KeySchema {
+	for _, k := range keySchema {
 		if k.KeyType == "HASH" {
 			pkHashName = k.AttributeName
 		} else if k.KeyType == "RANGE" {
@@ -796,7 +879,7 @@ func (s *FoundationDBStore) buildKeyTuple(table *models.Table, item map[string]m
 	}
 
 	if pkHashName == "" {
-		return nil, fmt.Errorf("table %s has no HASH key", table.TableName) // Should not happen for valid tables
+		return nil, fmt.Errorf("schema has no HASH key")
 	}
 
 	hashVal, ok := item[pkHashName]
@@ -893,9 +976,10 @@ func (s *FoundationDBStore) UpdateItem(ctx context.Context, tableName string, ke
 			}
 		}
 
-		// Capture old item if needed
-		oldItem := make(map[string]models.AttributeValue)
-		if returnValues == "ALL_OLD" || returnValues == "UPDATED_OLD" {
+		// Capture old item for index maintenance and ReturnValues
+		var oldItem map[string]models.AttributeValue
+		if existingBytes != nil {
+			oldItem = make(map[string]models.AttributeValue)
 			for k, v := range item {
 				oldItem[k] = v
 			}
@@ -916,7 +1000,12 @@ func (s *FoundationDBStore) UpdateItem(ctx context.Context, tableName string, ke
 		}
 		tr.Set(itemKey, itemBytes)
 
-		// 7. Handle ReturnValues
+		// 7. Update Indexes
+		if err := s.updateIndexes(tr, table, oldItem, item); err != nil {
+			return nil, err
+		}
+
+		// 8. Handle ReturnValues
 		if returnValues == "ALL_OLD" {
 			return oldItem, nil
 		}

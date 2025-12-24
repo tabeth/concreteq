@@ -86,7 +86,7 @@ func TestFoundationDBStore_Projection(t *testing.T) {
 				result, _, err = store.Scan(ctx, tableName, "", tt.proj, tt.names, nil, 0, nil, false)
 			} else {
 				// Query PK=1
-				result, _, err = store.Query(ctx, tableName, "pk = :pk", "", tt.proj, tt.names, map[string]models.AttributeValue{":pk": {S: strPtr("1")}}, 0, nil, false)
+				result, _, err = store.Query(ctx, tableName, "", "pk = :pk", "", tt.proj, tt.names, map[string]models.AttributeValue{":pk": {S: strPtr("1")}}, 0, nil, false)
 			}
 
 			if err != nil {

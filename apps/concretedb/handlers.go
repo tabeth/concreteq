@@ -61,11 +61,13 @@ func mapDBTableToDeleteResponse(table *models.Table) *models.DeleteTableResponse
 // Helper function to avoid code duplication between create and delete responses.
 func mapDBTableToAPIDescription(table *models.Table) models.TableDescription {
 	apiDesc := models.TableDescription{
-		TableName:        table.TableName,
-		TableStatus:      string(table.Status),
-		ItemCount:        0, // In a real system, you'd have these values
-		TableSizeBytes:   0, // Similarly in a real system you'd have real values here too.
-		CreationDateTime: float64(table.CreationDateTime.Unix()),
+		TableName:              table.TableName,
+		TableStatus:            string(table.Status),
+		ItemCount:              0, // In a real system, you'd have these values
+		TableSizeBytes:         0, // Similarly in a real system you'd have real values here too.
+		CreationDateTime:       float64(table.CreationDateTime.Unix()),
+		GlobalSecondaryIndexes: table.GlobalSecondaryIndexes,
+		LocalSecondaryIndexes:  table.LocalSecondaryIndexes,
 	}
 	for _, ad := range table.AttributeDefinitions {
 		apiDesc.AttributeDefinitions = append(apiDesc.AttributeDefinitions, models.AttributeDefinition{
@@ -94,9 +96,11 @@ func mapDBTableToCreateResponse(table *models.Table) *models.CreateTableResponse
 // mapRequestToDBTable is responsible for converting API types to DB types.
 func mapRequestToDBTable(req *models.CreateTableRequest) *models.Table {
 	dbTable := &models.Table{
-		TableName:        req.TableName,
-		Status:           models.StatusCreating,
-		CreationDateTime: time.Now().UTC(),
+		TableName:              req.TableName,
+		Status:                 models.StatusCreating,
+		CreationDateTime:       time.Now().UTC(),
+		GlobalSecondaryIndexes: req.GlobalSecondaryIndexes,
+		LocalSecondaryIndexes:  req.LocalSecondaryIndexes,
 	}
 	for _, ad := range req.AttributeDefinitions {
 		dbTable.AttributeDefinitions = append(dbTable.AttributeDefinitions, models.AttributeDefinition{
