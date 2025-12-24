@@ -147,7 +147,3 @@ func TestFoundationDBStore_BatchGetItem(t *testing.T) {
 		t.Error("Item A not found or incorrect")
 	}
 }
-
-func stringPtr(s string) *string {
-	return &s
-}
