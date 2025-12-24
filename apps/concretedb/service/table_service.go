@@ -26,6 +26,8 @@ type TableServicer interface {
 	Query(ctx context.Context, input *models.QueryRequest) (*models.QueryResponse, error)
 	BatchGetItem(ctx context.Context, input *models.BatchGetItemRequest) (*models.BatchGetItemResponse, error)
 	BatchWriteItem(ctx context.Context, input *models.BatchWriteItemRequest) (*models.BatchWriteItemResponse, error)
+	TransactGetItems(ctx context.Context, input *models.TransactGetItemsRequest) (*models.TransactGetItemsResponse, error)
+	TransactWriteItems(ctx context.Context, input *models.TransactWriteItemsRequest) (*models.TransactWriteItemsResponse, error)
 }
 
 // TableService contains the business logic for table operations.
@@ -308,4 +310,44 @@ func (s *TableService) BatchWriteItem(ctx context.Context, input *models.BatchWr
 	return &models.BatchWriteItemResponse{
 		UnprocessedItems: unprocessed,
 	}, nil
+}
+
+func (s *TableService) TransactGetItems(ctx context.Context, input *models.TransactGetItemsRequest) (*models.TransactGetItemsResponse, error) {
+	if len(input.TransactItems) == 0 {
+		return nil, models.New("ValidationException", "TransactItems cannot be empty")
+	}
+
+	responses, err := s.store.TransactGetItems(ctx, input.TransactItems)
+	if err != nil {
+		if errors.Is(err, store.ErrTableNotFound) {
+			return nil, models.New("ResourceNotFoundException", "One or more requested tables not found")
+		}
+		// Pass through existing APIErrors
+		return nil, err
+	}
+
+	return &models.TransactGetItemsResponse{
+		Responses: responses,
+	}, nil
+}
+
+func (s *TableService) TransactWriteItems(ctx context.Context, input *models.TransactWriteItemsRequest) (*models.TransactWriteItemsResponse, error) {
+	if len(input.TransactItems) == 0 {
+		return nil, models.New("ValidationException", "TransactItems cannot be empty")
+	}
+
+	// Basic validation of item count (DynamoDB limit is 25)
+	if len(input.TransactItems) > 25 {
+		return nil, models.New("ValidationException", "TransactItems must have length less than or equal to 25")
+	}
+
+	err := s.store.TransactWriteItems(ctx, input.TransactItems, input.ClientRequestToken)
+	if err != nil {
+		if errors.Is(err, store.ErrTableNotFound) {
+			return nil, models.New("ResourceNotFoundException", "One or more requested tables not found")
+		}
+		return nil, err
+	}
+
+	return &models.TransactWriteItemsResponse{}, nil
 }

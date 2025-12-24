@@ -52,6 +52,10 @@ func (h *DynamoDBHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.batchGetItemHandler(w, r)
 	case "DynamoDB_20120810.BatchWriteItem":
 		h.batchWriteItemHandler(w, r)
+	case "DynamoDB_20120810.TransactGetItems":
+		h.transactGetItemsHandler(w, r)
+	case "DynamoDB_20120810.TransactWriteItems":
+		h.transactWriteItemsHandler(w, r)
 	default:
 		writeError(w, "UnknownOperationException", "The requested operation is not supported.", http.StatusBadRequest)
 	}

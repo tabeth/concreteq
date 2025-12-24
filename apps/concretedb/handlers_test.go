@@ -16,18 +16,20 @@ import (
 
 // Represents the mocked out methods for the Table Service (table_service.go)
 type mockTableService struct {
-	CreateTableFunc    func(ctx context.Context, table *models.Table) (*models.Table, error)
-	DeleteTableFunc    func(ctx context.Context, tableName string) (*models.Table, error)
-	ListTablesFunc     func(ctx context.Context, limit int, exclusiveStartTableName string) ([]string, string, error)
-	GetTableFunc       func(ctx context.Context, tableName string) (*models.Table, error)
-	PutItemFunc        func(ctx context.Context, request *models.PutItemRequest) (*models.PutItemResponse, error)
-	GetItemFunc        func(ctx context.Context, request *models.GetItemRequest) (*models.GetItemResponse, error)
-	DeleteItemFunc     func(ctx context.Context, request *models.DeleteItemRequest) (*models.DeleteItemResponse, error)
-	UpdateItemFunc     func(ctx context.Context, request *models.UpdateItemRequest) (*models.UpdateItemResponse, error)
-	ScanFunc           func(ctx context.Context, request *models.ScanRequest) (*models.ScanResponse, error)
-	QueryFunc          func(ctx context.Context, request *models.QueryRequest) (*models.QueryResponse, error)
-	BatchGetItemFunc   func(ctx context.Context, request *models.BatchGetItemRequest) (*models.BatchGetItemResponse, error)
-	BatchWriteItemFunc func(ctx context.Context, request *models.BatchWriteItemRequest) (*models.BatchWriteItemResponse, error)
+	CreateTableFunc        func(ctx context.Context, table *models.Table) (*models.Table, error)
+	DeleteTableFunc        func(ctx context.Context, tableName string) (*models.Table, error)
+	ListTablesFunc         func(ctx context.Context, limit int, exclusiveStartTableName string) ([]string, string, error)
+	GetTableFunc           func(ctx context.Context, tableName string) (*models.Table, error)
+	PutItemFunc            func(ctx context.Context, request *models.PutItemRequest) (*models.PutItemResponse, error)
+	GetItemFunc            func(ctx context.Context, request *models.GetItemRequest) (*models.GetItemResponse, error)
+	DeleteItemFunc         func(ctx context.Context, request *models.DeleteItemRequest) (*models.DeleteItemResponse, error)
+	UpdateItemFunc         func(ctx context.Context, request *models.UpdateItemRequest) (*models.UpdateItemResponse, error)
+	ScanFunc               func(ctx context.Context, request *models.ScanRequest) (*models.ScanResponse, error)
+	QueryFunc              func(ctx context.Context, request *models.QueryRequest) (*models.QueryResponse, error)
+	BatchGetItemFunc       func(ctx context.Context, request *models.BatchGetItemRequest) (*models.BatchGetItemResponse, error)
+	BatchWriteItemFunc     func(ctx context.Context, request *models.BatchWriteItemRequest) (*models.BatchWriteItemResponse, error)
+	TransactGetItemsFunc   func(ctx context.Context, request *models.TransactGetItemsRequest) (*models.TransactGetItemsResponse, error)
+	TransactWriteItemsFunc func(ctx context.Context, request *models.TransactWriteItemsRequest) (*models.TransactWriteItemsResponse, error)
 }
 
 // CreateTable is the method required to satisfy the interface.
@@ -73,6 +75,18 @@ func (m *mockTableService) BatchGetItem(ctx context.Context, request *models.Bat
 
 func (m *mockTableService) BatchWriteItem(ctx context.Context, request *models.BatchWriteItemRequest) (*models.BatchWriteItemResponse, error) {
 	return m.BatchWriteItemFunc(ctx, request)
+}
+
+func (m *mockTableService) TransactGetItems(ctx context.Context, request *models.TransactGetItemsRequest) (*models.TransactGetItemsResponse, error) {
+	return m.TransactGetItemsFunc(ctx, request)
+}
+
+func (m *mockTableService) TransactWriteItems(ctx context.Context, request *models.TransactWriteItemsRequest) (*models.TransactWriteItemsResponse, error) {
+	return m.TransactWriteItemsFunc(ctx, request)
+}
+
+func (m *mockTableService) DeleteTable(ctx context.Context, tableName string) (*models.Table, error) {
+	return m.DeleteTableFunc(ctx, tableName)
 }
 
 func TestCreateTableHandler_Success(t *testing.T) {
@@ -149,10 +163,6 @@ func TestCreateTableHandler_ResourceInUse(t *testing.T) {
 	if errBody.Type != "ResourceInUseException" {
 		t.Errorf("expected error type ResourceInUseException, got %s", errBody.Type)
 	}
-}
-
-func (m *mockTableService) DeleteTable(ctx context.Context, tableName string) (*models.Table, error) {
-	return m.DeleteTableFunc(ctx, tableName)
 }
 
 func TestDeleteTableHandler_Success(t *testing.T) {
@@ -1130,5 +1140,64 @@ func TestBatchWriteItemHandler_Success(t *testing.T) {
 	json.NewDecoder(resp.Body).Decode(&respBody)
 	if len(respBody.UnprocessedItems) != 0 {
 		t.Errorf("expected 0 unprocessed items, got %d", len(respBody.UnprocessedItems))
+	}
+}
+
+func TestTransactGetItemsHandler_Success(t *testing.T) {
+	mockService := &mockTableService{
+		TransactGetItemsFunc: func(ctx context.Context, req *models.TransactGetItemsRequest) (*models.TransactGetItemsResponse, error) {
+			s1 := "val1"
+			return &models.TransactGetItemsResponse{
+				Responses: []models.ItemResponse{{Item: map[string]models.AttributeValue{"val": {S: &s1}}}},
+			}, nil
+		},
+	}
+	handler := NewDynamoDBHandler(mockService)
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	reqBody := `{"TransactItems": [{"Get": {"TableName": "t1", "Key": {"pk": {"S": "k1"}}}}]}`
+	req, _ := http.NewRequest(http.MethodPost, server.URL, bytes.NewBufferString(reqBody))
+	req.Header.Set("X-Amz-Target", "DynamoDB_20120810.TransactGetItems")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("expected status 200, got %d", resp.StatusCode)
+	}
+
+	var respBody models.TransactGetItemsResponse
+	json.NewDecoder(resp.Body).Decode(&respBody)
+	if len(respBody.Responses) != 1 {
+		t.Errorf("expected 1 item, got %d", len(respBody.Responses))
+	}
+}
+
+func TestTransactWriteItemsHandler_Success(t *testing.T) {
+	mockService := &mockTableService{
+		TransactWriteItemsFunc: func(ctx context.Context, req *models.TransactWriteItemsRequest) (*models.TransactWriteItemsResponse, error) {
+			return &models.TransactWriteItemsResponse{}, nil
+		},
+	}
+	handler := NewDynamoDBHandler(mockService)
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	reqBody := `{"TransactItems": [{"Put": {"TableName": "t1", "Item": {"pk": {"S": "k1"}}}}], "ClientRequestToken": "token123"}`
+	req, _ := http.NewRequest(http.MethodPost, server.URL, bytes.NewBufferString(reqBody))
+	req.Header.Set("X-Amz-Target", "DynamoDB_20120810.TransactWriteItems")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("expected status 200, got %d", resp.StatusCode)
 	}
 }

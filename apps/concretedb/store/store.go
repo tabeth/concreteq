@@ -54,4 +54,10 @@ type Store interface {
 
 	// BatchWriteItem puts or deletes multiple items in multiple tables.
 	BatchWriteItem(ctx context.Context, requestItems map[string][]models.WriteRequest) (map[string][]models.WriteRequest, error)
+
+	// TransactGetItems retrieves multiple items from one or more tables in a single atomic transaction.
+	TransactGetItems(ctx context.Context, transactItems []models.TransactGetItem) ([]models.ItemResponse, error)
+
+	// TransactWriteItems writes multiple items to one or more tables in a single atomic transaction.
+	TransactWriteItems(ctx context.Context, transactItems []models.TransactWriteItem, clientRequestToken string) error
 }

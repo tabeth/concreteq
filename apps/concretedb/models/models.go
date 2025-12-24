@@ -336,3 +336,58 @@ type BatchWriteItemResponse struct {
 	UnprocessedItems      map[string][]WriteRequest `json:"UnprocessedItems,omitempty"`
 	ItemCollectionMetrics map[string][]interface{}  `json:"ItemCollectionMetrics,omitempty"` // Placeholder
 }
+
+// TransactGetItem represents a single get item request within a transaction.
+type TransactGetItem struct {
+	Get GetItemRequest `json:"Get"`
+}
+
+// TransactGetItemsRequest mirrors the JSON request body for the TransactGetItems action.
+type TransactGetItemsRequest struct {
+	TransactItems          []TransactGetItem `json:"TransactItems"`
+	ReturnConsumedCapacity string            `json:"ReturnConsumedCapacity,omitempty"`
+}
+
+// ItemResponse represents an individual item response wrapper for TransactGetItems.
+type ItemResponse struct {
+	Item map[string]AttributeValue `json:"Item"`
+}
+
+// TransactGetItemsResponse mirrors the JSON response for the TransactGetItems action.
+type TransactGetItemsResponse struct {
+	Responses        []ItemResponse `json:"Responses,omitempty"`
+	ConsumedCapacity []interface{}  `json:"ConsumedCapacity,omitempty"`
+}
+
+// ConditionCheck represents a check that must pass for the transaction to succeed.
+type ConditionCheck struct {
+	TableName                           string                    `json:"TableName"`
+	Key                                 map[string]AttributeValue `json:"Key"`
+	ConditionExpression                 string                    `json:"ConditionExpression"`
+	ExpressionAttributeNames            map[string]string         `json:"ExpressionAttributeNames,omitempty"`
+	ExpressionAttributeValues           map[string]AttributeValue `json:"ExpressionAttributeValues,omitempty"`
+	ReturnValuesOnConditionCheckFailure string                    `json:"ReturnValuesOnConditionCheckFailure,omitempty"`
+}
+
+// TransactWriteItem represents a single write action (ConditionCheck, Put, Delete, Update) within a transaction.
+// Only one of the fields should be set.
+type TransactWriteItem struct {
+	ConditionCheck *ConditionCheck    `json:"ConditionCheck,omitempty"`
+	Put            *PutItemRequest    `json:"Put,omitempty"`
+	Delete         *DeleteItemRequest `json:"Delete,omitempty"`
+	Update         *UpdateItemRequest `json:"Update,omitempty"`
+}
+
+// TransactWriteItemsRequest mirrors the JSON request body for the TransactWriteItems action.
+type TransactWriteItemsRequest struct {
+	TransactItems               []TransactWriteItem `json:"TransactItems"`
+	ReturnConsumedCapacity      string              `json:"ReturnConsumedCapacity,omitempty"`
+	ReturnItemCollectionMetrics string              `json:"ReturnItemCollectionMetrics,omitempty"`
+	ClientRequestToken          string              `json:"ClientRequestToken,omitempty"`
+}
+
+// TransactWriteItemsResponse mirrors the JSON response for the TransactWriteItems action.
+type TransactWriteItemsResponse struct {
+	ConsumedCapacity      []interface{}            `json:"ConsumedCapacity,omitempty"`
+	ItemCollectionMetrics map[string][]interface{} `json:"ItemCollectionMetrics,omitempty"`
+}

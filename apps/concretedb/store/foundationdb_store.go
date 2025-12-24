@@ -996,7 +996,6 @@ func toTupleElement(av models.AttributeValue) (tuple.TupleElement, error) {
 // UpdateItem updates an item.
 func (s *FoundationDBStore) UpdateItem(ctx context.Context, tableName string, key map[string]models.AttributeValue, updateExpression string, conditionExpression string, exprAttrNames map[string]string, exprAttrValues map[string]models.AttributeValue, returnValues string) (map[string]models.AttributeValue, error) {
 	val, err := s.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
-		// 1. Get Table Metadata
 		table, err := s.getTableInternal(tr, tableName)
 		if err != nil {
 			return nil, err
@@ -1004,92 +1003,7 @@ func (s *FoundationDBStore) UpdateItem(ctx context.Context, tableName string, ke
 		if table == nil {
 			return nil, ErrTableNotFound
 		}
-
-		// 2. Extract Key Fields
-		keyTuple, err := s.buildKeyTuple(table, key)
-		if err != nil {
-			return nil, err
-		}
-
-		// 3. Open Directory
-		tableDir, err := s.dir.Open(tr, []string{"tables", tableName}, nil)
-		if err != nil {
-			return nil, err
-		}
-		itemKey := tableDir.Pack(append(tuple.Tuple{"data"}, keyTuple...))
-
-		// 4. Read Existing Item
-		existingBytes, err := tr.Get(itemKey).Get()
-		if err != nil {
-			return nil, err
-		}
-
-		var item map[string]models.AttributeValue
-		if existingBytes != nil {
-			if err := json.Unmarshal(existingBytes, &item); err != nil {
-				return nil, err
-			}
-		} else {
-			// Item doesn't exist. Create new one initialized with Key.
-			item = make(map[string]models.AttributeValue)
-			for k, v := range key {
-				item[k] = v
-			}
-		}
-
-		// Capture old item for return values, index maintenance, and conditions
-		var oldItem map[string]models.AttributeValue
-		if existingBytes != nil {
-			oldItem = make(map[string]models.AttributeValue)
-			for k, v := range item {
-				oldItem[k] = v
-			}
-		}
-
-		// 5. Conditional Check
-		if conditionExpression != "" {
-			evalItem := oldItem
-			if evalItem == nil {
-				evalItem = make(map[string]models.AttributeValue)
-			}
-			match, err := s.evaluator.EvaluateFilter(evalItem, conditionExpression, exprAttrNames, exprAttrValues)
-			if err != nil {
-				return nil, err
-			}
-			if !match {
-				return nil, models.New("ConditionalCheckFailedException", "The conditional request failed")
-			}
-		}
-
-		// 6. Apply Update Expression (Simple implementation)
-		if updateExpression != "" {
-			// For MVP, simplistic parsing: "SET attr = :val"
-			if err := applyUpdateExpression(item, updateExpression, exprAttrNames, exprAttrValues); err != nil {
-				return nil, err
-			}
-		}
-
-		// 6. Serialize and Write
-		itemBytes, err := json.Marshal(item)
-		if err != nil {
-			return nil, err
-		}
-		tr.Set(itemKey, itemBytes)
-
-		// 7. Update Indexes
-		if err := s.updateIndexes(tr, table, oldItem, item); err != nil {
-			return nil, err
-		}
-
-		// 8. Handle ReturnValues
-		if returnValues == "ALL_OLD" {
-			return oldItem, nil
-		}
-		if returnValues == "ALL_NEW" {
-			return item, nil
-		}
-		// TODO: Implement UPDATED_OLD / UPDATED_NEW
-		return nil, nil // NONE
+		return s.updateItemInternal(tr, table, key, updateExpression, conditionExpression, exprAttrNames, exprAttrValues, returnValues)
 	})
 
 	if err != nil {
@@ -1099,6 +1013,228 @@ func (s *FoundationDBStore) UpdateItem(ctx context.Context, tableName string, ke
 		return v, nil
 	}
 	return nil, nil
+}
+
+func (s *FoundationDBStore) updateItemInternal(tr fdb.Transaction, table *models.Table, key map[string]models.AttributeValue, updateExpression string, conditionExpression string, exprAttrNames map[string]string, exprAttrValues map[string]models.AttributeValue, returnValues string) (map[string]models.AttributeValue, error) {
+	// 1. Extract Key Fields
+	keyTuple, err := s.buildKeyTuple(table, key)
+	if err != nil {
+		return nil, err
+	}
+
+	// 2. Open Directory
+	tableDir, err := s.dir.Open(tr, []string{"tables", table.TableName}, nil)
+	if err != nil {
+		return nil, err
+	}
+	itemKey := tableDir.Pack(append(tuple.Tuple{"data"}, keyTuple...))
+
+	// 3. Read Existing Item
+	existingBytes, err := tr.Get(itemKey).Get()
+	if err != nil {
+		return nil, err
+	}
+
+	var item map[string]models.AttributeValue
+	if existingBytes != nil {
+		if err := json.Unmarshal(existingBytes, &item); err != nil {
+			return nil, err
+		}
+	} else {
+		// Item doesn't exist. Create new one initialized with Key.
+		item = make(map[string]models.AttributeValue)
+		for k, v := range key {
+			item[k] = v
+		}
+	}
+
+	// Capture old item for return values, index maintenance, and conditions
+	var oldItem map[string]models.AttributeValue
+	if existingBytes != nil {
+		oldItem = make(map[string]models.AttributeValue)
+		for k, v := range item {
+			oldItem[k] = v
+		}
+	}
+
+	// 4. Conditional Check
+	if conditionExpression != "" {
+		evalItem := oldItem
+		if evalItem == nil {
+			evalItem = make(map[string]models.AttributeValue)
+		}
+		match, err := s.evaluator.EvaluateFilter(evalItem, conditionExpression, exprAttrNames, exprAttrValues)
+		if err != nil {
+			return nil, err
+		}
+		if !match {
+			return nil, models.New("ConditionalCheckFailedException", "The conditional request failed")
+		}
+	}
+
+	// 5. Apply Update Expression (Simple implementation)
+	if updateExpression != "" {
+		// For MVP, simplistic parsing: "SET attr = :val"
+		if err := applyUpdateExpression(item, updateExpression, exprAttrNames, exprAttrValues); err != nil {
+			return nil, err
+		}
+	}
+
+	// 6. Serialize and Write
+	itemBytes, err := json.Marshal(item)
+	if err != nil {
+		return nil, err
+	}
+	tr.Set(itemKey, itemBytes)
+
+	// 7. Update Indexes
+	if err := s.updateIndexes(tr, table, oldItem, item); err != nil {
+		return nil, err
+	}
+
+	// 8. Handle ReturnValues
+	if returnValues == "ALL_OLD" {
+		return oldItem, nil
+	}
+	if returnValues == "ALL_NEW" {
+		return item, nil
+	}
+	// TODO: Implement UPDATED_OLD / UPDATED_NEW
+	return nil, nil // NONE
+}
+
+func (s *FoundationDBStore) conditionCheckInternal(tr fdb.Transaction, table *models.Table, key map[string]models.AttributeValue, conditionExpression string, exprAttrNames map[string]string, exprAttrValues map[string]models.AttributeValue) error {
+	keyTuple, err := s.buildKeyTuple(table, key)
+	if err != nil {
+		return err
+	}
+
+	tableDir, err := s.dir.Open(tr, []string{"tables", table.TableName}, nil)
+	if err != nil {
+		return err
+	}
+	itemKey := tableDir.Pack(append(tuple.Tuple{"data"}, keyTuple...))
+
+	// Read Existing
+	existingBytes, err := tr.Get(itemKey).Get()
+	if err != nil {
+		return err
+	}
+
+	var item map[string]models.AttributeValue
+	if existingBytes != nil {
+		if err := json.Unmarshal(existingBytes, &item); err != nil {
+			return err
+		}
+	} else {
+		item = make(map[string]models.AttributeValue)
+	}
+
+	// Evaluate
+	match, err := s.evaluator.EvaluateFilter(item, conditionExpression, exprAttrNames, exprAttrValues)
+	if err != nil {
+		return err
+	}
+	if !match {
+		return models.New("ConditionalCheckFailedException", "The conditional request failed")
+	}
+	return nil
+}
+
+func (s *FoundationDBStore) TransactGetItems(ctx context.Context, transactItems []models.TransactGetItem) ([]models.ItemResponse, error) {
+	// Constraints: Max 25 items
+	if len(transactItems) > 25 {
+		return nil, models.New("ValidationException", "Too many items in transaction")
+	}
+
+	res, err := s.db.ReadTransact(func(rtr fdb.ReadTransaction) (interface{}, error) {
+		responses := make([]models.ItemResponse, len(transactItems))
+
+		for i, req := range transactItems {
+			// 1. Get Table
+			table, err := s.getTableInternal(rtr, req.Get.TableName)
+			if err != nil {
+				return nil, err
+			}
+			if table == nil {
+				return nil, models.New("ResourceNotFoundException", "Requested resource not found")
+			}
+
+			// 2. Build Key
+			keyTuple, err := s.buildKeyTuple(table, req.Get.Key)
+			if err != nil {
+				return nil, err
+			}
+
+			// 3. Get Item
+			item, err := s.getItemInternal(rtr, table, keyTuple)
+			if err != nil {
+				return nil, err
+			}
+			responses[i] = models.ItemResponse{Item: item}
+		}
+		return responses, nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+	return res.([]models.ItemResponse), nil
+}
+
+func (s *FoundationDBStore) TransactWriteItems(ctx context.Context, transactItems []models.TransactWriteItem, clientRequestToken string) error {
+	// Constraints
+	if len(transactItems) > 25 {
+		return models.New("ValidationException", "Too many items in transaction")
+	}
+
+	_, err := s.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
+		for _, item := range transactItems {
+			// Determine action
+			var tableName string
+			if item.ConditionCheck != nil {
+				tableName = item.ConditionCheck.TableName
+			} else if item.Put != nil {
+				tableName = item.Put.TableName
+			} else if item.Delete != nil {
+				tableName = item.Delete.TableName
+			} else if item.Update != nil {
+				tableName = item.Update.TableName
+			} else {
+				return nil, models.New("ValidationException", "TransactWriteItem must have one action set")
+			}
+
+			table, err := s.getTableInternal(tr, tableName)
+			if err != nil {
+				return nil, err
+			}
+			if table == nil {
+				return nil, models.New("ResourceNotFoundException", "Requested resource not found: "+tableName)
+			}
+
+			// Dispatch
+			if item.ConditionCheck != nil {
+				if err := s.conditionCheckInternal(tr, table, item.ConditionCheck.Key, item.ConditionCheck.ConditionExpression, item.ConditionCheck.ExpressionAttributeNames, item.ConditionCheck.ExpressionAttributeValues); err != nil {
+					return nil, err
+				}
+			} else if item.Put != nil {
+				if _, err := s.putItemInternal(tr, table, item.Put.Item, item.Put.ConditionExpression, item.Put.ExpressionAttributeNames, item.Put.ExpressionAttributeValues, "NONE"); err != nil {
+					return nil, err
+				}
+			} else if item.Delete != nil {
+				if _, err := s.deleteItemInternal(tr, table, item.Delete.Key, item.Delete.ConditionExpression, item.Delete.ExpressionAttributeNames, item.Delete.ExpressionAttributeValues, "NONE"); err != nil {
+					return nil, err
+				}
+			} else if item.Update != nil {
+				if _, err := s.updateItemInternal(tr, table, item.Update.Key, item.Update.UpdateExpression, item.Update.ConditionExpression, item.Update.ExpressionAttributeNames, item.Update.ExpressionAttributeValues, "NONE"); err != nil {
+					return nil, err
+				}
+			}
+		}
+		return nil, nil
+	})
+
+	return err
 }
 
 // Simple expression parser for MVP
@@ -1152,7 +1288,6 @@ func applyUpdateExpression(item map[string]models.AttributeValue, expr string, n
 func (s *FoundationDBStore) BatchGetItem(ctx context.Context, requestItems map[string]models.KeysAndAttributes) (map[string][]map[string]models.AttributeValue, map[string]models.KeysAndAttributes, error) {
 	responses := make(map[string][]map[string]models.AttributeValue)
 	unprocessed := make(map[string]models.KeysAndAttributes)
-
 
 	// Real implementation with Futures
 	res, err := s.db.ReadTransact(func(rtr fdb.ReadTransaction) (interface{}, error) {

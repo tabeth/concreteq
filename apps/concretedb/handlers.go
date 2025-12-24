@@ -300,3 +300,37 @@ func (h *DynamoDBHandler) batchWriteItemHandler(w http.ResponseWriter, r *http.R
 
 	writeSuccess(w, resp, http.StatusOK)
 }
+
+// transactGetItemsHandler handles TransactGetItems requests.
+func (h *DynamoDBHandler) transactGetItemsHandler(w http.ResponseWriter, r *http.Request) {
+	var req models.TransactGetItemsRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, "SerializationException", "Could not decode request body", http.StatusBadRequest)
+		return
+	}
+
+	resp, err := h.tableService.TransactGetItems(r.Context(), &req)
+	if err != nil {
+		writeAPIError(w, err, http.StatusBadRequest)
+		return
+	}
+
+	writeSuccess(w, resp, http.StatusOK)
+}
+
+// transactWriteItemsHandler handles TransactWriteItems requests.
+func (h *DynamoDBHandler) transactWriteItemsHandler(w http.ResponseWriter, r *http.Request) {
+	var req models.TransactWriteItemsRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, "SerializationException", "Could not decode request body", http.StatusBadRequest)
+		return
+	}
+
+	resp, err := h.tableService.TransactWriteItems(r.Context(), &req)
+	if err != nil {
+		writeAPIError(w, err, http.StatusBadRequest)
+		return
+	}
+
+	writeSuccess(w, resp, http.StatusOK)
+}
