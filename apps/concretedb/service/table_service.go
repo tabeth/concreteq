@@ -16,6 +16,7 @@ type TableServicer interface {
 	DeleteTable(ctx context.Context, tableName string) (*models.Table, error)
 	ListTables(ctx context.Context, limit int, exclusiveStartTableName string) ([]string, string, error)
 	GetTable(ctx context.Context, tableName string) (*models.Table, error)
+	UpdateTable(ctx context.Context, tableName string, streamSpec *models.StreamSpecification) (*models.Table, error)
 
 	// Item Operations
 	PutItem(ctx context.Context, request *models.PutItemRequest) (*models.PutItemResponse, error)
@@ -28,6 +29,12 @@ type TableServicer interface {
 	BatchWriteItem(ctx context.Context, input *models.BatchWriteItemRequest) (*models.BatchWriteItemResponse, error)
 	TransactGetItems(ctx context.Context, input *models.TransactGetItemsRequest) (*models.TransactGetItemsResponse, error)
 	TransactWriteItems(ctx context.Context, input *models.TransactWriteItemsRequest) (*models.TransactWriteItemsResponse, error)
+
+	// Stream Operations
+	ListStreams(ctx context.Context, input *models.ListStreamsRequest) (*models.ListStreamsResponse, error)
+	DescribeStream(ctx context.Context, input *models.DescribeStreamRequest) (*models.DescribeStreamResponse, error)
+	GetShardIterator(ctx context.Context, input *models.GetShardIteratorRequest) (*models.GetShardIteratorResponse, error)
+	GetRecords(ctx context.Context, input *models.GetRecordsRequest) (*models.GetRecordsResponse, error)
 }
 
 // TableService contains the business logic for table operations.
@@ -100,6 +107,23 @@ func (s *TableService) ListTables(ctx context.Context, limit int, exclusiveStart
 	}
 
 	return tableNames, lastEvaluatedTableName, nil
+}
+
+// UpdateTable updates a table's metadata (e.g. enabling streams).
+func (s *TableService) UpdateTable(ctx context.Context, tableName string, streamSpec *models.StreamSpecification) (*models.Table, error) {
+	if tableName == "" {
+		return nil, models.New("ValidationException", "TableName cannot be empty")
+	}
+
+	table, err := s.store.UpdateTable(ctx, tableName, streamSpec)
+	if err != nil {
+		if errors.Is(err, store.ErrTableNotFound) {
+			return nil, models.New("ResourceNotFoundException", fmt.Sprintf("Table not found: %s", tableName))
+		}
+		return nil, models.New("InternalFailure", fmt.Sprintf("failed to update table: %v", err))
+	}
+
+	return table, nil
 }
 
 // GetTable retrieves a table's metadata by name.
@@ -350,4 +374,84 @@ func (s *TableService) TransactWriteItems(ctx context.Context, input *models.Tra
 	}
 
 	return &models.TransactWriteItemsResponse{}, nil
+}
+
+// Stream Operations
+
+func (s *TableService) ListStreams(ctx context.Context, input *models.ListStreamsRequest) (*models.ListStreamsResponse, error) {
+	limit := int(input.Limit)
+	if limit <= 0 {
+		limit = 100
+	}
+
+	streams, lastArn, err := s.store.ListStreams(ctx, input.TableName, limit, input.ExclusiveStartStreamArn)
+	if err != nil {
+		return nil, models.New("InternalFailure", fmt.Sprintf("failed to list streams: %v", err))
+	}
+
+	return &models.ListStreamsResponse{
+		Streams:                streams,
+		LastEvaluatedStreamArn: lastArn,
+	}, nil
+}
+
+func (s *TableService) DescribeStream(ctx context.Context, input *models.DescribeStreamRequest) (*models.DescribeStreamResponse, error) {
+	if input.StreamArn == "" {
+		return nil, models.New("ValidationException", "StreamArn cannot be empty")
+	}
+	limit := int(input.Limit)
+	if limit <= 0 {
+		limit = 100
+	}
+
+	desc, err := s.store.DescribeStream(ctx, input.StreamArn, limit, input.ExclusiveStartShardId)
+	if err != nil {
+		if errors.Is(err, store.ErrTableNotFound) {
+			return nil, models.New("ResourceNotFoundException", "Stream not found")
+		}
+		return nil, models.New("InternalFailure", fmt.Sprintf("failed to describe stream: %v", err))
+	}
+
+	return &models.DescribeStreamResponse{
+		StreamDescription: *desc,
+	}, nil
+}
+
+func (s *TableService) GetShardIterator(ctx context.Context, input *models.GetShardIteratorRequest) (*models.GetShardIteratorResponse, error) {
+	if input.StreamArn == "" || input.ShardId == "" || input.ShardIteratorType == "" {
+		return nil, models.New("ValidationException", "StreamArn, ShardId, and ShardIteratorType are required")
+	}
+
+	iter, err := s.store.GetShardIterator(ctx, input.StreamArn, input.ShardId, input.ShardIteratorType, input.SequenceNumber)
+	if err != nil {
+		return nil, models.New("InternalFailure", fmt.Sprintf("failed to get shard iterator: %v", err))
+	}
+
+	return &models.GetShardIteratorResponse{
+		ShardIterator: iter,
+	}, nil
+}
+
+func (s *TableService) GetRecords(ctx context.Context, input *models.GetRecordsRequest) (*models.GetRecordsResponse, error) {
+	if input.ShardIterator == "" {
+		return nil, models.New("ValidationException", "ShardIterator cannot be empty")
+	}
+	limit := int(input.Limit)
+	if limit <= 0 {
+		limit = 1000
+	}
+
+	records, nextIter, err := s.store.GetRecords(ctx, input.ShardIterator, limit)
+	if err != nil {
+		return nil, models.New("InternalFailure", fmt.Sprintf("failed to get records: %v", err))
+	}
+
+	if records == nil {
+		records = []models.Record{}
+	}
+
+	return &models.GetRecordsResponse{
+		Records:           records,
+		NextShardIterator: nextIter,
+	}, nil
 }

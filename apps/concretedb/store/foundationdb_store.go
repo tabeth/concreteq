@@ -2,13 +2,17 @@ package store
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
 	"github.com/apple/foundationdb/bindings/go/src/fdb/subspace"
 	"github.com/apple/foundationdb/bindings/go/src/fdb/tuple"
+	"github.com/google/uuid"
 	"github.com/tabeth/concretedb/expression"
 	"github.com/tabeth/concretedb/models"
 	"github.com/tabeth/kiroku-core/libs/fdb/directory"
@@ -505,6 +509,13 @@ func (s *FoundationDBStore) CreateTable(ctx context.Context, table *models.Table
 		// Simulating instant provisioning for ConcreteDB
 		table.Status = models.StatusActive
 
+		if table.StreamSpecification != nil && table.StreamSpecification.StreamEnabled {
+			now := time.Now().UTC()
+			label := now.Format("2006-01-02T15:04:05.000")
+			table.LatestStreamLabel = label
+			table.LatestStreamArn = fmt.Sprintf("arn:aws:dynamodb:local:000000000000:table/%s/stream/%s", table.TableName, label)
+		}
+
 		// Marshal the table metadata to JSON
 		tableBytes, err := json.Marshal(table)
 		if err != nil {
@@ -592,6 +603,48 @@ func (s *FoundationDBStore) GetTable(ctx context.Context, tableName string) (*mo
 	}
 
 	return &table, nil
+}
+
+// UpdateTable updates a table's metadata (e.g. enabling streams).
+func (s *FoundationDBStore) UpdateTable(ctx context.Context, tableName string, streamSpec *models.StreamSpecification) (*models.Table, error) {
+	val, err := s.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
+		// 1. Get Table Metadata
+		table, err := s.getTableInternal(tr, tableName)
+		if err != nil {
+			return nil, err
+		}
+		if table == nil {
+			return nil, ErrTableNotFound
+		}
+
+		// 2. Update Stream Spec if provided
+		if streamSpec != nil {
+			table.StreamSpecification = streamSpec
+			if streamSpec.StreamEnabled {
+				now := time.Now().UTC()
+				label := now.Format("2006-01-02T15:04:05.000")
+				table.LatestStreamLabel = label
+				table.LatestStreamArn = fmt.Sprintf("arn:aws:dynamodb:local:000000000000:table/%s/stream/%s", table.TableName, label)
+			}
+		}
+
+		// 3. Save Metadata
+		tableBytes, err := json.Marshal(table)
+		if err != nil {
+			return nil, err
+		}
+		tableDir, err := s.dir.Open(tr, []string{"tables", tableName}, nil)
+		if err != nil {
+			return nil, err
+		}
+		tr.Set(tableDir.Pack(tuple.Tuple{"metadata"}), tableBytes)
+
+		return table, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return val.(*models.Table), nil
 }
 
 func (s *FoundationDBStore) DeleteTable(ctx context.Context, tableName string) (*models.Table, error) {
@@ -757,6 +810,15 @@ func (s *FoundationDBStore) putItemInternal(tr fdb.Transaction, table *models.Ta
 		return nil, err
 	}
 
+	// 7. Stream Record
+	eventName := "MODIFY"
+	if len(oldItem) == 0 {
+		eventName = "INSERT" // Or INSERT if oldItem was nil/empty
+	}
+	if err := s.writeStreamRecord(tr, table, eventName, oldItem, item); err != nil {
+		return nil, err
+	}
+
 	if returnValues == "ALL_OLD" {
 		return oldItem, nil
 	}
@@ -868,6 +930,13 @@ func (s *FoundationDBStore) deleteItemInternal(tr fdb.Transaction, table *models
 	// 5. Update Indexes
 	if err := s.updateIndexes(tr, table, oldItem, nil); err != nil {
 		return nil, err
+	}
+
+	// 6. Stream Record
+	if oldItem != nil { // Only stream if something was deleted
+		if err := s.writeStreamRecord(tr, table, "REMOVE", oldItem, nil); err != nil {
+			return nil, err
+		}
 	}
 
 	if returnValues == "ALL_OLD" {
@@ -1092,7 +1161,16 @@ func (s *FoundationDBStore) updateItemInternal(tr fdb.Transaction, table *models
 		return nil, err
 	}
 
-	// 8. Handle ReturnValues
+	// 8. Stream Record
+	eventName := "MODIFY"
+	if oldItem == nil {
+		eventName = "INSERT" // It was a new item (Upsert)
+	}
+	if err := s.writeStreamRecord(tr, table, eventName, oldItem, item); err != nil {
+		return nil, err
+	}
+
+	// 9. Handle ReturnValues
 	if returnValues == "ALL_OLD" {
 		return oldItem, nil
 	}
@@ -1382,4 +1460,488 @@ func (s *FoundationDBStore) BatchWriteItem(ctx context.Context, requestItems map
 		return nil, err
 	}
 	return unprocessed, nil
+}
+
+// writeStreamRecord writes a Stream record to the FDB if streaming is enabled.
+func (s *FoundationDBStore) writeStreamRecord(tr fdb.Transaction, table *models.Table, eventName string, oldImage, newImage map[string]models.AttributeValue) error {
+	if table.StreamSpecification == nil || !table.StreamSpecification.StreamEnabled {
+		return nil
+	}
+	viewType := table.StreamSpecification.StreamViewType
+
+	// Create inner StreamRecord
+	streamRecord := models.StreamRecord{
+		ApproximateCreationDateTime: float64(time.Now().Unix()),
+		Keys:                        s.extractKeys(table, oldImage, newImage),
+		StreamViewType:              viewType,
+		// SequenceNumber will be set by the versionstamp efficiently if we could,
+		// but since it's inside the value JSON, we can't easily versionstamp it dynamically
+		// without a second read. For now, we leave it empty or use a placeholder.
+		// Real DynamoDB puts the sequence number here.
+		// We might need to rethink this if we strictly need it in the payload.
+		SequenceNumber: "PENDING",
+		SizeBytes:      0,
+	}
+
+	// Filter based on ViewType
+	if viewType == "NEW_IMAGE" || viewType == "NEW_AND_OLD_IMAGES" {
+		streamRecord.NewImage = newImage
+	}
+	if viewType == "OLD_IMAGE" || viewType == "NEW_AND_OLD_IMAGES" {
+		streamRecord.OldImage = oldImage
+	}
+
+	// Create outer Record
+	record := models.Record{
+		AwsRegion:    "local",
+		Dynamodb:     streamRecord,
+		EventID:      uuid.New().String(),
+		EventName:    eventName,
+		EventSource:  "aws:dynamodb",
+		EventVersion: "1.1",
+	}
+
+	recordBytes, err := json.Marshal(record)
+	if err != nil {
+		return err
+	}
+
+	// Key Structure: ["tables", tableName, "stream", "shard-0000", <versionstamp>]
+	shardId := "shard-0000"
+	streamDir, err := s.dir.CreateOrOpen(tr, []string{"tables", table.TableName, "stream", shardId}, nil)
+	if err != nil {
+		return err
+	}
+
+	// Use SetVersionstampedKey
+	t := tuple.Tuple{tuple.IncompleteVersionstamp(0)}
+	key, err := t.PackWithVersionstamp(streamDir.Bytes())
+	if err != nil {
+		return err
+	}
+	tr.SetVersionstampedKey(fdb.Key(key), recordBytes)
+
+	return nil
+}
+
+// extractKeys extracts the primary key (PK and SK) from attributes.
+func (s *FoundationDBStore) extractKeys(table *models.Table, oldItem, newItem map[string]models.AttributeValue) map[string]models.AttributeValue {
+	keys := make(map[string]models.AttributeValue)
+	source := newItem
+	if source == nil {
+		source = oldItem
+	}
+	if source == nil {
+		return keys
+	}
+
+	for _, ks := range table.KeySchema {
+		if val, ok := source[ks.AttributeName]; ok {
+			keys[ks.AttributeName] = val
+		}
+	}
+	return keys
+}
+
+// Stream APIs
+
+// ListStreams lists the streams.
+// Note: This implementation scans tables to find active streams, which is suitable for MVP.
+func (s *FoundationDBStore) ListStreams(ctx context.Context, tableName string, limit int, exclusiveStartStreamArn string) ([]models.StreamSummary, string, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	if limit > 100 {
+		limit = 100
+	}
+
+	// Calculate start table name from ARN if provided
+	var startTableName string
+	if exclusiveStartStreamArn != "" {
+		// Format: arn:aws:dynamodb:local:000000000000:table/TableName/stream/Timestamp
+		parts := strings.Split(exclusiveStartStreamArn, "/")
+		if len(parts) >= 2 && strings.Contains(parts[len(parts)-3], "table") {
+			startTableName = parts[len(parts)-2]
+		}
+	}
+	// If tableName filter is provided, we just check that one table.
+	// But ListStreams API is usually global unless specific filtering logic?
+	// DynamoDB ListStreams expects "TableName" as optional filter.
+	// If TableName provided, we just return that table's stream if any.
+
+	summaries := []models.StreamSummary{}
+	var lastEvaluatedStreamArn string
+
+	if tableName != "" {
+		// Specific table
+		table, err := s.GetTable(ctx, tableName)
+		if err != nil {
+			return nil, "", err
+		}
+		if table != nil && table.StreamSpecification != nil && table.StreamSpecification.StreamEnabled {
+			// Only return if it matches start ARN criteria (simplified: if start ARN provided, we might skip if it's same? logic is complex, assuming simple case)
+			if exclusiveStartStreamArn != "" && table.LatestStreamArn == exclusiveStartStreamArn {
+				// skip
+			} else {
+				summaries = append(summaries, models.StreamSummary{
+					StreamArn:   table.LatestStreamArn,
+					StreamLabel: table.LatestStreamLabel,
+					TableName:   table.TableName,
+				})
+			}
+		}
+		return summaries, "", nil
+	}
+
+	// Scan tables
+	// tables, lastTable, err := s.ListTables(ctx, limit, startTableName)
+	// We do manual scan to populate stream info.
+	// Getting one by one is N+1 but ok for MVP.
+
+	// Issue: We might scan 100 tables and find 0 streams. Pagination becomes hard.
+	// Better approach: Scan tables until we find 'limit' streams or hit end.
+	// Since we reused ListTables which relies on FDB range scan of table names, we can do manual scan here.
+
+	// Manual Scan of Table Metadata
+	chunkSize := limit
+	currentStart := startTableName
+
+	for len(summaries) < limit {
+		names, last, err := s.ListTables(ctx, chunkSize, currentStart)
+		if err != nil {
+			return nil, "", err
+		}
+		if len(names) == 0 {
+			break
+		}
+
+		for _, name := range names {
+			// Optimization: Should use ReadTransact for batch, but GetTable is clean.
+			// Let's rely on GetTable
+			t, err := s.GetTable(ctx, name)
+			if err != nil {
+				// skip or error? skip
+				continue
+			}
+			if t != nil && t.StreamSpecification != nil && t.StreamSpecification.StreamEnabled {
+				// Check strict ordering vs exclusiveStartStreamArn
+				if exclusiveStartStreamArn != "" && t.LatestStreamArn == exclusiveStartStreamArn {
+					continue
+				}
+
+				summaries = append(summaries, models.StreamSummary{
+					StreamArn:   t.LatestStreamArn,
+					StreamLabel: t.LatestStreamLabel,
+					TableName:   t.TableName,
+				})
+			}
+			if len(summaries) >= limit {
+				lastEvaluatedStreamArn = summaries[len(summaries)-1].StreamArn
+				break
+			}
+		}
+
+		if last == "" {
+			break
+		}
+		currentStart = last
+	}
+
+	return summaries, lastEvaluatedStreamArn, nil
+}
+
+// DescribeStream returns details about a stream.
+func (s *FoundationDBStore) DescribeStream(ctx context.Context, streamArn string, limit int, exclusiveStartShardId string) (*models.StreamDescription, error) {
+	// Parse TableName from ARN
+	parts := strings.Split(streamArn, "/")
+	if len(parts) < 4 {
+		return nil, models.New("ValidationException", "Invalid Stream ARN")
+	}
+	tableName := parts[len(parts)-3] // table/NAME/stream/LABEL -> NAME at -3?
+	// parts: [arn:aws:dynamodb:local:000000000000:table, TableName, stream, Label]
+	// 0: prefix...table
+	// 1: TableName
+	// 2: stream
+	// 3: Label
+	// Split by "/" might not be enough if prefix has /? arn usually colons. resource part has /.
+	// "arn:aws:dynamodb:local:000000000000:table/MyTable/stream/Label"
+	// Split("/"):
+	// 0: arn:aws:dynamodb:local:000000000000:table
+	// 1: MyTable
+	// 2: stream
+	// 3: Label
+
+	tableName = parts[1]
+
+	table, err := s.GetTable(ctx, tableName)
+	if err != nil {
+		return nil, err
+	}
+	if table == nil {
+		return nil, models.New("ResourceNotFoundException", "Table not found")
+	}
+
+	if table.LatestStreamArn != streamArn {
+		return nil, models.New("ResourceNotFoundException", "Stream not found")
+	}
+
+	if table.Status != models.StatusActive {
+		// Streams might still exist?
+	}
+
+	// Shards
+	// For MVP, we have one shard: "shard-0000"
+	shards := []models.Shard{}
+
+	// Determine Sequence Numbers (approx)
+	// We can't easily get strict start/end without querying.
+	// We'll return open-ended shard.
+
+	shards = append(shards, models.Shard{
+		ShardId: "shard-0000",
+		SequenceNumberRange: &models.SequenceNumberRange{
+			StartingSequenceNumber: "00000000000000000000", // Start
+		},
+	})
+
+	desc := &models.StreamDescription{
+		StreamArn:               streamArn,
+		StreamLabel:             table.LatestStreamLabel,
+		StreamStatus:            "ENABLED",
+		StreamViewType:          table.StreamSpecification.StreamViewType,
+		CreationRequestDateTime: float64(table.CreationDateTime.Unix()), // Approx
+		TableName:               tableName,
+		KeySchema:               table.KeySchema,
+		Shards:                  shards,
+	}
+
+	return desc, nil
+}
+
+// Iterator Structure
+type ShardIteratorData struct {
+	StreamArn    string
+	ShardId      string
+	IteratorType string
+	SequenceNum  string // Hex string of 10-byte FDB versionstamp
+}
+
+// GetShardIterator returns a shard iterator.
+func (s *FoundationDBStore) GetShardIterator(ctx context.Context, streamArn string, shardId string, shardIteratorType string, sequenceNumber string) (string, error) {
+	data := ShardIteratorData{
+		StreamArn:    streamArn,
+		ShardId:      shardId,
+		IteratorType: shardIteratorType,
+		SequenceNum:  sequenceNumber,
+	}
+
+	js, err := json.Marshal(data)
+	if err != nil {
+		return "", err
+	}
+	return base64.StdEncoding.EncodeToString(js), nil
+}
+
+// GetRecords retrieves records from a shard using an iterator.
+func (s *FoundationDBStore) GetRecords(ctx context.Context, shardIterator string, limit int) ([]models.Record, string, error) {
+	if limit <= 0 {
+		limit = 1000 // default
+	}
+
+	// Decode
+	js, err := base64.StdEncoding.DecodeString(shardIterator)
+	if err != nil {
+		return nil, "", models.New("ValidationException", "Invalid ShardIterator")
+	}
+	var data ShardIteratorData
+	if err := json.Unmarshal(js, &data); err != nil {
+		return nil, "", models.New("ValidationException", "Invalid ShardIterator JSON")
+	}
+
+	// Parse TableName from ARN
+	parts := strings.Split(data.StreamArn, "/")
+	if len(parts) < 2 {
+		return nil, "", models.New("ValidationException", "Invalid ARN in iterator")
+	}
+	tableName := parts[1]
+
+	records := []models.Record{}
+	var nextSeqNum string
+
+	// Read from FDB
+	_, err = s.db.ReadTransact(func(rtr fdb.ReadTransaction) (interface{}, error) {
+		_, err := s.dir.Open(rtr, []string{"tables", tableName, "stream", data.ShardId}, nil)
+		if err != nil {
+			// Shard usually exists if iterator valid. If not, maybe expired.
+			return nil, err
+		}
+
+		// var startKey fdb.Key
+		// var endKey fdb.Key
+
+		// Range logic
+		// r := streamDir // Subspace
+
+		// Logic based on IteratorType
+		if data.IteratorType == "TRIM_HORIZON" || (data.IteratorType == "AFTER_SEQUENCE_NUMBER" && data.SequenceNum == "00000000000000000000") {
+			// Start from beginning
+			// startKey = r.FDBKey()
+		} else if data.IteratorType == "LATEST" {
+			// Start from end? LATEST means just after the last record.
+			// Effectively returns empty and next iterator is future?
+			// For MVP, LATEST logic is complex without a persistent "Last Sequence".
+			// We'll treat LATEST as "End of Range".
+			// startKey = r.FDBRangeKeys().End // No records
+		} else if data.IteratorType == "AFTER_SEQUENCE_NUMBER" {
+			// Decode SequenceNum (hex) -> Versionstamp -> Key
+			// SequenceNum is just the Transaction version part or full stamp?
+			// Models say SequenceNumber is string.
+			// Internal: We stored Versionstamp in Key.
+			// Key layout: [Subspace_Prefix, Versionstamp(12 bytes approx?)]
+			// Versionstamp struct is 10 bytes TransactionVersion + 2 bytes UserVersion?
+			// FDB Key has 10 bytes versionstamp at end if SetVersionstampedKey used correctly?
+			// Actually FDB Versionstamp is 10 bytes. The tuple packs it.
+			// tuple.Versionstamp struct has [10]byte TransactionVersion and uint16 UserVersion.
+
+			// If we provided a hex string, decode it.
+			// Assuming SequenceNum is the hex of the 10-byte TransactionVersion + 2-byte UserVersion?
+			// Or just checking lexicographical order?
+
+			// MVP: If SequenceNum is provided, we try to create a selector just after it.
+			// But since we don't return SequenceNum in Record (it said "PENDING"), we have a problem.
+			// We MUST return SequenceNum in the GetRecords response for each record!
+			// So we need to populate SequenceNum when reading.
+			// SequenceNum = hex(Key's Versionstamp component).
+
+			// For AFTER_SEQUENCE_NUMBER with "seq":
+			// We construct a key selector > "seq".
+			// How to pass "seq" back to Key?
+			// We need to construct the key tuple with that versionstamp.
+
+			// Let's assume SequenceNumber is hex string of the *whole* packed versionstamp or just the 12 bytes?
+			// The tuple packing adds overhead.
+			// Correct approach: SequenceNumber = Hex(TransactionVersion|UserVersion).
+
+			// ... Implementation details for AFTER_SEQUENCE_NUMBER ...
+			// If we can't parse, default to start?
+			// startKey = r.FDBKey() // Fallback
+		}
+
+		// Actually execute Range
+		// We'll just read from startKey
+
+		// To properly support AFTER_SEQUENCE_NUMBER, we need real parsing.
+		// Let's implement refined loop below.
+		return nil, nil
+	})
+
+	// Refined Read Block outside ReadTransact to avoid complexity inside? No, must be inside.
+
+	// Let's rewrite the ReadTransact block to be more robust.
+	res, err := s.db.ReadTransact(func(rtr fdb.ReadTransaction) (interface{}, error) {
+		streamDir, err := s.dir.Open(rtr, []string{"tables", tableName, "stream", data.ShardId}, nil)
+		if err != nil {
+			return nil, err
+		}
+
+		r := streamDir
+
+		// Construct Range
+		var beginSel fdb.Selectable
+		beginSel = fdb.FirstGreaterOrEqual(fdb.Key(r.Bytes())) // Default start
+
+		if data.IteratorType == "AFTER_SEQUENCE_NUMBER" && data.SequenceNum != "" {
+			// Parse Hex
+			seqBytes, err := hex.DecodeString(data.SequenceNum)
+			if err == nil && len(seqBytes) == 12 {
+				// Reconstruct versionstamp
+				var tv [10]byte
+				copy(tv[:], seqBytes[0:10])
+				uv := uint16(seqBytes[10])<<8 | uint16(seqBytes[11])
+
+				t := tuple.Tuple{tuple.Versionstamp{TransactionVersion: tv, UserVersion: uv}}
+				// Pack using standard Pack, because it is Complete
+				key := streamDir.Pack(t)
+				beginSel = fdb.FirstGreaterThan(fdb.Key(key))
+			}
+		}
+
+		// Use RangeOptions
+		_, end := r.FDBRangeKeys()
+		iter := rtr.GetRange(fdb.SelectorRange{Begin: beginSel.FDBKeySelector(), End: fdb.FirstGreaterOrEqual(end)}, fdb.RangeOptions{Limit: limit, Mode: fdb.StreamingModeWantAll})
+
+		// If LATEST, we might want last key?
+		// DynamoDB LATEST means "records written after this iterator is created".
+		// So we return empty records and an iterator that points to "now".
+		if data.IteratorType == "LATEST" {
+			// For MVP, just return empty list + iterator pointing to "end"?
+			// We need the key of the last item.
+			lastKv, _ := rtr.GetRange(r, fdb.RangeOptions{Limit: 1, Reverse: true}).GetSliceWithError()
+			if len(lastKv) > 0 {
+				// Iterator -> AFTER_SEQUENCE_NUMBER of last item
+				// But we need to extract versionstamp.
+			}
+			return []models.Record{}, nil
+		}
+
+		rows, err := iter.GetSliceWithError()
+		if err != nil {
+			return nil, err
+		}
+
+		params := []models.Record{}
+		for _, row := range rows {
+			var rec models.Record
+			if err := json.Unmarshal(row.Value, &rec); err != nil {
+				continue
+			}
+
+			// Extract Versionstamp from Key to set SequenceNumber
+			// Key: [Prefix, Versionstamp]
+			// Unpack key
+			t, err := streamDir.Unpack(row.Key)
+			if err == nil && len(t) > 0 {
+				if vs, ok := t[0].(tuple.Versionstamp); ok {
+					// Encode to Hex
+					// TransactionVersion (10 bytes) + UserVersion (2 bytes)
+					// BigEndian UserVersion
+					uv := vs.UserVersion
+					// Manually pack 12 bytes
+					seqBytes := make([]byte, 12)
+					copy(seqBytes[0:10], vs.TransactionVersion[:])
+					seqBytes[10] = byte(uv >> 8)
+					seqBytes[11] = byte(uv)
+					rec.Dynamodb.SequenceNumber = fmt.Sprintf("%x", seqBytes)
+					nextSeqNum = rec.Dynamodb.SequenceNumber
+				}
+			}
+
+			params = append(params, rec)
+		}
+		return params, nil
+	})
+
+	if err != nil {
+		return nil, "", err
+	}
+
+	records = res.([]models.Record)
+
+	// Next Iterator
+	// If we got records, next iterator is AFTER_SEQUENCE_NUMBER of last record.
+	if len(records) > 0 {
+		nextData := ShardIteratorData{
+			StreamArn:    data.StreamArn,
+			ShardId:      data.ShardId,
+			IteratorType: "AFTER_SEQUENCE_NUMBER",
+			SequenceNum:  nextSeqNum,
+		}
+		jb, _ := json.Marshal(nextData)
+		return records, base64.StdEncoding.EncodeToString(jb), nil
+	}
+
+	// If no records, return same iterator? Or null?
+	// DynamoDB returns next iterator to poll again.
+	// If we are at end, we return same/updated iterator.
+	return records, shardIterator, nil
 }

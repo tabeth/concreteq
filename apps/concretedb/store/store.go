@@ -29,6 +29,9 @@ type Store interface {
 	// It supports pagination via limit and exclusiveStartTableName.
 	ListTables(ctx context.Context, limit int, exclusiveStartTableName string) ([]string, string, error)
 
+	// UpdateTable updates a table's metadata (e.g. enabling streams).
+	UpdateTable(ctx context.Context, tableName string, streamSpec *models.StreamSpecification) (*models.Table, error)
+
 	// PutItem writes an item to the table. It replaces any existing item with the same key.
 	PutItem(ctx context.Context, tableName string, item map[string]models.AttributeValue, conditionExpression string, exprAttrNames map[string]string, exprAttrValues map[string]models.AttributeValue, returnValues string) (map[string]models.AttributeValue, error)
 
@@ -60,4 +63,18 @@ type Store interface {
 
 	// TransactWriteItems writes multiple items to one or more tables in a single atomic transaction.
 	TransactWriteItems(ctx context.Context, transactItems []models.TransactWriteItem, clientRequestToken string) error
+
+	// Streams Methods
+
+	// ListStreams lists the streams.
+	ListStreams(ctx context.Context, tableName string, limit int, exclusiveStartStreamArn string) ([]models.StreamSummary, string, error)
+
+	// DescribeStream returns details about a stream.
+	DescribeStream(ctx context.Context, streamArn string, limit int, exclusiveStartShardId string) (*models.StreamDescription, error)
+
+	// GetShardIterator returns a shard iterator.
+	GetShardIterator(ctx context.Context, streamArn string, shardId string, shardIteratorType string, sequenceNumber string) (string, error)
+
+	// GetRecords retrieves records from a shard using an iterator.
+	GetRecords(ctx context.Context, shardIterator string, limit int) ([]models.Record, string, error)
 }

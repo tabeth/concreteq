@@ -130,7 +130,7 @@ func parseCondition(part string, names map[string]string, values map[string]mode
 		rhsPart := strings.TrimSpace(sub[1])
 		bounds := strings.Split(rhsPart, " AND ")
 		if len(bounds) != 2 {
-			return Condition{}, fmt.Errorf("BETWEEN requires 2 values separated by AND")
+			return Condition{}, fmt.Errorf("BETWEEN requires 2 values separated by AND. Got: '%s'", rhsPart)
 		}
 
 		for _, b := range bounds {
@@ -198,6 +198,45 @@ func (e *Evaluator) evaluateCondition(item map[string]models.AttributeValue, con
 		return false, nil
 	}
 
+	// Between
+	if cond.Operator == OpBetween {
+		if len(cond.Values) < 2 {
+			return false, fmt.Errorf("BETWEEN requires 2 values")
+		}
+		v1 := cond.Values[0]
+		v2 := cond.Values[1]
+		if val.N != nil && v1.N != nil && v2.N != nil {
+			var n, n1, n2 float64
+			fmt.Sscan(*val.N, &n)
+			fmt.Sscan(*v1.N, &n1)
+			fmt.Sscan(*v2.N, &n2)
+			return n >= n1 && n <= n2, nil
+		}
+		if val.S != nil && v1.S != nil && v2.S != nil {
+			return *val.S >= *v1.S && *val.S <= *v2.S, nil
+		}
+		return false, nil
+	}
+
+	// IN
+	if cond.Operator == OpIn {
+		for _, v := range cond.Values {
+			if val.S != nil && v.S != nil && *val.S == *v.S {
+				return true, nil
+			}
+			if val.N != nil && v.N != nil && *val.N == *v.N {
+				return true, nil
+			}
+			if val.BOOL != nil && v.BOOL != nil && *val.BOOL == *v.BOOL {
+				return true, nil
+			}
+		}
+		return false, nil
+	}
+
+	if len(cond.Values) == 0 {
+		return false, nil // Should not happen for others
+	}
 	target := cond.Values[0]
 
 	// Determine type

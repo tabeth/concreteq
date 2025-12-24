@@ -604,7 +604,7 @@ func TestFoundationDBStore_UpdateItem_ALL_OLD_NonExistent(t *testing.T) {
 		t.Fatalf("UpdateItem failed: %v", err)
 	}
 	// DynamoDB behavior: If item didn't exist, ALL_OLD returns nothing (nil).
-	if old != nil && len(old) > 0 {
+	if len(old) > 0 {
 		t.Errorf("expected nil/empty for ALL_OLD on non-existent item, got %v", old)
 	}
 }

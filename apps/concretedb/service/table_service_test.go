@@ -15,6 +15,7 @@ type mockStore struct {
 	GetTableFunc    func(ctx context.Context, tableName string) (*models.Table, error)
 	DeleteTableFunc func(ctx context.Context, tableName string) (*models.Table, error) // <-- ADD THIS
 	ListTablesFunc  func(ctx context.Context, limit int, exclusiveStartTableName string) ([]string, string, error)
+	UpdateTableFunc func(ctx context.Context, tableName string, streamSpec *models.StreamSpecification) (*models.Table, error)
 	// Item Operations
 	PutItemFunc            func(ctx context.Context, tableName string, item map[string]models.AttributeValue, conditionExpression string, exprAttrNames map[string]string, exprAttrValues map[string]models.AttributeValue, returnValues string) (map[string]models.AttributeValue, error)
 	GetItemFunc            func(ctx context.Context, tableName string, key map[string]models.AttributeValue, consistentRead bool) (map[string]models.AttributeValue, error)
@@ -26,6 +27,10 @@ type mockStore struct {
 	BatchWriteItemFunc     func(ctx context.Context, requestItems map[string][]models.WriteRequest) (map[string][]models.WriteRequest, error)
 	TransactGetItemsFunc   func(ctx context.Context, transactItems []models.TransactGetItem) ([]models.ItemResponse, error)
 	TransactWriteItemsFunc func(ctx context.Context, transactItems []models.TransactWriteItem, clientRequestToken string) error
+	ListStreamsFunc        func(ctx context.Context, tableName string, limit int, exclusiveStartStreamArn string) ([]models.StreamSummary, string, error)
+	DescribeStreamFunc     func(ctx context.Context, streamArn string, limit int, exclusiveStartShardId string) (*models.StreamDescription, error)
+	GetShardIteratorFunc   func(ctx context.Context, streamArn string, shardId string, iteratorType string, sequenceNumber string) (string, error)
+	GetRecordsFunc         func(ctx context.Context, shardIterator string, limit int) ([]models.Record, string, error)
 }
 
 func (m *mockStore) CreateTable(ctx context.Context, table *models.Table) error {
@@ -43,6 +48,10 @@ func (m *mockStore) DeleteTable(ctx context.Context, tableName string) (*models.
 
 func (m *mockStore) ListTables(ctx context.Context, limit int, exclusiveStartTableName string) ([]string, string, error) {
 	return m.ListTablesFunc(ctx, limit, exclusiveStartTableName)
+}
+
+func (m *mockStore) UpdateTable(ctx context.Context, tableName string, streamSpec *models.StreamSpecification) (*models.Table, error) {
+	return m.UpdateTableFunc(ctx, tableName, streamSpec)
 }
 
 func (m *mockStore) PutItem(ctx context.Context, tableName string, item map[string]models.AttributeValue, conditionExpression string, exprAttrNames map[string]string, exprAttrValues map[string]models.AttributeValue, returnValues string) (map[string]models.AttributeValue, error) {
@@ -83,6 +92,22 @@ func (m *mockStore) TransactGetItems(ctx context.Context, transactItems []models
 
 func (m *mockStore) TransactWriteItems(ctx context.Context, transactItems []models.TransactWriteItem, clientRequestToken string) error {
 	return m.TransactWriteItemsFunc(ctx, transactItems, clientRequestToken)
+}
+
+func (m *mockStore) ListStreams(ctx context.Context, tableName string, limit int, exclusiveStartStreamArn string) ([]models.StreamSummary, string, error) {
+	return m.ListStreamsFunc(ctx, tableName, limit, exclusiveStartStreamArn)
+}
+
+func (m *mockStore) DescribeStream(ctx context.Context, streamArn string, limit int, exclusiveStartShardId string) (*models.StreamDescription, error) {
+	return m.DescribeStreamFunc(ctx, streamArn, limit, exclusiveStartShardId)
+}
+
+func (m *mockStore) GetShardIterator(ctx context.Context, streamArn string, shardId string, iteratorType string, sequenceNumber string) (string, error) {
+	return m.GetShardIteratorFunc(ctx, streamArn, shardId, iteratorType, sequenceNumber)
+}
+
+func (m *mockStore) GetRecords(ctx context.Context, shardIterator string, limit int) ([]models.Record, string, error) {
+	return m.GetRecordsFunc(ctx, shardIterator, limit)
 }
 
 func TestTableService_DeleteTable_NotFound(t *testing.T) {

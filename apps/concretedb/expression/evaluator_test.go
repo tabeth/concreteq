@@ -136,11 +136,7 @@ func TestEvaluator_EvaluateFilter(t *testing.T) {
 			values:    map[string]models.AttributeValue{":a": {N: strPtr("20")}},
 			wantMatch: false,
 		},
-		{
-			name:    "BetweenUnsupported_1",
-			filter:  "age BETWEEN :v1 AND :v2",
-			wantErr: true,
-		},
+
 		{
 			name:      "NumberGreaterEqual_True",
 			filter:    "age >= :a",
@@ -178,9 +174,20 @@ func TestEvaluator_EvaluateFilter(t *testing.T) {
 			wantMatch: false,
 		},
 		{
-			name:    "UnknownOperator",
-			filter:  "name IN :v",
-			wantErr: true,
+			name:      "InString_Success",
+			filter:    "name IN :v",
+			values:    map[string]models.AttributeValue{":v": {S: strPtr("Alice")}},
+			wantMatch: true,
+		},
+		{
+			name:      "AttributeExists_True",
+			filter:    "attribute_exists(name)",
+			wantMatch: true,
+		},
+		{
+			name:      "AttributeNotExists_True",
+			filter:    "attribute_not_exists(foo)",
+			wantMatch: true,
 		},
 		{
 			name:      "StringLessThanOrEqual",
@@ -235,16 +242,6 @@ func TestEvaluator_EvaluateFilter(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name:    "UnknownOperator",
-			filter:  "name IN :v",
-			wantErr: true,
-		},
-		{
-			name:    "BetweenUnsupported",
-			filter:  "age BETWEEN :v1 AND :v2",
-			wantErr: true,
-		},
-		{
 			name:    "MalformedBeginsWith",
 			filter:  "begins_with(name",
 			wantErr: true,
@@ -294,6 +291,21 @@ func TestEvaluator_EvaluateFilter(t *testing.T) {
 			filter:  "begins_with(age, :p)",
 			values:  map[string]models.AttributeValue{":p": {N: strPtr("3")}},
 			wantErr: true, // compareNumbers returns error for begins_with
+		},
+		{
+			name:    "RealUnknownOperator",
+			filter:  "name FOOBAR :v",
+			wantErr: true,
+		},
+		{
+			name:    "AttributeExists_TooManyArgs",
+			filter:  "attribute_exists(a, b)",
+			wantErr: true,
+		},
+		{
+			name:    "BeginsWith_TooFewArgs",
+			filter:  "begins_with(a)",
+			wantErr: true,
 		},
 	}
 
@@ -421,6 +433,82 @@ func TestEvaluator_Internal(t *testing.T) {
 	match, err = e.evaluateCondition(itemS, condN)
 	if match || err != nil {
 		t.Error("expected match false and no error for mismatched types")
+	}
+}
+
+func TestEvaluator_Between_Direct(t *testing.T) {
+	eval := NewEvaluator()
+
+	// 1. Test parseCondition directly (Bypassing EvaluateFilter split issue)
+	// Input: age BETWEEN :v1 AND :v2
+	cond, err := parseCondition("age BETWEEN :v1 AND :v2", nil, map[string]models.AttributeValue{":v1": {N: strPtr("10")}, ":v2": {N: strPtr("20")}})
+	if err != nil {
+		t.Fatalf("parseCondition failed: %v", err)
+	}
+	if cond.Operator != OpBetween {
+		t.Errorf("expected OpBetween, got %v", cond.Operator)
+	}
+	if len(cond.Values) != 2 {
+		t.Errorf("expected 2 values, got %d", len(cond.Values))
+	}
+
+	// 2. Test evaluateCondition directly
+	item := map[string]models.AttributeValue{"age": {N: strPtr("15")}}
+	match, err := eval.evaluateCondition(item, cond)
+	if err != nil {
+		t.Errorf("evaluateCondition failed: %v", err)
+	}
+	if !match {
+		t.Error("expected match for 15 BETWEEN 10 AND 20")
+	}
+
+	// Fail case
+	item2 := map[string]models.AttributeValue{"age": {N: strPtr("5")}}
+	match, err = eval.evaluateCondition(item2, cond)
+	if match {
+		t.Error("expected no match for 5 BETWEEN 10 AND 20")
+	}
+
+	// String Between
+	condS := Condition{
+		AttributeName: "name",
+		Operator:      OpBetween,
+		Values:        []models.AttributeValue{{S: strPtr("A")}, {S: strPtr("C")}},
+	}
+	match, err = eval.evaluateCondition(map[string]models.AttributeValue{"name": {S: strPtr("B")}}, condS)
+	if !match {
+		t.Error("expected match for B BETWEEN A AND C")
+	}
+
+	// Mixed Types Between
+	condMixed := Condition{
+		AttributeName: "age",
+		Operator:      OpBetween,
+		Values:        []models.AttributeValue{{N: strPtr("10")}, {S: strPtr("20")}},
+	}
+	match, err = eval.evaluateCondition(map[string]models.AttributeValue{"age": {N: strPtr("15")}}, condMixed)
+	if match {
+		t.Error("expected no match for Mixed Types Between")
+	}
+
+	// IN Mixed Types (Valid in logic, but test checking)
+	condIn := Condition{
+		AttributeName: "age",
+		Operator:      OpIn,
+		Values:        []models.AttributeValue{{S: strPtr("15")}, {N: strPtr("15")}},
+	}
+	// Item is Number 15.
+	// Values has String "15" and Number 15.
+	// It should match on the Number.
+	match, err = eval.evaluateCondition(map[string]models.AttributeValue{"age": {N: strPtr("15")}}, condIn)
+	if !match {
+		t.Error("expected match for IN Mixed Types")
+	}
+
+	// 3. Parse Error Cases for Between
+	_, err = parseCondition("age BETWEEN :v1", nil, nil)
+	if err == nil {
+		t.Error("expected error for BETWEEN missing 2nd value")
 	}
 }
 

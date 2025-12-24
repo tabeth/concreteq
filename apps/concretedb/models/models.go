@@ -37,7 +37,10 @@ type Table struct {
 	GlobalSecondaryIndexes []GlobalSecondaryIndex
 	LocalSecondaryIndexes  []LocalSecondaryIndex
 	ProvisionedThroughput  ProvisionedThroughput
+	StreamSpecification    *StreamSpecification
 	CreationDateTime       time.Time
+	LatestStreamLabel      string
+	LatestStreamArn        string
 }
 
 // Projection represents attributes that are copied (projected) from the table into an index.
@@ -93,6 +96,7 @@ type CreateTableRequest struct {
 	GlobalSecondaryIndexes []GlobalSecondaryIndex `json:"GlobalSecondaryIndexes,omitempty"`
 	LocalSecondaryIndexes  []LocalSecondaryIndex  `json:"LocalSecondaryIndexes,omitempty"`
 	ProvisionedThroughput  ProvisionedThroughput  `json:"ProvisionedThroughput"`
+	StreamSpecification    *StreamSpecification   `json:"StreamSpecification,omitempty"`
 }
 
 // TableDescription is the core of the CreateTable response.
@@ -107,6 +111,9 @@ type TableDescription struct {
 	ItemCount              int64                  `json:"ItemCount"`
 	GlobalSecondaryIndexes []GlobalSecondaryIndex `json:"GlobalSecondaryIndexes,omitempty"`
 	LocalSecondaryIndexes  []LocalSecondaryIndex  `json:"LocalSecondaryIndexes,omitempty"`
+	StreamSpecification    *StreamSpecification   `json:"StreamSpecification,omitempty"`
+	LatestStreamLabel      string                 `json:"LatestStreamLabel,omitempty"`
+	LatestStreamArn        string                 `json:"LatestStreamArn,omitempty"`
 }
 
 // CreateTableResponse mirrors the JSON response for a successful CreateTable action.
