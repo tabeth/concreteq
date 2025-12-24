@@ -313,13 +313,22 @@ func (s *FoundationDBStore) Query(ctx context.Context, tableName string, indexNa
 		var subspace subspace.Subspace
 		var err error
 		if indexName != "" {
+			// Index Query: Key is (indexPK, ..., indexSK, ...)
 			subspace, err = s.dir.Open(rtr, []string{"tables", tableName, "index", indexName}, nil)
 		} else {
-			td, err := s.dir.Open(rtr, []string{"tables", tableName}, nil)
+			// Base Table Query: Key is ("data", pk, sk)
+			// We access the table directory directly, not a subspace via Sub("data"), to align with PutItem logic
+			var td directory.DirectorySubspace
+			td, err = s.dir.Open(rtr, []string{"tables", tableName}, nil)
 			if err != nil {
 				return nil, err
 			}
-			subspace = td.Sub(tuple.Tuple{"data"})
+			// Simulate subspace behavior by manually pre-pending "data" to query logic below
+			// The original code used td.Sub("data"). Since Sub returns a subspace, and Pack appends, it should have worked.
+			// However, to be absolutely safe and consistent with PutItem which uses tableDir.Pack(append(tuple.Tuple{"data"}, ...)),
+			// we will use the tableDir directly if possible, or verify subspace.
+			// Actually, let's stick to the current structure but verify the tuple composition.
+			subspace = td
 		}
 		if err != nil {
 			return nil, err
@@ -329,7 +338,12 @@ func (s *FoundationDBStore) Query(ctx context.Context, tableName string, indexNa
 		if err != nil {
 			return nil, err
 		}
-		prefixKey := subspace.Pack(tuple.Tuple{pkTupleElem})
+		var prefixKey fdb.Key
+		if indexName != "" {
+			prefixKey = subspace.Pack(tuple.Tuple{pkTupleElem})
+		} else {
+			prefixKey = subspace.Pack(tuple.Tuple{"data", pkTupleElem})
+		}
 		pr, err := fdb.PrefixRange(prefixKey)
 		if err != nil {
 			return nil, err
@@ -346,7 +360,10 @@ func (s *FoundationDBStore) Query(ctx context.Context, tableName string, indexNa
 				if err != nil {
 					return nil, err
 				}
-				return subspace.Pack(tuple.Tuple{pkTupleElem, tElem}), nil
+				if indexName != "" {
+					return subspace.Pack(tuple.Tuple{pkTupleElem, tElem}), nil
+				}
+				return subspace.Pack(tuple.Tuple{"data", pkTupleElem, tElem}), nil
 			}
 			switch skOp {
 			case "=":
@@ -413,8 +430,13 @@ func (s *FoundationDBStore) Query(ctx context.Context, tableName string, indexNa
 				}
 			}
 
-			startFDBKey := subspace.Pack(keyTuple)
-			r.Begin = fdb.FirstGreaterThan(startFDBKey)
+			if indexName != "" {
+				startFDBKey := subspace.Pack(keyTuple)
+				r.Begin = fdb.FirstGreaterThan(startFDBKey)
+			} else {
+				startFDBKey := subspace.Pack(append(tuple.Tuple{"data"}, keyTuple...))
+				r.Begin = fdb.FirstGreaterThan(startFDBKey)
+			}
 		}
 
 		opts := fdb.RangeOptions{}
@@ -665,9 +687,9 @@ func (s *FoundationDBStore) ListTables(ctx context.Context, limit int, exclusive
 }
 
 // PutItem writes an item to the table.
-func (s *FoundationDBStore) PutItem(ctx context.Context, tableName string, item map[string]models.AttributeValue, returnValues string) (map[string]models.AttributeValue, error) {
+func (s *FoundationDBStore) PutItem(ctx context.Context, tableName string, item map[string]models.AttributeValue, conditionExpression string, exprAttrNames map[string]string, exprAttrValues map[string]models.AttributeValue, returnValues string) (map[string]models.AttributeValue, error) {
 	val, err := s.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
-		// 1. Get Table Metadata to understand Key Schema
+		// 1. Get Table Metadata
 		table, err := s.getTableInternal(tr, tableName)
 		if err != nil {
 			return nil, err
@@ -676,41 +698,7 @@ func (s *FoundationDBStore) PutItem(ctx context.Context, tableName string, item 
 			return nil, ErrTableNotFound
 		}
 
-		// 2. Extract Key Fields
-		keyTuple, err := s.buildKeyTuple(table, item)
-		if err != nil {
-			return nil, err
-		}
-
-		// Always fetch old item for index maintenance
-		oldItem, err := s.getItemInternal(tr, table, keyTuple)
-		if err != nil {
-			return nil, err
-		}
-
-		// 3. Serialize Item
-		itemBytes, err := json.Marshal(item)
-		if err != nil {
-			return nil, err
-		}
-
-		// 4. Store
-		tableDir, err := s.dir.Open(tr, []string{"tables", tableName}, nil)
-		if err != nil {
-			return nil, err
-		}
-		itemKey := tableDir.Pack(append(tuple.Tuple{"data"}, keyTuple...))
-		tr.Set(itemKey, itemBytes)
-
-		// 5. Update Indexes
-		if err := s.updateIndexes(tr, table, oldItem, item); err != nil {
-			return nil, err
-		}
-
-		if returnValues == "ALL_OLD" {
-			return oldItem, nil
-		}
-		return nil, nil
+		return s.putItemInternal(tr, table, item, conditionExpression, exprAttrNames, exprAttrValues, returnValues)
 	})
 	if err != nil {
 		return nil, err
@@ -719,6 +707,60 @@ func (s *FoundationDBStore) PutItem(ctx context.Context, tableName string, item 
 		return nil, nil
 	}
 	return val.(map[string]models.AttributeValue), nil
+}
+
+func (s *FoundationDBStore) putItemInternal(tr fdb.Transaction, table *models.Table, item map[string]models.AttributeValue, conditionExpression string, exprAttrNames map[string]string, exprAttrValues map[string]models.AttributeValue, returnValues string) (map[string]models.AttributeValue, error) {
+	// 1. Extract Key Fields
+	keyTuple, err := s.buildKeyTuple(table, item)
+	if err != nil {
+		return nil, err
+	}
+
+	// 2. Always fetch old item for index maintenance AND conditional checks
+	oldItem, err := s.getItemInternal(tr, table, keyTuple)
+	if err != nil {
+		return nil, err
+	}
+
+	// 3. Conditional Check
+	if conditionExpression != "" {
+		// Ensure oldItem is not nil for evaluator
+		evalItem := oldItem
+		if evalItem == nil {
+			evalItem = make(map[string]models.AttributeValue)
+		}
+		match, err := s.evaluator.EvaluateFilter(evalItem, conditionExpression, exprAttrNames, exprAttrValues)
+		if err != nil {
+			return nil, err
+		}
+		if !match {
+			return nil, models.New("ConditionalCheckFailedException", "The conditional request failed")
+		}
+	}
+
+	// 4. Serialize Item
+	itemBytes, err := json.Marshal(item)
+	if err != nil {
+		return nil, err
+	}
+
+	// 5. Store
+	tableDir, err := s.dir.Open(tr, []string{"tables", table.TableName}, nil)
+	if err != nil {
+		return nil, err
+	}
+	itemKey := tableDir.Pack(append(tuple.Tuple{"data"}, keyTuple...))
+	tr.Set(itemKey, itemBytes)
+
+	// 6. Update Indexes
+	if err := s.updateIndexes(tr, table, oldItem, item); err != nil {
+		return nil, err
+	}
+
+	if returnValues == "ALL_OLD" {
+		return oldItem, nil
+	}
+	return nil, nil
 }
 
 // GetItem retrieves an item by key.
@@ -765,7 +807,7 @@ func (s *FoundationDBStore) GetItem(ctx context.Context, tableName string, key m
 }
 
 // DeleteItem deletes an item by key.
-func (s *FoundationDBStore) DeleteItem(ctx context.Context, tableName string, key map[string]models.AttributeValue, returnValues string) (map[string]models.AttributeValue, error) {
+func (s *FoundationDBStore) DeleteItem(ctx context.Context, tableName string, key map[string]models.AttributeValue, conditionExpression string, exprAttrNames map[string]string, exprAttrValues map[string]models.AttributeValue, returnValues string) (map[string]models.AttributeValue, error) {
 	val, err := s.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
 		// 1. Get Table Metadata
 		table, err := s.getTableInternal(tr, tableName)
@@ -776,35 +818,7 @@ func (s *FoundationDBStore) DeleteItem(ctx context.Context, tableName string, ke
 			return nil, ErrTableNotFound
 		}
 
-		// 2. Extract Key Fields
-		keyTuple, err := s.buildKeyTuple(table, key)
-		if err != nil {
-			return nil, err
-		}
-
-		// Always fetch old item for index maintenance
-		oldItem, err := s.getItemInternal(tr, table, keyTuple)
-		if err != nil {
-			return nil, err
-		}
-
-		// 3. Delete
-		tableDir, err := s.dir.Open(tr, []string{"tables", tableName}, nil)
-		if err != nil {
-			return nil, err
-		}
-		itemKey := tableDir.Pack(append(tuple.Tuple{"data"}, keyTuple...))
-		tr.Clear(itemKey)
-
-		// 4. Update Indexes
-		if err := s.updateIndexes(tr, table, oldItem, nil); err != nil {
-			return nil, err
-		}
-
-		if returnValues == "ALL_OLD" {
-			return oldItem, nil
-		}
-		return nil, nil
+		return s.deleteItemInternal(tr, table, key, conditionExpression, exprAttrNames, exprAttrValues, returnValues)
 	})
 	if err != nil {
 		return nil, err
@@ -813,6 +827,53 @@ func (s *FoundationDBStore) DeleteItem(ctx context.Context, tableName string, ke
 		return nil, nil
 	}
 	return val.(map[string]models.AttributeValue), nil
+}
+
+func (s *FoundationDBStore) deleteItemInternal(tr fdb.Transaction, table *models.Table, key map[string]models.AttributeValue, conditionExpression string, exprAttrNames map[string]string, exprAttrValues map[string]models.AttributeValue, returnValues string) (map[string]models.AttributeValue, error) {
+	// 1. Extract Key Fields
+	keyTuple, err := s.buildKeyTuple(table, key)
+	if err != nil {
+		return nil, err
+	}
+
+	// 2. Always fetch old item for index maintenance AND conditional checks
+	oldItem, err := s.getItemInternal(tr, table, keyTuple)
+	if err != nil {
+		return nil, err
+	}
+
+	// 3. Conditional Check
+	if conditionExpression != "" {
+		evalItem := oldItem
+		if evalItem == nil {
+			evalItem = make(map[string]models.AttributeValue)
+		}
+		match, err := s.evaluator.EvaluateFilter(evalItem, conditionExpression, exprAttrNames, exprAttrValues)
+		if err != nil {
+			return nil, err
+		}
+		if !match {
+			return nil, models.New("ConditionalCheckFailedException", "The conditional request failed")
+		}
+	}
+
+	// 4. Delete
+	tableDir, err := s.dir.Open(tr, []string{"tables", table.TableName}, nil)
+	if err != nil {
+		return nil, err
+	}
+	itemKey := tableDir.Pack(append(tuple.Tuple{"data"}, keyTuple...))
+	tr.Clear(itemKey)
+
+	// 5. Update Indexes
+	if err := s.updateIndexes(tr, table, oldItem, nil); err != nil {
+		return nil, err
+	}
+
+	if returnValues == "ALL_OLD" {
+		return oldItem, nil
+	}
+	return nil, nil
 }
 
 // Helpers
@@ -933,7 +994,7 @@ func toTupleElement(av models.AttributeValue) (tuple.TupleElement, error) {
 }
 
 // UpdateItem updates an item.
-func (s *FoundationDBStore) UpdateItem(ctx context.Context, tableName string, key map[string]models.AttributeValue, updateExpression string, exprAttrNames map[string]string, exprAttrValues map[string]models.AttributeValue, returnValues string) (map[string]models.AttributeValue, error) {
+func (s *FoundationDBStore) UpdateItem(ctx context.Context, tableName string, key map[string]models.AttributeValue, updateExpression string, conditionExpression string, exprAttrNames map[string]string, exprAttrValues map[string]models.AttributeValue, returnValues string) (map[string]models.AttributeValue, error) {
 	val, err := s.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
 		// 1. Get Table Metadata
 		table, err := s.getTableInternal(tr, tableName)
@@ -976,7 +1037,7 @@ func (s *FoundationDBStore) UpdateItem(ctx context.Context, tableName string, ke
 			}
 		}
 
-		// Capture old item for index maintenance and ReturnValues
+		// Capture old item for return values, index maintenance, and conditions
 		var oldItem map[string]models.AttributeValue
 		if existingBytes != nil {
 			oldItem = make(map[string]models.AttributeValue)
@@ -985,7 +1046,22 @@ func (s *FoundationDBStore) UpdateItem(ctx context.Context, tableName string, ke
 			}
 		}
 
-		// 5. Apply Update Expression (Simple implementation)
+		// 5. Conditional Check
+		if conditionExpression != "" {
+			evalItem := oldItem
+			if evalItem == nil {
+				evalItem = make(map[string]models.AttributeValue)
+			}
+			match, err := s.evaluator.EvaluateFilter(evalItem, conditionExpression, exprAttrNames, exprAttrValues)
+			if err != nil {
+				return nil, err
+			}
+			if !match {
+				return nil, models.New("ConditionalCheckFailedException", "The conditional request failed")
+			}
+		}
+
+		// 6. Apply Update Expression (Simple implementation)
 		if updateExpression != "" {
 			// For MVP, simplistic parsing: "SET attr = :val"
 			if err := applyUpdateExpression(item, updateExpression, exprAttrNames, exprAttrValues); err != nil {
@@ -1070,4 +1146,105 @@ func applyUpdateExpression(item map[string]models.AttributeValue, expr string, n
 	}
 
 	return nil
+}
+
+// BatchGetItem retrieves multiple items from multiple tables.
+func (s *FoundationDBStore) BatchGetItem(ctx context.Context, requestItems map[string]models.KeysAndAttributes) (map[string][]map[string]models.AttributeValue, map[string]models.KeysAndAttributes, error) {
+	responses := make(map[string][]map[string]models.AttributeValue)
+	unprocessed := make(map[string]models.KeysAndAttributes)
+
+
+	// Real implementation with Futures
+	res, err := s.db.ReadTransact(func(rtr fdb.ReadTransaction) (interface{}, error) {
+		type futureItem struct {
+			tableName string
+			future    fdb.FutureByteSlice
+		}
+		var futures []futureItem
+
+		// 1. Launch reads
+		for tableName, ka := range requestItems {
+			table, err := s.getTableInternal(rtr, tableName)
+			if err != nil {
+				return nil, err
+			}
+			if table == nil {
+				return nil, models.New("ResourceNotFoundException", "Requested resource not found")
+			}
+			tableDir, err := s.dir.Open(rtr, []string{"tables", tableName}, nil)
+			if err != nil {
+				return nil, err
+			}
+
+			for _, key := range ka.Keys {
+				keyTuple, err := s.buildKeyTuple(table, key)
+				if err != nil {
+					return nil, err
+				}
+				itemKey := tableDir.Pack(append(tuple.Tuple{"data"}, keyTuple...))
+				futures = append(futures, futureItem{
+					tableName: tableName,
+					future:    rtr.Get(itemKey),
+				})
+			}
+		}
+
+		// 2. Await results
+		output := make(map[string][]map[string]models.AttributeValue)
+		for _, f := range futures {
+			valBytes, err := f.future.Get()
+			if err != nil {
+				return nil, err
+			}
+			if len(valBytes) > 0 {
+				var item map[string]models.AttributeValue
+				if err := json.Unmarshal(valBytes, &item); err != nil {
+					return nil, err
+				}
+				output[f.tableName] = append(output[f.tableName], item)
+			}
+		}
+		return output, nil
+	})
+
+	if err != nil {
+		return nil, nil, err
+	}
+	responses = res.(map[string][]map[string]models.AttributeValue)
+	return responses, unprocessed, nil // UnprocessedKeys unused in happy path MVP
+}
+
+// BatchWriteItem puts or deletes multiple items in multiple tables.
+func (s *FoundationDBStore) BatchWriteItem(ctx context.Context, requestItems map[string][]models.WriteRequest) (map[string][]models.WriteRequest, error) {
+	unprocessed := make(map[string][]models.WriteRequest)
+
+	_, err := s.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
+		for tableName, requests := range requestItems {
+			table, err := s.getTableInternal(tr, tableName)
+			if err != nil {
+				return nil, err
+			}
+			if table == nil {
+				return nil, models.New("ResourceNotFoundException", "Requested resource not found: "+tableName)
+			}
+
+			for _, req := range requests {
+				if req.PutRequest != nil {
+					if _, err := s.putItemInternal(tr, table, req.PutRequest.Item, "", nil, nil, "NONE"); err != nil {
+						return nil, err
+					}
+				} else if req.DeleteRequest != nil {
+					if _, err := s.deleteItemInternal(tr, table, req.DeleteRequest.Key, "", nil, nil, "NONE"); err != nil {
+						return nil, err
+					}
+				}
+			}
+		}
+		return nil, nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+	return unprocessed, nil
 }

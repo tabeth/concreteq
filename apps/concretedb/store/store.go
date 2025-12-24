@@ -30,7 +30,7 @@ type Store interface {
 	ListTables(ctx context.Context, limit int, exclusiveStartTableName string) ([]string, string, error)
 
 	// PutItem writes an item to the table. It replaces any existing item with the same key.
-	PutItem(ctx context.Context, tableName string, item map[string]models.AttributeValue, returnValues string) (map[string]models.AttributeValue, error)
+	PutItem(ctx context.Context, tableName string, item map[string]models.AttributeValue, conditionExpression string, exprAttrNames map[string]string, exprAttrValues map[string]models.AttributeValue, returnValues string) (map[string]models.AttributeValue, error)
 
 	// GetItem retrieves an item from the table by its key.
 	// It returns nil, nil if the item is not found.
@@ -38,14 +38,20 @@ type Store interface {
 
 	// DeleteItem deletes an item from the table by its key.
 	// It is idempotent and succeeds even if the item does not exist.
-	DeleteItem(ctx context.Context, tableName string, key map[string]models.AttributeValue, returnValues string) (map[string]models.AttributeValue, error)
+	DeleteItem(ctx context.Context, tableName string, key map[string]models.AttributeValue, conditionExpression string, exprAttrNames map[string]string, exprAttrValues map[string]models.AttributeValue, returnValues string) (map[string]models.AttributeValue, error)
 
 	// UpdateItem updates an existing item's attributes or adds a new item to the table if it does not already exist.
-	UpdateItem(ctx context.Context, tableName string, key map[string]models.AttributeValue, updateExpression string, exprAttrNames map[string]string, exprAttrValues map[string]models.AttributeValue, returnValues string) (map[string]models.AttributeValue, error)
+	UpdateItem(ctx context.Context, tableName string, key map[string]models.AttributeValue, updateExpression string, conditionExpression string, exprAttrNames map[string]string, exprAttrValues map[string]models.AttributeValue, returnValues string) (map[string]models.AttributeValue, error)
 
 	// Scan scans the table.
 	Scan(ctx context.Context, tableName string, filterExpression string, projectionExpression string, expressionAttributeNames map[string]string, expressionAttributeValues map[string]models.AttributeValue, limit int32, exclusiveStartKey map[string]models.AttributeValue, consistentRead bool) ([]map[string]models.AttributeValue, map[string]models.AttributeValue, error)
 
 	// Query queries the table.
 	Query(ctx context.Context, tableName string, indexName string, keyConditionExpression string, filterExpression string, projectionExpression string, expressionAttributeNames map[string]string, expressionAttributeValues map[string]models.AttributeValue, limit int32, exclusiveStartKey map[string]models.AttributeValue, consistentRead bool) ([]map[string]models.AttributeValue, map[string]models.AttributeValue, error)
+
+	// BatchGetItem retrieves multiple items from multiple tables.
+	BatchGetItem(ctx context.Context, requestItems map[string]models.KeysAndAttributes) (map[string][]map[string]models.AttributeValue, map[string]models.KeysAndAttributes, error)
+
+	// BatchWriteItem puts or deletes multiple items in multiple tables.
+	BatchWriteItem(ctx context.Context, requestItems map[string][]models.WriteRequest) (map[string][]models.WriteRequest, error)
 }

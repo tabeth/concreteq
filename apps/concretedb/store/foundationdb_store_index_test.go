@@ -115,7 +115,7 @@ func TestFoundationDBStore_Indexes_PutItem(t *testing.T) {
 		"gsi_pk": {S: &gsiPK},
 		"data":   {S: strPtr("some data")},
 	}
-	_, err := store.PutItem(ctx, tableName, item, "")
+	_, err := store.PutItem(ctx, tableName, item, "", nil, nil, "")
 	if err != nil {
 		t.Fatalf("PutItem failed: %v", err)
 	}
@@ -183,7 +183,7 @@ func TestFoundationDBStore_Indexes_Query(t *testing.T) {
 		},
 	}
 	for _, item := range items {
-		if _, err := store.PutItem(ctx, tableName, item, ""); err != nil {
+		if _, err := store.PutItem(ctx, tableName, item, "", nil, nil, ""); err != nil {
 			t.Fatalf("PutItem failed: %v", err)
 		}
 	}

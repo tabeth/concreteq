@@ -35,7 +35,7 @@ func TestFoundationDBStore_UpdateItem_Comprehensive(t *testing.T) {
 	key := map[string]models.AttributeValue{"pk": {S: &pk}}
 
 	// 2. Update non-existent item (should create)
-	attrs, err := store.UpdateItem(ctx, tableName, key, "SET age = :a", nil, map[string]models.AttributeValue{":a": {N: strPtr("25")}}, "ALL_NEW")
+	attrs, err := store.UpdateItem(ctx, tableName, key, "SET age = :a", "", nil, map[string]models.AttributeValue{":a": {N: strPtr("25")}}, "ALL_NEW")
 	if err != nil {
 		t.Fatalf("UpdateItem failed: %v", err)
 	}
@@ -44,7 +44,7 @@ func TestFoundationDBStore_UpdateItem_Comprehensive(t *testing.T) {
 	}
 
 	// 3. Update existing item (ALL_OLD)
-	attrs, err = store.UpdateItem(ctx, tableName, key, "SET age = :a", nil, map[string]models.AttributeValue{":a": {N: strPtr("30")}}, "ALL_OLD")
+	attrs, err = store.UpdateItem(ctx, tableName, key, "SET age = :a", "", nil, map[string]models.AttributeValue{":a": {N: strPtr("30")}}, "ALL_OLD")
 	if err != nil {
 		t.Fatalf("UpdateItem ALL_OLD failed: %v", err)
 	}
@@ -53,7 +53,7 @@ func TestFoundationDBStore_UpdateItem_Comprehensive(t *testing.T) {
 	}
 
 	// 4. Update existing item (multiple assignments)
-	attrs, err = store.UpdateItem(ctx, tableName, key, "SET age = :a, #n = :n", map[string]string{"#n": "name"}, map[string]models.AttributeValue{":a": {N: strPtr("35")}, ":n": {S: strPtr("John")}}, "ALL_NEW")
+	attrs, err = store.UpdateItem(ctx, tableName, key, "SET age = :a, #n = :n", "", map[string]string{"#n": "name"}, map[string]models.AttributeValue{":a": {N: strPtr("35")}, ":n": {S: strPtr("John")}}, "ALL_NEW")
 	if err != nil {
 		t.Fatalf("UpdateItem multiple failed: %v", err)
 	}
@@ -62,7 +62,7 @@ func TestFoundationDBStore_UpdateItem_Comprehensive(t *testing.T) {
 	}
 
 	// 5. Update without expression (NONE)
-	attrs, err = store.UpdateItem(ctx, tableName, key, "", nil, nil, "")
+	attrs, err = store.UpdateItem(ctx, tableName, key, "", "", nil, nil, "")
 	if err != nil {
 		t.Fatalf("UpdateItem NONE failed: %v", err)
 	}
@@ -71,37 +71,37 @@ func TestFoundationDBStore_UpdateItem_Comprehensive(t *testing.T) {
 	}
 
 	// 6. Table not found
-	_, err = store.UpdateItem(ctx, "non-existent", key, "SET age = :a", nil, map[string]models.AttributeValue{":a": {N: strPtr("25")}}, "")
+	_, err = store.UpdateItem(ctx, "non-existent", key, "SET age = :a", "", nil, map[string]models.AttributeValue{":a": {N: strPtr("25")}}, "")
 	if err != ErrTableNotFound {
 		t.Errorf("expected ErrTableNotFound, got %v", err)
 	}
 
 	// 7. Unsupported expression (not SET)
-	_, err = store.UpdateItem(ctx, tableName, key, "REMOVE age", nil, nil, "")
+	_, err = store.UpdateItem(ctx, tableName, key, "REMOVE age", "", nil, nil, "")
 	if err == nil || !strings.Contains(err.Error(), "only SET expressions supported") {
 		t.Error("expected error for unsupported expression")
 	}
 
 	// 8. Invalid assignment (missing =)
-	_, err = store.UpdateItem(ctx, tableName, key, "SET age :a", nil, map[string]models.AttributeValue{":a": {N: strPtr("25")}}, "")
+	_, err = store.UpdateItem(ctx, tableName, key, "SET age :a", "", nil, map[string]models.AttributeValue{":a": {N: strPtr("25")}}, "")
 	if err == nil || !strings.Contains(err.Error(), "invalid assignment") {
 		t.Error("expected error for invalid assignment")
 	}
 
 	// 9. Missing placeholder in Names
-	_, err = store.UpdateItem(ctx, tableName, key, "SET #missing = :a", nil, map[string]models.AttributeValue{":a": {N: strPtr("25")}}, "")
+	_, err = store.UpdateItem(ctx, tableName, key, "SET #missing = :a", "", nil, map[string]models.AttributeValue{":a": {N: strPtr("25")}}, "")
 	if err == nil || !strings.Contains(err.Error(), "missing expression attribute name") {
 		t.Error("expected error for missing name placeholder")
 	}
 
 	// 10. Missing placeholder in Values
-	_, err = store.UpdateItem(ctx, tableName, key, "SET age = :missing", nil, nil, "")
+	_, err = store.UpdateItem(ctx, tableName, key, "SET age = :missing", "", nil, nil, "")
 	if err == nil || !strings.Contains(err.Error(), "missing expression attribute value") {
 		t.Error("expected error for missing value placeholder")
 	}
 
 	// 11. Literal value without colon (unsupported by our simple parser)
-	_, err = store.UpdateItem(ctx, tableName, key, "SET age = 25", nil, nil, "")
+	_, err = store.UpdateItem(ctx, tableName, key, "SET age = 25", "", nil, nil, "")
 	if err == nil || !strings.Contains(err.Error(), "only literal values with ':' prefix supported") {
 		t.Error("expected error for literal without colon")
 	}
@@ -114,7 +114,7 @@ func TestFoundationDBStore_ItemOperations_NotFound(t *testing.T) {
 	key := map[string]models.AttributeValue{"pk": {S: strPtr("1")}}
 
 	// 1. PutItem
-	_, err := store.PutItem(ctx, "non-existent", map[string]models.AttributeValue{"pk": {S: strPtr("1")}}, "")
+	_, err := store.PutItem(ctx, "non-existent", map[string]models.AttributeValue{"pk": {S: strPtr("1")}}, "", nil, nil, "")
 	if err != ErrTableNotFound {
 		t.Errorf("PutItem: expected ErrTableNotFound, got %v", err)
 	}
@@ -126,7 +126,7 @@ func TestFoundationDBStore_ItemOperations_NotFound(t *testing.T) {
 	}
 
 	// 3. DeleteItem
-	_, err = store.DeleteItem(ctx, "non-existent", key, "")
+	_, err = store.DeleteItem(ctx, "non-existent", key, "", nil, nil, "")
 	if err != ErrTableNotFound {
 		t.Errorf("DeleteItem: expected ErrTableNotFound, got %v", err)
 	}
@@ -162,7 +162,7 @@ func TestFoundationDBStore_Scan_Comprehensive(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		pk := fmt.Sprintf("pk%d", i)
 		item := map[string]models.AttributeValue{"pk": {S: &pk}, "val": {N: strPtr(fmt.Sprintf("%d", i))}}
-		if _, err := store.PutItem(ctx, tableName, item, ""); err != nil {
+		if _, err := store.PutItem(ctx, tableName, item, "", nil, nil, ""); err != nil {
 			t.Fatalf("PutItem failed: %v", err)
 		}
 	}
@@ -217,7 +217,7 @@ func TestFoundationDBStore_Query_Comprehensive(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		sk := fmt.Sprintf("sort%d", i)
 		item := map[string]models.AttributeValue{"pk": {S: &pk}, "sk": {S: &sk}, "val": {N: strPtr(fmt.Sprintf("%d", i))}}
-		if _, err := store.PutItem(ctx, tableName, item, ""); err != nil {
+		if _, err := store.PutItem(ctx, tableName, item, "", nil, nil, ""); err != nil {
 			t.Fatalf("PutItem failed: %v", err)
 		}
 	}
@@ -348,14 +348,14 @@ func TestFoundationDBStore_PutItem_ReturnValues(t *testing.T) {
 	item := map[string]models.AttributeValue{"pk": {S: &pk}, "val": {S: strPtr("old")}}
 
 	// 2. Put initial item
-	_, err := store.PutItem(ctx, tableName, item, "")
+	_, err := store.PutItem(ctx, tableName, item, "", nil, nil, "")
 	if err != nil {
 		t.Fatalf("Initial PutItem failed: %v", err)
 	}
 
 	// 3. Put replacement with ALL_OLD
 	newItem := map[string]models.AttributeValue{"pk": {S: &pk}, "val": {S: strPtr("new")}}
-	old, err := store.PutItem(ctx, tableName, newItem, "ALL_OLD")
+	old, err := store.PutItem(ctx, tableName, newItem, "", nil, nil, "ALL_OLD")
 	if err != nil {
 		t.Fatalf("PutItem ALL_OLD failed: %v", err)
 	}
@@ -402,7 +402,7 @@ func TestFoundationDBStore_CorruptedData_Comprehenisve(t *testing.T) {
 	}
 
 	// 4. UpdateItem should fail during read
-	_, err = store.UpdateItem(ctx, tableName, key, "SET age = :a", nil, map[string]models.AttributeValue{":a": {N: strPtr("25")}}, "")
+	_, err = store.UpdateItem(ctx, tableName, key, "SET age = :a", "", nil, map[string]models.AttributeValue{":a": {N: strPtr("25")}}, "")
 	if err == nil {
 		t.Error("expected error from UpdateItem on corrupted data")
 	}
@@ -414,7 +414,7 @@ func TestFoundationDBStore_CorruptedData_Comprehenisve(t *testing.T) {
 	}
 
 	// 6. DeleteItem with ALL_OLD should fail (covers getItemInternal unmarshal error)
-	_, err = store.DeleteItem(ctx, tableName, key, "ALL_OLD")
+	_, err = store.DeleteItem(ctx, tableName, key, "", nil, nil, "ALL_OLD")
 	if err == nil {
 		t.Error("expected error from DeleteItem(ALL_OLD) on corrupted data")
 	}
@@ -442,7 +442,7 @@ func TestFoundationDBStore_CorruptedData_Comprehenisve(t *testing.T) {
 	}
 
 	// 9. PutItem on corrupted metadata
-	_, err = store.PutItem(ctx, tableName, map[string]models.AttributeValue{"pk": {S: strPtr("1")}}, "")
+	_, err = store.PutItem(ctx, tableName, map[string]models.AttributeValue{"pk": {S: strPtr("1")}}, "", nil, nil, "")
 	if err == nil {
 		t.Error("expected error from PutItem on corrupted metadata")
 	}
@@ -548,7 +548,7 @@ func TestFoundationDBStore_Query_EdgeCases(t *testing.T) {
 	store.PutItem(ctx, tableName, map[string]models.AttributeValue{
 		"pk": {S: strPtr("pk1")},
 		"sk": {S: strPtr(ff + "suffix")},
-	}, "")
+	}, "", nil, nil, "")
 
 	items, _, err = store.Query(ctx, tableName, "", "pk = :p AND begins_with(sk, :s)", "", "", nil, map[string]models.AttributeValue{
 		":p": {S: strPtr("pk1")},
@@ -567,7 +567,7 @@ func TestFoundationDBStore_Query_EdgeCases(t *testing.T) {
 		store.PutItem(ctx, tableName, map[string]models.AttributeValue{
 			"pk": {S: &pkLimit},
 			"sk": {S: strPtr(fmt.Sprintf("sk%d", i))},
-		}, "")
+		}, "", nil, nil, "")
 	}
 
 	items, lek, err := store.Query(ctx, tableName, "", "pk = :p", "", "", nil, map[string]models.AttributeValue{
@@ -596,7 +596,7 @@ func TestFoundationDBStore_UpdateItem_ALL_OLD_NonExistent(t *testing.T) {
 	// Update non-existent item with ALL_OLD
 	old, err := store.UpdateItem(ctx, tableName, map[string]models.AttributeValue{
 		"id": {S: strPtr("999")},
-	}, "SET attr = :v", nil, map[string]models.AttributeValue{
+	}, "SET attr = :v", "", nil, map[string]models.AttributeValue{
 		":v": {S: strPtr("val")},
 	}, "ALL_OLD")
 
@@ -621,11 +621,11 @@ func TestFoundationDBStore_DeleteItem_ALL_OLD(t *testing.T) {
 	store.PutItem(ctx, tableName, map[string]models.AttributeValue{
 		"id":   {S: strPtr("123")},
 		"data": {S: strPtr("val")},
-	}, "")
+	}, "", nil, nil, "")
 
 	old, err := store.DeleteItem(ctx, tableName, map[string]models.AttributeValue{
 		"id": {S: strPtr("123")},
-	}, "ALL_OLD")
+	}, "", nil, nil, "ALL_OLD")
 
 	if err != nil {
 		t.Fatalf("DeleteItem failed: %v", err)
@@ -643,7 +643,7 @@ func TestFoundationDBStore_Scan_FilterError(t *testing.T) {
 		TableName: tableName,
 		KeySchema: []models.KeySchemaElement{{AttributeName: "id", KeyType: "HASH"}},
 	})
-	store.PutItem(ctx, tableName, map[string]models.AttributeValue{"id": {S: strPtr("1")}}, "")
+	store.PutItem(ctx, tableName, map[string]models.AttributeValue{"id": {S: strPtr("1")}}, "", nil, nil, "")
 
 	_, _, err := store.Scan(ctx, tableName, "id INVALID :v", "", nil, map[string]models.AttributeValue{":v": {S: strPtr("1")}}, 0, nil, false)
 	if err == nil {
@@ -732,7 +732,7 @@ func TestFoundationDBStore_Query_AllOperators(t *testing.T) {
 		store.PutItem(ctx, tableName, map[string]models.AttributeValue{
 			"pk": {S: &p},
 			"sk": {S: &sk},
-		}, "")
+		}, "", nil, nil, "")
 	}
 
 	tests := []struct {
@@ -770,13 +770,13 @@ func TestFoundationDBStore_FinalEdgeCases(t *testing.T) {
 	})
 
 	// 1. UpdateItem with bad key (hits line 862)
-	_, err := store.UpdateItem(ctx, tableName, map[string]models.AttributeValue{"bad": {S: strPtr("1")}}, "", nil, nil, "")
+	_, err := store.UpdateItem(ctx, tableName, map[string]models.AttributeValue{"bad": {S: strPtr("1")}}, "", "", nil, nil, "")
 	if err == nil {
 		t.Error("expected error for bad key in UpdateItem")
 	}
 
 	// 2. DeleteItem with bad key (hits line 702)
-	_, err = store.DeleteItem(ctx, tableName, map[string]models.AttributeValue{"bad": {S: strPtr("1")}}, "")
+	_, err = store.DeleteItem(ctx, tableName, map[string]models.AttributeValue{"bad": {S: strPtr("1")}}, "", nil, nil, "")
 	if err == nil {
 		t.Error("expected error for bad key in DeleteItem")
 	}
@@ -846,12 +846,12 @@ func TestFoundationDBStore_TableNotFound_Internal(t *testing.T) {
 	tableName := "missing-table-forever"
 
 	// test CRUD ops with missing table
-	_, err := store.DeleteItem(ctx, tableName, nil, "")
+	_, err := store.DeleteItem(ctx, tableName, nil, "", nil, nil, "")
 	if !errors.Is(err, ErrTableNotFound) {
 		t.Errorf("expected ErrTableNotFound, got %v", err)
 	}
 
-	_, err = store.UpdateItem(ctx, tableName, map[string]models.AttributeValue{"pk": {S: strPtr("1")}}, "", nil, nil, "")
+	_, err = store.UpdateItem(ctx, tableName, map[string]models.AttributeValue{"pk": {S: strPtr("1")}}, "", "", nil, nil, "")
 	if !errors.Is(err, ErrTableNotFound) {
 		t.Errorf("expected ErrTableNotFound, got %v", err)
 	}
@@ -903,7 +903,7 @@ func TestFoundationDBStore_CRUD_TableNotFound(t *testing.T) {
 	tableName := "i-do-not-exist"
 
 	// PutItem
-	_, err := store.PutItem(ctx, tableName, map[string]models.AttributeValue{"pk": {S: strPtr("1")}}, "NONE")
+	_, err := store.PutItem(ctx, tableName, map[string]models.AttributeValue{"pk": {S: strPtr("1")}}, "", nil, nil, "NONE")
 	if !errors.Is(err, ErrTableNotFound) {
 		t.Errorf("expected ErrTableNotFound, got %v", err)
 	}
@@ -958,7 +958,7 @@ func TestFoundationDBStore_RangeKey_GetItem(t *testing.T) {
 		"sk": {N: strPtr("10")},
 		"v":  {S: strPtr("val")},
 	}
-	store.PutItem(ctx, tableName, item, "NONE")
+	store.PutItem(ctx, tableName, item, "", nil, nil, "NONE")
 
 	// Success with both keys
 	got, err := store.GetItem(ctx, tableName, map[string]models.AttributeValue{
@@ -1027,7 +1027,7 @@ func TestFoundationDBStore_Cycle_PutItem(t *testing.T) {
 	sub := models.AttributeValue{M: item}
 	item["self"] = sub
 
-	_, err := store.PutItem(ctx, tableName, item, "NONE")
+	_, err := store.PutItem(ctx, tableName, item, "", nil, nil, "NONE")
 	if err == nil {
 		t.Error("expected error for cyclic item")
 	}
@@ -1051,13 +1051,13 @@ func TestFoundationDBStore_CorruptedItem_Operations(t *testing.T) {
 	})
 
 	// 1. UpdateItem should fail to unmarshal existing item
-	_, err := store.UpdateItem(ctx, tableName, map[string]models.AttributeValue{"pk": {S: strPtr("1")}}, "SET a = :v", nil, map[string]models.AttributeValue{":v": {S: strPtr("x")}}, "")
+	_, err := store.UpdateItem(ctx, tableName, map[string]models.AttributeValue{"pk": {S: strPtr("1")}}, "SET a = :v", "", nil, map[string]models.AttributeValue{":v": {S: strPtr("x")}}, "")
 	if err == nil {
 		t.Error("expected error for UpdateItem on corrupted data")
 	}
 
 	// 2. DeleteItem with ALL_OLD should fail to unmarshal
-	_, err = store.DeleteItem(ctx, tableName, map[string]models.AttributeValue{"pk": {S: strPtr("1")}}, "ALL_OLD")
+	_, err = store.DeleteItem(ctx, tableName, map[string]models.AttributeValue{"pk": {S: strPtr("1")}}, "", nil, nil, "ALL_OLD")
 	if err == nil {
 		t.Error("expected error for DeleteItem on corrupted data")
 	}

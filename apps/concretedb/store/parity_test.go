@@ -33,7 +33,7 @@ func TestFoundationDBStore_ReturnValues(t *testing.T) {
 	}
 
 	// 2. PutItem without ReturnValues
-	attrs, err := store.PutItem(ctx, tableName, item, "")
+	attrs, err := store.PutItem(ctx, tableName, item, "", nil, nil, "")
 	if err != nil {
 		t.Fatalf("PutItem failed: %v", err)
 	}
@@ -46,7 +46,7 @@ func TestFoundationDBStore_ReturnValues(t *testing.T) {
 		"pk":  {S: &pk},
 		"val": {S: strPtr("new")},
 	}
-	attrs, err = store.PutItem(ctx, tableName, newItem, "ALL_OLD")
+	attrs, err = store.PutItem(ctx, tableName, newItem, "", nil, nil, "ALL_OLD")
 	if err != nil {
 		t.Fatalf("PutItem with ALL_OLD failed: %v", err)
 	}
@@ -58,7 +58,7 @@ func TestFoundationDBStore_ReturnValues(t *testing.T) {
 	}
 
 	// 4. DeleteItem with ALL_OLD
-	attrs, err = store.DeleteItem(ctx, tableName, map[string]models.AttributeValue{"pk": {S: &pk}}, "ALL_OLD")
+	attrs, err = store.DeleteItem(ctx, tableName, map[string]models.AttributeValue{"pk": {S: &pk}}, "", nil, nil, "ALL_OLD")
 	if err != nil {
 		t.Fatalf("DeleteItem with ALL_OLD failed: %v", err)
 	}
@@ -71,8 +71,8 @@ func TestFoundationDBStore_ReturnValues(t *testing.T) {
 
 	// 5. DeleteItem without ReturnValues
 	// Add item back first
-	store.PutItem(ctx, tableName, newItem, "")
-	attrs, err = store.DeleteItem(ctx, tableName, map[string]models.AttributeValue{"pk": {S: &pk}}, "")
+	store.PutItem(ctx, tableName, newItem, "", nil, nil, "")
+	attrs, err = store.DeleteItem(ctx, tableName, map[string]models.AttributeValue{"pk": {S: &pk}}, "", nil, nil, "")
 	if err != nil {
 		t.Fatalf("DeleteItem failed: %v", err)
 	}
@@ -102,7 +102,7 @@ func TestFoundationDBStore_ConsistentRead(t *testing.T) {
 	item := map[string]models.AttributeValue{
 		"pk": {S: &pk},
 	}
-	store.PutItem(ctx, tableName, item, "")
+	store.PutItem(ctx, tableName, item, "", nil, nil, "")
 
 	// 2. GetItem with ConsistentRead=true
 	attrs, err := store.GetItem(ctx, tableName, map[string]models.AttributeValue{"pk": {S: &pk}}, true)

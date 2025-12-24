@@ -16,12 +16,14 @@ type mockStore struct {
 	DeleteTableFunc func(ctx context.Context, tableName string) (*models.Table, error) // <-- ADD THIS
 	ListTablesFunc  func(ctx context.Context, limit int, exclusiveStartTableName string) ([]string, string, error)
 	// Item Operations
-	PutItemFunc    func(ctx context.Context, tableName string, item map[string]models.AttributeValue, returnValues string) (map[string]models.AttributeValue, error)
-	GetItemFunc    func(ctx context.Context, tableName string, key map[string]models.AttributeValue, consistentRead bool) (map[string]models.AttributeValue, error)
-	DeleteItemFunc func(ctx context.Context, tableName string, key map[string]models.AttributeValue, returnValues string) (map[string]models.AttributeValue, error)
-	UpdateItemFunc func(ctx context.Context, tableName string, key map[string]models.AttributeValue, updateExpression string, exprAttrNames map[string]string, exprAttrValues map[string]models.AttributeValue, returnValues string) (map[string]models.AttributeValue, error)
-	ScanFunc       func(ctx context.Context, tableName string, filterExpression string, projectionExpression string, exprAttrNames map[string]string, exprAttrValues map[string]models.AttributeValue, limit int32, exclusiveStartKey map[string]models.AttributeValue, consistentRead bool) ([]map[string]models.AttributeValue, map[string]models.AttributeValue, error)
-	QueryFunc      func(ctx context.Context, tableName string, indexName string, keyConditionExpression string, filterExpression string, projectionExpression string, exprAttrNames map[string]string, expressionAttributeValues map[string]models.AttributeValue, limit int32, exclusiveStartKey map[string]models.AttributeValue, consistentRead bool) ([]map[string]models.AttributeValue, map[string]models.AttributeValue, error)
+	PutItemFunc        func(ctx context.Context, tableName string, item map[string]models.AttributeValue, conditionExpression string, exprAttrNames map[string]string, exprAttrValues map[string]models.AttributeValue, returnValues string) (map[string]models.AttributeValue, error)
+	GetItemFunc        func(ctx context.Context, tableName string, key map[string]models.AttributeValue, consistentRead bool) (map[string]models.AttributeValue, error)
+	DeleteItemFunc     func(ctx context.Context, tableName string, key map[string]models.AttributeValue, conditionExpression string, exprAttrNames map[string]string, exprAttrValues map[string]models.AttributeValue, returnValues string) (map[string]models.AttributeValue, error)
+	UpdateItemFunc     func(ctx context.Context, tableName string, key map[string]models.AttributeValue, updateExpression string, conditionExpression string, exprAttrNames map[string]string, exprAttrValues map[string]models.AttributeValue, returnValues string) (map[string]models.AttributeValue, error)
+	ScanFunc           func(ctx context.Context, tableName string, filterExpression string, projectionExpression string, exprAttrNames map[string]string, exprAttrValues map[string]models.AttributeValue, limit int32, exclusiveStartKey map[string]models.AttributeValue, consistentRead bool) ([]map[string]models.AttributeValue, map[string]models.AttributeValue, error)
+	QueryFunc          func(ctx context.Context, tableName string, indexName string, keyConditionExpression string, filterExpression string, projectionExpression string, exprAttrNames map[string]string, expressionAttributeValues map[string]models.AttributeValue, limit int32, exclusiveStartKey map[string]models.AttributeValue, consistentRead bool) ([]map[string]models.AttributeValue, map[string]models.AttributeValue, error)
+	BatchGetItemFunc   func(ctx context.Context, requestItems map[string]models.KeysAndAttributes) (map[string][]map[string]models.AttributeValue, map[string]models.KeysAndAttributes, error)
+	BatchWriteItemFunc func(ctx context.Context, requestItems map[string][]models.WriteRequest) (map[string][]models.WriteRequest, error)
 }
 
 func (m *mockStore) CreateTable(ctx context.Context, table *models.Table) error {
@@ -41,20 +43,20 @@ func (m *mockStore) ListTables(ctx context.Context, limit int, exclusiveStartTab
 	return m.ListTablesFunc(ctx, limit, exclusiveStartTableName)
 }
 
-func (m *mockStore) PutItem(ctx context.Context, tableName string, item map[string]models.AttributeValue, returnValues string) (map[string]models.AttributeValue, error) {
-	return m.PutItemFunc(ctx, tableName, item, returnValues)
+func (m *mockStore) PutItem(ctx context.Context, tableName string, item map[string]models.AttributeValue, conditionExpression string, exprAttrNames map[string]string, exprAttrValues map[string]models.AttributeValue, returnValues string) (map[string]models.AttributeValue, error) {
+	return m.PutItemFunc(ctx, tableName, item, conditionExpression, exprAttrNames, exprAttrValues, returnValues)
 }
 
 func (m *mockStore) GetItem(ctx context.Context, tableName string, key map[string]models.AttributeValue, consistentRead bool) (map[string]models.AttributeValue, error) {
 	return m.GetItemFunc(ctx, tableName, key, consistentRead)
 }
 
-func (m *mockStore) DeleteItem(ctx context.Context, tableName string, key map[string]models.AttributeValue, returnValues string) (map[string]models.AttributeValue, error) {
-	return m.DeleteItemFunc(ctx, tableName, key, returnValues)
+func (m *mockStore) DeleteItem(ctx context.Context, tableName string, key map[string]models.AttributeValue, conditionExpression string, exprAttrNames map[string]string, exprAttrValues map[string]models.AttributeValue, returnValues string) (map[string]models.AttributeValue, error) {
+	return m.DeleteItemFunc(ctx, tableName, key, conditionExpression, exprAttrNames, exprAttrValues, returnValues)
 }
 
-func (m *mockStore) UpdateItem(ctx context.Context, tableName string, key map[string]models.AttributeValue, updateExpression string, exprAttrNames map[string]string, exprAttrValues map[string]models.AttributeValue, returnValues string) (map[string]models.AttributeValue, error) {
-	return m.UpdateItemFunc(ctx, tableName, key, updateExpression, exprAttrNames, exprAttrValues, returnValues)
+func (m *mockStore) UpdateItem(ctx context.Context, tableName string, key map[string]models.AttributeValue, updateExpression string, conditionExpression string, exprAttrNames map[string]string, exprAttrValues map[string]models.AttributeValue, returnValues string) (map[string]models.AttributeValue, error) {
+	return m.UpdateItemFunc(ctx, tableName, key, updateExpression, conditionExpression, exprAttrNames, exprAttrValues, returnValues)
 }
 
 func (m *mockStore) Scan(ctx context.Context, tableName string, filterExpression string, projectionExpression string, exprAttrNames map[string]string, exprAttrValues map[string]models.AttributeValue, limit int32, exclusiveStartKey map[string]models.AttributeValue, consistentRead bool) ([]map[string]models.AttributeValue, map[string]models.AttributeValue, error) {
@@ -63,6 +65,14 @@ func (m *mockStore) Scan(ctx context.Context, tableName string, filterExpression
 
 func (m *mockStore) Query(ctx context.Context, tableName string, indexName string, keyConditionExpression string, filterExpression string, projectionExpression string, exprAttrNames map[string]string, expressionAttributeValues map[string]models.AttributeValue, limit int32, exclusiveStartKey map[string]models.AttributeValue, consistentRead bool) ([]map[string]models.AttributeValue, map[string]models.AttributeValue, error) {
 	return m.QueryFunc(ctx, tableName, indexName, keyConditionExpression, filterExpression, projectionExpression, exprAttrNames, expressionAttributeValues, limit, exclusiveStartKey, consistentRead)
+}
+
+func (m *mockStore) BatchGetItem(ctx context.Context, requestItems map[string]models.KeysAndAttributes) (map[string][]map[string]models.AttributeValue, map[string]models.KeysAndAttributes, error) {
+	return m.BatchGetItemFunc(ctx, requestItems)
+}
+
+func (m *mockStore) BatchWriteItem(ctx context.Context, requestItems map[string][]models.WriteRequest) (map[string][]models.WriteRequest, error) {
+	return m.BatchWriteItemFunc(ctx, requestItems)
 }
 
 func TestTableService_DeleteTable_NotFound(t *testing.T) {
@@ -325,7 +335,7 @@ func TestTableService_CreateTable_StoreError(t *testing.T) {
 
 func TestTableService_PutItem(t *testing.T) {
 	mock := &mockStore{
-		PutItemFunc: func(ctx context.Context, tableName string, item map[string]models.AttributeValue, returnValues string) (map[string]models.AttributeValue, error) {
+		PutItemFunc: func(ctx context.Context, tableName string, item map[string]models.AttributeValue, conditionExpression string, exprAttrNames map[string]string, exprAttrValues map[string]models.AttributeValue, returnValues string) (map[string]models.AttributeValue, error) {
 			if tableName == "error-table" {
 				return nil, errors.New("store error")
 			}
@@ -464,7 +474,7 @@ func TestTableService_GetItem(t *testing.T) {
 
 func TestTableService_DeleteItem(t *testing.T) {
 	mock := &mockStore{
-		DeleteItemFunc: func(ctx context.Context, tableName string, key map[string]models.AttributeValue, returnValues string) (map[string]models.AttributeValue, error) {
+		DeleteItemFunc: func(ctx context.Context, tableName string, key map[string]models.AttributeValue, conditionExpression string, exprAttrNames map[string]string, exprAttrValues map[string]models.AttributeValue, returnValues string) (map[string]models.AttributeValue, error) {
 			if tableName == "error-table" {
 				return nil, errors.New("store error")
 			}
@@ -534,7 +544,7 @@ func TestTableService_DeleteItem(t *testing.T) {
 
 func TestTableService_UpdateItem(t *testing.T) {
 	mock := &mockStore{
-		UpdateItemFunc: func(ctx context.Context, tableName string, key map[string]models.AttributeValue, updateExpression string, exprAttrNames map[string]string, exprAttrValues map[string]models.AttributeValue, returnValues string) (map[string]models.AttributeValue, error) {
+		UpdateItemFunc: func(ctx context.Context, tableName string, key map[string]models.AttributeValue, updateExpression string, conditionExpression string, exprAttrNames map[string]string, exprAttrValues map[string]models.AttributeValue, returnValues string) (map[string]models.AttributeValue, error) {
 			if tableName == "error-table" {
 				return nil, errors.New("store error")
 			}

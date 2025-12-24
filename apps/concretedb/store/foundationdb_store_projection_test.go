@@ -34,7 +34,7 @@ func TestFoundationDBStore_Projection(t *testing.T) {
 		"age":  {N: strPtr("30")},
 		"role": {S: strPtr("admin")},
 	}
-	if _, err := store.PutItem(ctx, tableName, item, ""); err != nil {
+	if _, err := store.PutItem(ctx, tableName, item, "", nil, nil, ""); err != nil {
 		t.Fatalf("PutItem failed: %v", err)
 	}
 

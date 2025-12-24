@@ -50,7 +50,7 @@ func TestFoundationDBStore_Query_SortKeyConditions(t *testing.T) {
 		_, err := store.PutItem(ctx, tableName, map[string]models.AttributeValue{
 			"pk": {S: &pk},
 			"sk": {S: &sk},
-		}, "")
+		}, "", nil, nil, "")
 		if err != nil {
 			t.Fatalf("PutItem failed for %s/%s: %v", pk, sk, err)
 		}

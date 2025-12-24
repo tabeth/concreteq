@@ -49,7 +49,7 @@ func TestFoundationDBStore_Scan_Filter(t *testing.T) {
 		},
 	}
 	for _, it := range items {
-		if _, err := store.PutItem(ctx, tableName, it, ""); err != nil {
+		if _, err := store.PutItem(ctx, tableName, it, "", nil, nil, ""); err != nil {
 			t.Fatalf("PutItem failed: %v", err)
 		}
 	}
@@ -128,7 +128,7 @@ func TestFoundationDBStore_Query_Filter(t *testing.T) {
 		{"pk": {S: strPtr("B")}, "sk": {S: strPtr("1")}, "status": {S: strPtr("active")}},
 	}
 	for _, it := range items {
-		if _, err := store.PutItem(ctx, tableName, it, ""); err != nil {
+		if _, err := store.PutItem(ctx, tableName, it, "", nil, nil, ""); err != nil {
 			t.Fatalf("PutItem failed: %v", err)
 		}
 	}

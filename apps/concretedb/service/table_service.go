@@ -24,6 +24,8 @@ type TableServicer interface {
 	UpdateItem(ctx context.Context, request *models.UpdateItemRequest) (*models.UpdateItemResponse, error)
 	Scan(ctx context.Context, input *models.ScanRequest) (*models.ScanResponse, error)
 	Query(ctx context.Context, input *models.QueryRequest) (*models.QueryResponse, error)
+	BatchGetItem(ctx context.Context, input *models.BatchGetItemRequest) (*models.BatchGetItemResponse, error)
+	BatchWriteItem(ctx context.Context, input *models.BatchWriteItemRequest) (*models.BatchWriteItemResponse, error)
 }
 
 // TableService contains the business logic for table operations.
@@ -126,7 +128,7 @@ func (s *TableService) PutItem(ctx context.Context, request *models.PutItemReque
 		return nil, models.New("ValidationException", "Item cannot be empty")
 	}
 
-	attributes, err := s.store.PutItem(ctx, request.TableName, request.Item, request.ReturnValues)
+	attributes, err := s.store.PutItem(ctx, request.TableName, request.Item, request.ConditionExpression, request.ExpressionAttributeNames, request.ExpressionAttributeValues, request.ReturnValues)
 	if err != nil {
 		if errors.Is(err, store.ErrTableNotFound) {
 			return nil, models.New("ResourceNotFoundException", fmt.Sprintf("Table not found: %s", request.TableName))
@@ -164,7 +166,7 @@ func (s *TableService) DeleteItem(ctx context.Context, request *models.DeleteIte
 		return nil, models.New("ValidationException", "Key cannot be empty")
 	}
 
-	attributes, err := s.store.DeleteItem(ctx, request.TableName, request.Key, request.ReturnValues)
+	attributes, err := s.store.DeleteItem(ctx, request.TableName, request.Key, request.ConditionExpression, request.ExpressionAttributeNames, request.ExpressionAttributeValues, request.ReturnValues)
 	if err != nil {
 		// DeleteItem in DynamoDB is idempotent.
 		if errors.Is(err, store.ErrTableNotFound) {
@@ -198,7 +200,7 @@ func (s *TableService) UpdateItem(ctx context.Context, request *models.UpdateIte
 	}
 
 	// Call the store
-	attributes, err := s.store.UpdateItem(ctx, request.TableName, request.Key, request.UpdateExpression, request.ExpressionAttributeNames, request.ExpressionAttributeValues, request.ReturnValues)
+	attributes, err := s.store.UpdateItem(ctx, request.TableName, request.Key, request.UpdateExpression, request.ConditionExpression, request.ExpressionAttributeNames, request.ExpressionAttributeValues, request.ReturnValues)
 	if err != nil {
 		if errors.Is(err, store.ErrTableNotFound) {
 			return nil, models.New("ResourceNotFoundException", fmt.Sprintf("Table not found: %s", request.TableName))
@@ -257,5 +259,53 @@ func (s *TableService) Query(ctx context.Context, input *models.QueryRequest) (*
 		Count:            val,
 		ScannedCount:     val,
 		LastEvaluatedKey: lastKey,
+	}, nil
+}
+
+// BatchGetItem retrieves items from multiple tables.
+func (s *TableService) BatchGetItem(ctx context.Context, input *models.BatchGetItemRequest) (*models.BatchGetItemResponse, error) {
+	if len(input.RequestItems) == 0 {
+		return nil, models.New("ValidationException", "RequestItems cannot be empty")
+	}
+
+	responses, unprocessed, err := s.store.BatchGetItem(ctx, input.RequestItems)
+	if err != nil {
+		if errors.Is(err, store.ErrTableNotFound) {
+			return nil, models.New("ResourceNotFoundException", "One or more requested tables not found")
+		}
+		return nil, models.New("InternalFailure", fmt.Sprintf("failed to batch get items: %v", err))
+	}
+
+	return &models.BatchGetItemResponse{
+		Responses:       responses,
+		UnprocessedKeys: unprocessed,
+	}, nil
+}
+
+// BatchWriteItem writes/deletes items in multiple tables.
+func (s *TableService) BatchWriteItem(ctx context.Context, input *models.BatchWriteItemRequest) (*models.BatchWriteItemResponse, error) {
+	if len(input.RequestItems) == 0 {
+		return nil, models.New("ValidationException", "RequestItems cannot be empty")
+	}
+
+	// Basic validation of item count (DynamoDB limit is 25)
+	count := 0
+	for _, reqs := range input.RequestItems {
+		count += len(reqs)
+	}
+	if count > 25 {
+		return nil, models.New("ValidationException", "Member must have length less than or equal to 25")
+	}
+
+	unprocessed, err := s.store.BatchWriteItem(ctx, input.RequestItems)
+	if err != nil {
+		if errors.Is(err, store.ErrTableNotFound) {
+			return nil, models.New("ResourceNotFoundException", "One or more requested tables not found")
+		}
+		return nil, models.New("InternalFailure", fmt.Sprintf("failed to batch write items: %v", err))
+	}
+
+	return &models.BatchWriteItemResponse{
+		UnprocessedItems: unprocessed,
 	}, nil
 }

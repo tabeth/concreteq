@@ -189,9 +189,12 @@ type AttributeValue struct {
 
 // PutItemRequest mirrors the JSON request body for the PutItem action.
 type PutItemRequest struct {
-	TableName    string                    `json:"TableName"`
-	Item         map[string]AttributeValue `json:"Item"`
-	ReturnValues string                    `json:"ReturnValues,omitempty"` // NONE, ALL_OLD
+	TableName                 string                    `json:"TableName"`
+	Item                      map[string]AttributeValue `json:"Item"`
+	ConditionExpression       string                    `json:"ConditionExpression,omitempty"`
+	ExpressionAttributeNames  map[string]string         `json:"ExpressionAttributeNames,omitempty"`
+	ExpressionAttributeValues map[string]AttributeValue `json:"ExpressionAttributeValues,omitempty"`
+	ReturnValues              string                    `json:"ReturnValues,omitempty"` // NONE, ALL_OLD
 }
 
 // PutItemResponse mirrors the JSON response for the PutItem action.
@@ -213,9 +216,12 @@ type GetItemResponse struct {
 
 // DeleteItemRequest mirrors the JSON request body for the DeleteItem action.
 type DeleteItemRequest struct {
-	TableName    string                    `json:"TableName"`
-	Key          map[string]AttributeValue `json:"Key"`
-	ReturnValues string                    `json:"ReturnValues,omitempty"` // NONE, ALL_OLD
+	TableName                 string                    `json:"TableName"`
+	Key                       map[string]AttributeValue `json:"Key"`
+	ConditionExpression       string                    `json:"ConditionExpression,omitempty"`
+	ExpressionAttributeNames  map[string]string         `json:"ExpressionAttributeNames,omitempty"`
+	ExpressionAttributeValues map[string]AttributeValue `json:"ExpressionAttributeValues,omitempty"`
+	ReturnValues              string                    `json:"ReturnValues,omitempty"` // NONE, ALL_OLD
 }
 
 // DeleteItemResponse mirrors the JSON response for the DeleteItem action.
@@ -228,6 +234,7 @@ type UpdateItemRequest struct {
 	TableName                 string                    `json:"TableName"`
 	Key                       map[string]AttributeValue `json:"Key"`
 	UpdateExpression          string                    `json:"UpdateExpression"`
+	ConditionExpression       string                    `json:"ConditionExpression,omitempty"`
 	ExpressionAttributeNames  map[string]string         `json:"ExpressionAttributeNames,omitempty"`
 	ExpressionAttributeValues map[string]AttributeValue `json:"ExpressionAttributeValues,omitempty"`
 	ReturnValues              string                    `json:"ReturnValues,omitempty"` // NONE, ALL_OLD, UPDATED_OLD, ALL_NEW, UPDATED_NEW
@@ -279,4 +286,53 @@ type QueryResponse struct {
 	Count            int32                       `json:"Count"`
 	ScannedCount     int32                       `json:"ScannedCount"`
 	LastEvaluatedKey map[string]AttributeValue   `json:"LastEvaluatedKey,omitempty"`
+}
+
+// KeysAndAttributes represents the keys and attributes to get for a table in BatchGetItem.
+type KeysAndAttributes struct {
+	Keys                     []map[string]AttributeValue `json:"Keys"`
+	AttributesToGet          []string                    `json:"AttributesToGet,omitempty"` // Legacy, but supported
+	ConsistentRead           bool                        `json:"ConsistentRead,omitempty"`
+	ProjectionExpression     string                      `json:"ProjectionExpression,omitempty"`
+	ExpressionAttributeNames map[string]string           `json:"ExpressionAttributeNames,omitempty"`
+}
+
+// BatchGetItemRequest mirrors the JSON request body for the BatchGetItem action.
+type BatchGetItemRequest struct {
+	RequestItems           map[string]KeysAndAttributes `json:"RequestItems"`
+	ReturnConsumedCapacity string                       `json:"ReturnConsumedCapacity,omitempty"`
+}
+
+// BatchGetItemResponse mirrors the JSON response for the BatchGetItem action.
+type BatchGetItemResponse struct {
+	Responses       map[string][]map[string]AttributeValue `json:"Responses,omitempty"`
+	UnprocessedKeys map[string]KeysAndAttributes           `json:"UnprocessedKeys,omitempty"`
+}
+
+// WriteRequest represents a single write request (Put or Delete) in BatchWriteItem.
+// Only one of PutRequest or DeleteRequest should be set.
+type WriteRequest struct {
+	PutRequest    *PutRequest    `json:"PutRequest,omitempty"`
+	DeleteRequest *DeleteRequest `json:"DeleteRequest,omitempty"`
+}
+
+type PutRequest struct {
+	Item map[string]AttributeValue `json:"Item"`
+}
+
+type DeleteRequest struct {
+	Key map[string]AttributeValue `json:"Key"`
+}
+
+// BatchWriteItemRequest mirrors the JSON request body for the BatchWriteItem action.
+type BatchWriteItemRequest struct {
+	RequestItems                map[string][]WriteRequest `json:"RequestItems"`
+	ReturnConsumedCapacity      string                    `json:"ReturnConsumedCapacity,omitempty"`
+	ReturnItemCollectionMetrics string                    `json:"ReturnItemCollectionMetrics,omitempty"`
+}
+
+// BatchWriteItemResponse mirrors the JSON response for the BatchWriteItem action.
+type BatchWriteItemResponse struct {
+	UnprocessedItems      map[string][]WriteRequest `json:"UnprocessedItems,omitempty"`
+	ItemCollectionMetrics map[string][]interface{}  `json:"ItemCollectionMetrics,omitempty"` // Placeholder
 }
