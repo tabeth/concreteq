@@ -38,6 +38,9 @@ type mockStore struct {
 	UpdateGlobalTableFunc   func(ctx context.Context, req *models.UpdateGlobalTableRequest) (*models.GlobalTableDescription, error)
 	DescribeGlobalTableFunc func(ctx context.Context, globalTableName string) (*models.GlobalTableDescription, error)
 	ListGlobalTablesFunc    func(ctx context.Context, limit int, exclusiveStartGlobalTableName string) ([]models.GlobalTable, string, error)
+	// TTL
+	UpdateTimeToLiveFunc   func(ctx context.Context, req *models.UpdateTimeToLiveRequest) (*models.TimeToLiveSpecification, error)
+	DescribeTimeToLiveFunc func(ctx context.Context, tableName string) (*models.TimeToLiveDescription, error)
 }
 
 func (m *mockStore) CreateTable(ctx context.Context, table *models.Table) error {
@@ -131,6 +134,14 @@ func (m *mockStore) GetShardIterator(ctx context.Context, streamArn string, shar
 
 func (m *mockStore) GetRecords(ctx context.Context, shardIterator string, limit int) ([]models.Record, string, error) {
 	return m.GetRecordsFunc(ctx, shardIterator, limit)
+}
+
+func (m *mockStore) UpdateTimeToLive(ctx context.Context, req *models.UpdateTimeToLiveRequest) (*models.TimeToLiveSpecification, error) {
+	return m.UpdateTimeToLiveFunc(ctx, req)
+}
+
+func (m *mockStore) DescribeTimeToLive(ctx context.Context, tableName string) (*models.TimeToLiveDescription, error) {
+	return m.DescribeTimeToLiveFunc(ctx, tableName)
 }
 
 func TestTableService_DeleteTable_NotFound(t *testing.T) {
@@ -1436,4 +1447,104 @@ func TestTableService_GlobalTables(t *testing.T) {
 	listResp, err := svc.ListGlobalTables(ctx, &models.ListGlobalTablesRequest{Limit: 10})
 	assert.NoError(t, err)
 	assert.Len(t, listResp.GlobalTables, 1)
+}
+
+func TestTableService_TTL(t *testing.T) {
+	mock := &mockStore{
+		UpdateTimeToLiveFunc: func(ctx context.Context, req *models.UpdateTimeToLiveRequest) (*models.TimeToLiveSpecification, error) {
+			if req.TableName == "MissingTable" {
+				return nil, st.ErrTableNotFound
+			}
+			if req.TableName == "ErrorTable" {
+				return nil, errors.New("db error")
+			}
+			return &req.TimeToLiveSpecification, nil
+		},
+		DescribeTimeToLiveFunc: func(ctx context.Context, tableName string) (*models.TimeToLiveDescription, error) {
+			if tableName == "MissingTable" { // Should return empty description usually or handle as if disabled?
+				// DynamoDB DescribeTTL on missing table throws ResourceNotFound
+				return nil, st.ErrTableNotFound
+			}
+			if tableName == "ErrorTable" {
+				return nil, errors.New("db error")
+			}
+			if tableName == "DisabledTable" {
+				return &models.TimeToLiveDescription{TimeToLiveStatus: "DISABLED"}, nil
+			}
+			return &models.TimeToLiveDescription{
+				TimeToLiveStatus: "ENABLED",
+				AttributeName:    "expiry",
+			}, nil
+		},
+	}
+	svc := NewTableService(mock)
+	ctx := context.Background()
+
+	// 1. UpdateTimeToLive
+	// Success
+	upResp, err := svc.UpdateTimeToLive(ctx, &models.UpdateTimeToLiveRequest{
+		TableName:               "MyTable",
+		TimeToLiveSpecification: models.TimeToLiveSpecification{Enabled: true, AttributeName: "expiry"},
+	})
+	assert.NoError(t, err)
+	assert.Equal(t, "expiry", upResp.TimeToLiveSpecification.AttributeName)
+
+	// Validation: Empty Name
+	_, err = svc.UpdateTimeToLive(ctx, &models.UpdateTimeToLiveRequest{TableName: ""})
+	assert.Error(t, err)
+	assert.Equal(t, "ValidationException", err.(*models.APIError).Type)
+
+	// Validation: Empty Spec (AttributeName missing when Enabling)
+	_, err = svc.UpdateTimeToLive(ctx, &models.UpdateTimeToLiveRequest{
+		TableName:               "MyTable",
+		TimeToLiveSpecification: models.TimeToLiveSpecification{Enabled: true, AttributeName: ""},
+	})
+	assert.Error(t, err)
+	assert.Equal(t, "ValidationException", err.(*models.APIError).Type)
+
+	// ResourceNotFound
+	_, err = svc.UpdateTimeToLive(ctx, &models.UpdateTimeToLiveRequest{
+		TableName:               "MissingTable",
+		TimeToLiveSpecification: models.TimeToLiveSpecification{Enabled: true, AttributeName: "ttl"},
+	})
+	assert.Error(t, err)
+	assert.Equal(t, "ResourceNotFoundException", err.(*models.APIError).Type)
+
+	// Store Error
+	_, err = svc.UpdateTimeToLive(ctx, &models.UpdateTimeToLiveRequest{
+		TableName:               "ErrorTable",
+		TimeToLiveSpecification: models.TimeToLiveSpecification{Enabled: true, AttributeName: "ttl"},
+	})
+	assert.Error(t, err)
+	assert.Equal(t, "InternalFailure", err.(*models.APIError).Type)
+
+	// 2. DescribeTimeToLive
+	// Success Enabled
+	descResp, err := svc.DescribeTimeToLive(ctx, &models.DescribeTimeToLiveRequest{TableName: "MyTable"})
+	assert.NoError(t, err)
+	assert.Equal(t, "ENABLED", descResp.TimeToLiveDescription.TimeToLiveStatus)
+
+	// Success Disabled
+	descResp, err = svc.DescribeTimeToLive(ctx, &models.DescribeTimeToLiveRequest{TableName: "DisabledTable"})
+	assert.NoError(t, err)
+	assert.Equal(t, "DISABLED", descResp.TimeToLiveDescription.TimeToLiveStatus)
+
+	// Validation
+	_, err = svc.DescribeTimeToLive(ctx, &models.DescribeTimeToLiveRequest{TableName: ""})
+	assert.Error(t, err)
+	assert.Equal(t, "ValidationException", err.(*models.APIError).Type)
+
+	// ResourceNotFound
+	_, err = svc.DescribeTimeToLive(ctx, &models.DescribeTimeToLiveRequest{TableName: "MissingTable"})
+	// If store returns ErrTableNotFound, service maps it to ResourceNotFoundException?
+	// The implementation in service usually calls mapStoreError.
+	assert.Error(t, err)
+	// Actually for DescribeTTL, if table doesn't exist, DynamoDB throws ResourceNotFoundException.
+	// Our mock returns ErrTableNotFound, which mapStoreError maps to ResourceNotFoundException.
+	assert.Equal(t, "ResourceNotFoundException", err.(*models.APIError).Type)
+
+	// Store Error
+	_, err = svc.DescribeTimeToLive(ctx, &models.DescribeTimeToLiveRequest{TableName: "ErrorTable"})
+	assert.Error(t, err)
+	assert.Equal(t, "InternalFailure", err.(*models.APIError).Type)
 }

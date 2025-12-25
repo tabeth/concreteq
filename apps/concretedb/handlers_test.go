@@ -40,6 +40,9 @@ type mockTableService struct {
 	UpdateGlobalTableFunc   func(ctx context.Context, req *models.UpdateGlobalTableRequest) (*models.UpdateGlobalTableResponse, error)
 	DescribeGlobalTableFunc func(ctx context.Context, globalTableName string) (*models.DescribeGlobalTableResponse, error)
 	ListGlobalTablesFunc    func(ctx context.Context, req *models.ListGlobalTablesRequest) (*models.ListGlobalTablesResponse, error)
+	// TTL
+	UpdateTimeToLiveFunc   func(ctx context.Context, req *models.UpdateTimeToLiveRequest) (*models.UpdateTimeToLiveResponse, error)
+	DescribeTimeToLiveFunc func(ctx context.Context, req *models.DescribeTimeToLiveRequest) (*models.DescribeTimeToLiveResponse, error)
 }
 
 // CreateTable is the method required to satisfy the interface.
@@ -133,6 +136,14 @@ func (m *mockTableService) DescribeGlobalTable(ctx context.Context, globalTableN
 
 func (m *mockTableService) ListGlobalTables(ctx context.Context, req *models.ListGlobalTablesRequest) (*models.ListGlobalTablesResponse, error) {
 	return m.ListGlobalTablesFunc(ctx, req)
+}
+
+func (m *mockTableService) UpdateTimeToLive(ctx context.Context, req *models.UpdateTimeToLiveRequest) (*models.UpdateTimeToLiveResponse, error) {
+	return m.UpdateTimeToLiveFunc(ctx, req)
+}
+
+func (m *mockTableService) DescribeTimeToLive(ctx context.Context, req *models.DescribeTimeToLiveRequest) (*models.DescribeTimeToLiveResponse, error) {
+	return m.DescribeTimeToLiveFunc(ctx, req)
 }
 
 func TestCreateTableHandler_Success(t *testing.T) {

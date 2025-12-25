@@ -1,0 +1,548 @@
+NewFile: /tmp/bench_optimized.db
+Acquired Lock 1. Ver: 1766683780901629657 Size: 1486848
+Acquired Lock 1. Ver: 1766683780901629657 Size: 1486848
+Using request distribution 'zipfian' a keyrange of [0 1000]
+NewFile: /tmp/bench_optimized.db
+Acquired Lock 1. Ver: 1766683780901629657 Size: 1486848
+Acquired Lock 1. Ver: 1766683780901629657 Size: 1486848
+Acquired Lock 1. Ver: 1766683780901629657 Size: 1486848
+Acquired Lock 1. Ver: 1766683780901629657 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683780901629657 Size: 1486848
+LockManager failed: context deadline exceeded
+LockManager failed: context deadline exceeded
+Acquired Lock 1. Ver: 1766683780901629657 Size: 1486848
+Acquired Lock 1. Ver: 1766683780901629657 Size: 1486848
+Acquired Lock 1. Ver: 1766683780901629657 Size: 1486848
+Acquired Lock 1. Ver: 1766683780901629657 Size: 1486848
+Acquired Lock 1. Ver: 1766683780901629657 Size: 1486848
+Acquired Lock 1. Ver: 1766683780901629657 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683780901629657 Size: 1486848
+LockManager failed: context deadline exceeded
+LockManager failed: context deadline exceeded
+Acquired Lock 1. Ver: 1766683780901629657 Size: 1486848
+Acquired Lock 1. Ver: 1766683780901629657 Size: 1486848
+Acquired Lock 1. Ver: 1766683780901629657 Size: 1486848
+Acquired Lock 1. Ver: 1766683780901629657 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+LockManager failed: context deadline exceeded
+Acquired Lock 1. Ver: 1766683820958547599 Size: 1486848
+Acquired Lock 1. Ver: 1766683820958547599 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683820985193393 Size: 1486848
+Acquired Lock 1. Ver: 1766683820985193393 Size: 1486848
+Acquired Lock 1. Ver: 1766683820985193393 Size: 1486848
+Acquired Lock 1. Ver: 1766683820985193393 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683820985193393 Size: 1486848
+Acquired Lock 1. Ver: 1766683821068478030 Size: 1486848
+Acquired Lock 1. Ver: 1766683821068478030 Size: 1486848
+Acquired Lock 1. Ver: 1766683821068478030 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683821100443096 Size: 1486848
+Acquired Lock 1. Ver: 1766683821100443096 Size: 1486848
+Acquired Lock 1. Ver: 1766683821100443096 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683821179782355 Size: 1486848
+Acquired Lock 1. Ver: 1766683821179782355 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683821208077298 Size: 1486848
+Acquired Lock 1. Ver: 1766683821208077298 Size: 1486848
+Acquired Lock 1. Ver: 1766683821208077298 Size: 1486848
+Acquired Lock 1. Ver: 1766683821208077298 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683821208077298 Size: 1486848
+LockManager failed: context deadline exceeded
+LockManager failed: context deadline exceeded
+Acquired Lock 1. Ver: 1766683821208077298 Size: 1486848
+Acquired Lock 1. Ver: 1766683821208077298 Size: 1486848
+Acquired Lock 1. Ver: 1766683821208077298 Size: 1486848
+Acquired Lock 1. Ver: 1766683821208077298 Size: 1486848
+Acquired Lock 1. Ver: 1766683821208077298 Size: 1486848
+Acquired Lock 1. Ver: 1766683821208077298 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683836220944210 Size: 1486848
+Acquired Lock 1. Ver: 1766683836220944210 Size: 1486848
+Acquired Lock 1. Ver: 1766683836220944210 Size: 1486848
+Acquired Lock 1. Ver: 1766683836220944210 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683836268996303 Size: 1486848
+Acquired Lock 1. Ver: 1766683836268996303 Size: 1486848
+Acquired Lock 1. Ver: 1766683836268996303 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683836321476691 Size: 1486848
+Acquired Lock 1. Ver: 1766683836321476691 Size: 1486848
+Acquired Lock 1. Ver: 1766683836321476691 Size: 1486848
+Acquired Lock 1. Ver: 1766683836321476691 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683836372757037 Size: 1486848
+Acquired Lock 1. Ver: 1766683836372757037 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683836402785955 Size: 1486848
+Acquired Lock 1. Ver: 1766683836402785955 Size: 1486848
+Acquired Lock 1. Ver: 1766683836402785955 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683836402785955 Size: 1486848
+LockManager failed: context deadline exceeded
+LockManager failed: context deadline exceeded
+Acquired Lock 1. Ver: 1766683836402785955 Size: 1486848
+Acquired Lock 1. Ver: 1766683836402785955 Size: 1486848
+Acquired Lock 1. Ver: 1766683836402785955 Size: 1486848
+Acquired Lock 1. Ver: 1766683836402785955 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683836402785955 Size: 1486848
+Acquired Lock 1. Ver: 1766683851460428066 Size: 1486848
+Acquired Lock 1. Ver: 1766683851460428066 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683851494908994 Size: 1486848
+Acquired Lock 1. Ver: 1766683851494908994 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683851494908994 Size: 1486848
+Acquired Lock 1. Ver: 1766683851573637377 Size: 1486848
+Acquired Lock 1. Ver: 1766683851573637377 Size: 1486848
+Acquired Lock 1. Ver: 1766683851573637377 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683851609167823 Size: 1486848
+Acquired Lock 1. Ver: 1766683851609167823 Size: 1486848
+Acquired Lock 1. Ver: 1766683851609167823 Size: 1486848
+Acquired Lock 1. Ver: 1766683851609167823 Size: 1486848
+Acquired Lock 1. Ver: 1766683851609167823 Size: 1486848
+Acquired Lock 1. Ver: 1766683851609167823 Size: 1486848
+Acquired Lock 1. Ver: 1766683851609167823 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+LockManager failed: context deadline exceeded
+LockManager failed: context deadline exceeded
+Acquired Lock 1. Ver: 1766683851609167823 Size: 1486848
+Acquired Lock 1. Ver: 1766683851609167823 Size: 1486848
+Acquired Lock 1. Ver: 1766683851609167823 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683866631796057 Size: 1486848
+Acquired Lock 1. Ver: 1766683866631796057 Size: 1486848
+Acquired Lock 1. Ver: 1766683866631796057 Size: 1486848
+Acquired Lock 1. Ver: 1766683866631796057 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683866631796057 Size: 1486848
+Acquired Lock 1. Ver: 1766683866719688970 Size: 1486848
+Acquired Lock 1. Ver: 1766683866719688970 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683866760158482 Size: 1486848
+Acquired Lock 1. Ver: 1766683866760158482 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683866794123991 Size: 1486848
+Acquired Lock 1. Ver: 1766683866794123991 Size: 1486848
+Acquired Lock 1. Ver: 1766683866794123991 Size: 1486848
+Acquired Lock 1. Ver: 1766683866794123991 Size: 1486848
+Acquired Lock 1. Ver: 1766683866794123991 Size: 1486848
+Acquired Lock 1. Ver: 1766683866794123991 Size: 1486848
+Acquired Lock 1. Ver: 1766683866794123991 Size: 1486848
+Acquired Lock 1. Ver: 1766683866794123991 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683866794123991 Size: 1486848
+Acquired Lock 1. Ver: 1766683866896149267 Size: 1486848
+Acquired Lock 1. Ver: 1766683866896149267 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683866923728454 Size: 1486848
+Acquired Lock 1. Ver: 1766683866923728454 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683866923728454 Size: 1486848
+LockManager failed: context deadline exceeded
+LockManager failed: context deadline exceeded
+Acquired Lock 1. Ver: 1766683866923728454 Size: 1486848
+Acquired Lock 1. Ver: 1766683866923728454 Size: 1486848
+Acquired Lock 1. Ver: 1766683866923728454 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683866923728454 Size: 1486848
+Acquired Lock 1. Ver: 1766683881975428620 Size: 1486848
+Acquired Lock 1. Ver: 1766683881975428620 Size: 1486848
+Acquired Lock 1. Ver: 1766683881975428620 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683882012923174 Size: 1486848
+Acquired Lock 1. Ver: 1766683882012923174 Size: 1486848
+Acquired Lock 1. Ver: 1766683882012923174 Size: 1486848
+Acquired Lock 1. Ver: 1766683882012923174 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683882012923174 Size: 1486848
+Acquired Lock 1. Ver: 1766683882099927225 Size: 1486848
+Acquired Lock 1. Ver: 1766683882099927225 Size: 1486848
+Acquired Lock 1. Ver: 1766683882099927225 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683882137355248 Size: 1486848
+Acquired Lock 1. Ver: 1766683882137355248 Size: 1486848
+Acquired Lock 1. Ver: 1766683882137355248 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+LockManager failed: context deadline exceeded
+Acquired Lock 1. Ver: 1766683892164598394 Size: 1486848
+Acquired Lock 1. Ver: 1766683892164598394 Size: 1486848
+Acquired Lock 1. Ver: 1766683892164598394 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683892200472195 Size: 1486848
+Acquired Lock 1. Ver: 1766683892200472195 Size: 1486848
+Acquired Lock 1. Ver: 1766683892200472195 Size: 1486848
+Acquired Lock 1. Ver: 1766683892200472195 Size: 1486848
+Acquired Lock 1. Ver: 1766683892200472195 Size: 1486848
+Acquired Lock 1. Ver: 1766683892200472195 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+LockManager failed: context deadline exceeded
+LockManager failed: context deadline exceeded
+Acquired Lock 1. Ver: 1766683892200472195 Size: 1486848
+Acquired Lock 1. Ver: 1766683892200472195 Size: 1486848
+Acquired Lock 1. Ver: 1766683892200472195 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683907245896241 Size: 1486848
+Acquired Lock 1. Ver: 1766683907245896241 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683907290986583 Size: 1486848
+Acquired Lock 1. Ver: 1766683907290986583 Size: 1486848
+Acquired Lock 1. Ver: 1766683907290986583 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683907290986583 Size: 1486848
+Acquired Lock 1. Ver: 1766683907403262536 Size: 1486848
+Acquired Lock 1. Ver: 1766683907403262536 Size: 1486848
+Acquired Lock 1. Ver: 1766683907403262536 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683907443049078 Size: 1486848
+Acquired Lock 1. Ver: 1766683907443049078 Size: 1486848
+Acquired Lock 1. Ver: 1766683907443049078 Size: 1486848
+Acquired Lock 1. Ver: 1766683907443049078 Size: 1486848
+Acquired Lock 1. Ver: 1766683907443049078 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683907488974225 Size: 1486848
+Acquired Lock 1. Ver: 1766683907488974225 Size: 1486848
+Acquired Lock 1. Ver: 1766683907488974225 Size: 1486848
+Acquired Lock 1. Ver: 1766683907488974225 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683907538039461 Size: 1486848
+Acquired Lock 1. Ver: 1766683907538039461 Size: 1486848
+Acquired Lock 1. Ver: 1766683907538039461 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683907538039461 Size: 1486848
+Acquired Lock 1. Ver: 1766683907649329901 Size: 1486848
+Acquired Lock 1. Ver: 1766683907649329901 Size: 1486848
+Acquired Lock 1. Ver: 1766683907649329901 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683907692665338 Size: 1486848
+Acquired Lock 1. Ver: 1766683907692665338 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683907727524803 Size: 1486848
+Acquired Lock 1. Ver: 1766683907727524803 Size: 1486848
+Acquired Lock 1. Ver: 1766683907727524803 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683907727524803 Size: 1486848
+Acquired Lock 1. Ver: 1766683907819487622 Size: 1486848
+Acquired Lock 1. Ver: 1766683907819487622 Size: 1486848
+Acquired Lock 1. Ver: 1766683907819487622 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683907869935399 Size: 1486848
+Acquired Lock 1. Ver: 1766683907869935399 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683907901732017 Size: 1486848
+Acquired Lock 1. Ver: 1766683907901732017 Size: 1486848
+Acquired Lock 1. Ver: 1766683907901732017 Size: 1486848
+Acquired Lock 1. Ver: 1766683907901732017 Size: 1486848
+Acquired Lock 1. Ver: 1766683907901732017 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683907901732017 Size: 1486848
+LockManager failed: context deadline exceeded
+LockManager failed: context deadline exceeded
+Acquired Lock 1. Ver: 1766683907901732017 Size: 1486848
+Acquired Lock 1. Ver: 1766683907901732017 Size: 1486848
+Acquired Lock 1. Ver: 1766683907901732017 Size: 1486848
+Acquired Lock 1. Ver: 1766683907901732017 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683907901732017 Size: 1486848
+LockManager failed: context deadline exceeded
+Acquired Lock 1. Ver: 1766683932921010132 Size: 1486848
+Acquired Lock 1. Ver: 1766683932921010132 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683932946171541 Size: 1486848
+Acquired Lock 1. Ver: 1766683932946171541 Size: 1486848
+Acquired Lock 1. Ver: 1766683932946171541 Size: 1486848
+Acquired Lock 1. Ver: 1766683932946171541 Size: 1486848
+Acquired Lock 1. Ver: 1766683932946171541 Size: 1486848
+Acquired Lock 1. Ver: 1766683932946171541 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683932985456285 Size: 1486848
+Acquired Lock 1. Ver: 1766683932985456285 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683933012899219 Size: 1486848
+Acquired Lock 1. Ver: 1766683933012899219 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683933012899219 Size: 1486848
+LockManager failed: context deadline exceeded
+LockManager failed: context deadline exceeded
+Acquired Lock 1. Ver: 1766683933012899219 Size: 1486848
+Acquired Lock 1. Ver: 1766683933012899219 Size: 1486848
+Acquired Lock 1. Ver: 1766683933012899219 Size: 1486848
+Acquired Lock 1. Ver: 1766683933012899219 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683948011580245 Size: 1486848
+Acquired Lock 1. Ver: 1766683948011580245 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683948050132135 Size: 1486848
+Acquired Lock 1. Ver: 1766683948050132135 Size: 1486848
+Acquired Lock 1. Ver: 1766683948050132135 Size: 1486848
+Acquired Lock 1. Ver: 1766683948050132135 Size: 1486848
+Acquired Lock 1. Ver: 1766683948050132135 Size: 1486848
+Acquired Lock 1. Ver: 1766683948050132135 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683948123861657 Size: 1486848
+Acquired Lock 1. Ver: 1766683948123861657 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683948158415763 Size: 1486848
+Acquired Lock 1. Ver: 1766683948158415763 Size: 1486848
+Acquired Lock 1. Ver: 1766683948158415763 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683948158415763 Size: 1486848
+Acquired Lock 1. Ver: 1766683948239091180 Size: 1486848
+Acquired Lock 1. Ver: 1766683948239091180 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683948282777159 Size: 1486848
+Acquired Lock 1. Ver: 1766683948282777159 Size: 1486848
+Acquired Lock 1. Ver: 1766683948282777159 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683948330153770 Size: 1486848
+Acquired Lock 1. Ver: 1766683948330153770 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683948367649396 Size: 1486848
+Acquired Lock 1. Ver: 1766683948367649396 Size: 1486848
+Acquired Lock 1. Ver: 1766683948367649396 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683948367649396 Size: 1486848
+LockManager failed: context deadline exceeded
+LockManager failed: context deadline exceeded
+Acquired Lock 1. Ver: 1766683948367649396 Size: 1486848
+Acquired Lock 1. Ver: 1766683948367649396 Size: 1486848
+Acquired Lock 1. Ver: 1766683948367649396 Size: 1486848
+Acquired Lock 1. Ver: 1766683948367649396 Size: 1486848
+Acquired Lock 1. Ver: 1766683948367649396 Size: 1486848
+Acquired Lock 1. Ver: 1766683948367649396 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+LockManager failed: context deadline exceeded
+LockManager failed: context deadline exceeded
+Acquired Lock 1. Ver: 1766683948367649396 Size: 1486848
+Acquired Lock 1. Ver: 1766683948367649396 Size: 1486848
+Acquired Lock 1. Ver: 1766683948367649396 Size: 1486848
+Acquired Lock 1. Ver: 1766683948367649396 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683978349753696 Size: 1486848
+Acquired Lock 1. Ver: 1766683978349753696 Size: 1486848
+Acquired Lock 1. Ver: 1766683978349753696 Size: 1486848
+Acquired Lock 1. Ver: 1766683978349753696 Size: 1486848
+Acquired Lock 1. Ver: 1766683978349753696 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683978396907441 Size: 1486848
+Acquired Lock 1. Ver: 1766683978396907441 Size: 1486848
+Acquired Lock 1. Ver: 1766683978396907441 Size: 1486848
+Acquired Lock 1. Ver: 1766683978396907441 Size: 1486848
+Acquired Lock 1. Ver: 1766683978396907441 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683978442094352 Size: 1486848
+Acquired Lock 1. Ver: 1766683978442094352 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683978470587240 Size: 1486848
+Acquired Lock 1. Ver: 1766683978470587240 Size: 1486848
+Acquired Lock 1. Ver: 1766683978470587240 Size: 1486848
+Acquired Lock 1. Ver: 1766683978470587240 Size: 1486848
+Acquired Lock 1. Ver: 1766683978470587240 Size: 1486848
+Acquired Lock 1. Ver: 1766683978470587240 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683978470587240 Size: 1486848
+Acquired Lock 1. Ver: 1766683978570785652 Size: 1486848
+Acquired Lock 1. Ver: 1766683978570785652 Size: 1486848
+Acquired Lock 1. Ver: 1766683978570785652 Size: 1486848
+Acquired Lock 1. Ver: 1766683978570785652 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683978614032163 Size: 1486848
+Acquired Lock 1. Ver: 1766683978614032163 Size: 1486848
+Acquired Lock 1. Ver: 1766683978614032163 Size: 1486848
+Acquired Lock 1. Ver: 1766683978614032163 Size: 1486848
+Acquired Lock 1. Ver: 1766683978614032163 Size: 1486848
+Acquired Lock 1. Ver: 1766683978614032163 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683978666433359 Size: 1486848
+Acquired Lock 1. Ver: 1766683978666433359 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683978693898634 Size: 1486848
+Acquired Lock 1. Ver: 1766683978693898634 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683978693898634 Size: 1486848
+Acquired Lock 1. Ver: 1766683978775895412 Size: 1486848
+Acquired Lock 1. Ver: 1766683978775895412 Size: 1486848
+Acquired Lock 1. Ver: 1766683978775895412 Size: 1486848
+Acquired Lock 1. Ver: 1766683978775895412 Size: 1486848
+Acquired Lock 1. Ver: 1766683978775895412 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683978825070935 Size: 1486848
+Acquired Lock 1. Ver: 1766683978825070935 Size: 1486848
+Acquired Lock 1. Ver: 1766683978825070935 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683978858338563 Size: 1486848
+Acquired Lock 1. Ver: 1766683978858338563 Size: 1486848
+Acquired Lock 1. Ver: 1766683978858338563 Size: 1486848
+Acquired Lock 1. Ver: 1766683978858338563 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683978858338563 Size: 1486848
+LockManager failed: context deadline exceeded
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683988897804303 Size: 1486848
+Acquired Lock 1. Ver: 1766683988897804303 Size: 1486848
+Acquired Lock 1. Ver: 1766683988897804303 Size: 1486848
+Acquired Lock 1. Ver: 1766683988897804303 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683988939557916 Size: 1486848
+Acquired Lock 1. Ver: 1766683988939557916 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683988968652744 Size: 1486848
+Acquired Lock 1. Ver: 1766683988968652744 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683988968652744 Size: 1486848
+Acquired Lock 1. Ver: 1766683989047496624 Size: 1486848
+Acquired Lock 1. Ver: 1766683989047496624 Size: 1486848
+Acquired Lock 1. Ver: 1766683989047496624 Size: 1486848
+Acquired Lock 1. Ver: 1766683989047496624 Size: 1486848
+Acquired Lock 1. Ver: 1766683989047496624 Size: 1486848
+Acquired Lock 1. Ver: 1766683989047496624 Size: 1486848
+Acquired Lock 1. Ver: 1766683989047496624 Size: 1486848
+Acquired Lock 1. Ver: 1766683989047496624 Size: 1486848
+Acquired Lock 1. Ver: 1766683989047496624 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683989160746814 Size: 1486848
+Acquired Lock 1. Ver: 1766683989160746814 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683989188406723 Size: 1486848
+Acquired Lock 1. Ver: 1766683989188406723 Size: 1486848
+Acquired Lock 1. Ver: 1766683989188406723 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683989220595793 Size: 1486848
+Acquired Lock 1. Ver: 1766683989220595793 Size: 1486848
+Acquired Lock 1. Ver: 1766683989220595793 Size: 1486848
+Acquired Lock 1. Ver: 1766683989220595793 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683989261583955 Size: 1486848
+Acquired Lock 1. Ver: 1766683989261583955 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683989291355999 Size: 1486848
+Acquired Lock 1. Ver: 1766683989291355999 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683989320819677 Size: 1486848
+Acquired Lock 1. Ver: 1766683989320819677 Size: 1486848
+Acquired Lock 1. Ver: 1766683989320819677 Size: 1486848
+Acquired Lock 1. Ver: 1766683989320819677 Size: 1486848
+Acquired Lock 1. Ver: 1766683989320819677 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683989365738343 Size: 1486848
+Acquired Lock 1. Ver: 1766683989365738343 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683989392081577 Size: 1486848
+Acquired Lock 1. Ver: 1766683989392081577 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683989420096207 Size: 1486848
+Acquired Lock 1. Ver: 1766683989420096207 Size: 1486848
+Acquired Lock 1. Ver: 1766683989420096207 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683989452456636 Size: 1486848
+Acquired Lock 1. Ver: 1766683989452456636 Size: 1486848
+Acquired Lock 1. Ver: 1766683989452456636 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+LockManager failed: context deadline exceeded
+Acquired Lock 1. Ver: 1766683999480137793 Size: 1486848
+Acquired Lock 1. Ver: 1766683999480137793 Size: 1486848
+Acquired Lock 1. Ver: 1766683999480137793 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683999522425963 Size: 1486848
+Acquired Lock 1. Ver: 1766683999522425963 Size: 1486848
+Acquired Lock 1. Ver: 1766683999522425963 Size: 1486848
+Acquired Lock 1. Ver: 1766683999522425963 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683999568681843 Size: 1486848
+Acquired Lock 1. Ver: 1766683999568681843 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683999596662355 Size: 1486848
+Acquired Lock 1. Ver: 1766683999596662355 Size: 1486848
+Acquired Lock 1. Ver: 1766683999596662355 Size: 1486848
+Acquired Lock 1. Ver: 1766683999596662355 Size: 1486848
+Acquired Lock 1. Ver: 1766683999596662355 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683999655982236 Size: 1486848
+Acquired Lock 1. Ver: 1766683999655982236 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683999655982236 Size: 1486848
+Acquired Lock 1. Ver: 1766683999754320212 Size: 1486848
+Acquired Lock 1. Ver: 1766683999754320212 Size: 1486848
+Acquired Lock 1. Ver: 1766683999754320212 Size: 1486848
+Acquired Lock 1. Ver: 1766683999754320212 Size: 1486848
+Acquired Lock 1. Ver: 1766683999754320212 Size: 1486848
+Acquired Lock 1. Ver: 1766683999754320212 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683999834413904 Size: 1486848
+Acquired Lock 1. Ver: 1766683999834413904 Size: 1486848
+Acquired Lock 1. Ver: 1766683999834413904 Size: 1486848
+Acquired Lock 1. Ver: 1766683999834413904 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683999933776996 Size: 1486848
+Acquired Lock 1. Ver: 1766683999933776996 Size: 1486848
+Acquired Lock 1. Ver: 1766683999933776996 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683999976193492 Size: 1486848
+Acquired Lock 1. Ver: 1766683999976193492 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766684000006441841 Size: 1486848
+Acquired Lock 1. Ver: 1766684000006441841 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766684000034551322 Size: 1486848
+Acquired Lock 1. Ver: 1766684000034551322 Size: 1486848
+Acquired Lock 1. Ver: 1766684000034551322 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766684000077425083 Size: 1486848
+Acquired Lock 1. Ver: 1766684000077425083 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766684000121842650 Size: 1486848
+Acquired Lock 1. Ver: 1766684000121842650 Size: 1486848
+Acquired Lock 1. Ver: 1766684000121842650 Size: 1486848
+Acquired Lock 1. Ver: 1766684000121842650 Size: 1486848
+Acquired Lock 1. Ver: 1766684000121842650 Size: 1486848
+Acquired Lock 1. Ver: 1766684000121842650 Size: 1486848
+Acquired Lock 1. Ver: 1766684000121842650 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766684000121842650 Size: 1486848
+Acquired Lock 1. Ver: 1766684000250531143 Size: 1486848
+Acquired Lock 1. Ver: 1766684000250531143 Size: 1486848
+Acquired Lock 1. Ver: 1766684000250531143 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766684000297977944 Size: 1486848
+Acquired Lock 1. Ver: 1766684000297977944 Size: 1486848
+Acquired Lock 1. Ver: 1766684000297977944 Size: 1486848
+Acquired Lock 1. Ver: 1766684000297977944 Size: 1486848
+Acquired Lock 1. Ver: 1766684000297977944 Size: 1486848
+Acquired Lock 1. Ver: 1766684000297977944 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+LockManager failed: context deadline exceeded
+LockManager failed: context deadline exceeded
+Acquired Lock 1. Ver: 1766684000297977944 Size: 1486848
+Acquired Lock 1. Ver: 1766684000297977944 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766684015304267885 Size: 1486848
+Acquired Lock 1. Ver: 1766684015304267885 Size: 1486848
+Acquired Lock 1. Ver: 1766684015304267885 Size: 1486848
+Acquired Lock 1. Ver: 1766684015304267885 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766684015304267885 Size: 1486848
+LockManager failed: context deadline exceeded
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766684025348161740 Size: 1486848
+Acquired Lock 1. Ver: 1766684025348161740 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766684025379213837 Size: 1486848
+Acquired Lock 1. Ver: 1766684025379213837 Size: 1486848
+Acquired Lock 1. Ver: 1766684025379213837 Size: 1486848
+Acquired Lock 1. Ver: 1766684025379213837 Size: 1486848
+Acquired Lock 1. Ver: 1766684025379213837 Size: 1486848
+Acquired Lock 1. Ver: 1766684025379213837 Size: 1486848
+Acquired Lock 1. Ver: 1766684025379213837 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766684025379213837 Size: 1486848
+Acquired Lock 1. Ver: 1766684025483438846 Size: 1486848
+Acquired Lock 1. Ver: 1766684025483438846 Size: 1486848
+Acquired Lock 1. Ver: 1766684025483438846 Size: 1486848
+NewFile: /tmp/ben

@@ -12,6 +12,7 @@ import (
 	"github.com/tabeth/concretedb/config"
 	"github.com/tabeth/concretedb/service"
 	"github.com/tabeth/concretedb/store"
+	"github.com/tabeth/concretedb/ttl"
 )
 
 func main() {
@@ -54,6 +55,11 @@ func main() {
 	fdbStore := store.NewFoundationDBStore(fdbConn)
 	tableService := service.NewTableService(fdbStore)
 	apiHandler := NewDynamoDBHandler(tableService)
+
+	// Start Background Jobs
+	ttlWorker := ttl.NewTTLWorker(tableService, 1*time.Minute)
+	ttlWorker.Start()
+	defer ttlWorker.Stop()
 
 	// 4. Configure HTTP server with a new router
 	mux := http.NewServeMux()

@@ -86,6 +86,18 @@ const (
 )
 
 func TestMain(m *testing.M) {
+	// Check if we should use existing FDB
+	if os.Getenv("USE_EXISTING_FDB") != "" {
+		log.Println("Using existing FDB for integration tests")
+		fdb.MustAPIVersion(710)
+		var err error
+		testDB, err = fdb.OpenDefault()
+		if err != nil {
+			log.Fatalf("Failed to open default DB: %v", err)
+		}
+		os.Exit(m.Run())
+	}
+
 	// 1. Prepare test directory
 	if err := os.RemoveAll(testDir); err != nil {
 		log.Printf("Failed to clean test dir: %v", err)

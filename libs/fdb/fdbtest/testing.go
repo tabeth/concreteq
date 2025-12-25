@@ -46,7 +46,7 @@ func checkFDBAvailability(t testing.TB) {
 	}
 
 	// Try to open DB
-	db, err := sharedfdb.OpenDB(620)
+	db, err := sharedfdb.OpenDB(710)
 	if err != nil {
 		fmt.Printf("WARNING: Failed to open FoundationDB: %v\n", err)
 		return

@@ -45,6 +45,17 @@ type Table struct {
 	LatestStreamLabel      string
 	LatestStreamArn        string
 	Replicas               []ReplicaDescription
+	TimeToLiveDescription  *TimeToLiveDescription
+}
+
+type TimeToLiveDescription struct {
+	AttributeName    string `json:"AttributeName,omitempty"`
+	TimeToLiveStatus string `json:"TimeToLiveStatus,omitempty"` // ENABLING, DISABLING, ENABLED, DISABLED
+}
+
+type TimeToLiveSpecification struct {
+	Enabled       bool   `json:"Enabled"`
+	AttributeName string `json:"AttributeName,omitempty"`
 }
 
 type ReplicaDescription struct {
@@ -570,4 +581,23 @@ type ListGlobalTablesResponse struct {
 type GlobalTable struct {
 	GlobalTableName  string    `json:"GlobalTableName"`
 	ReplicationGroup []Replica `json:"ReplicationGroup"`
+}
+
+// TTL Operations
+
+type UpdateTimeToLiveRequest struct {
+	TableName               string                  `json:"TableName"`
+	TimeToLiveSpecification TimeToLiveSpecification `json:"TimeToLiveSpecification"`
+}
+
+type UpdateTimeToLiveResponse struct {
+	TimeToLiveSpecification TimeToLiveSpecification `json:"TimeToLiveSpecification"`
+}
+
+type DescribeTimeToLiveRequest struct {
+	TableName string `json:"TableName"`
+}
+
+type DescribeTimeToLiveResponse struct {
+	TimeToLiveDescription TimeToLiveDescription `json:"TimeToLiveDescription"`
 }

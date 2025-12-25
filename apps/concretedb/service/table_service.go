@@ -23,6 +23,10 @@ type TableServicer interface {
 	DescribeGlobalTable(ctx context.Context, globalTableName string) (*models.DescribeGlobalTableResponse, error)
 	ListGlobalTables(ctx context.Context, req *models.ListGlobalTablesRequest) (*models.ListGlobalTablesResponse, error)
 
+	// TTL Operations
+	UpdateTimeToLive(ctx context.Context, req *models.UpdateTimeToLiveRequest) (*models.UpdateTimeToLiveResponse, error)
+	DescribeTimeToLive(ctx context.Context, req *models.DescribeTimeToLiveRequest) (*models.DescribeTimeToLiveResponse, error)
+
 	// Item Operations
 	PutItem(ctx context.Context, request *models.PutItemRequest) (*models.PutItemResponse, error)
 	GetItem(ctx context.Context, request *models.GetItemRequest) (*models.GetItemResponse, error)
@@ -690,6 +694,44 @@ func (s *TableService) ListGlobalTables(ctx context.Context, req *models.ListGlo
 	return &models.ListGlobalTablesResponse{
 		GlobalTables:                 tables,
 		LastEvaluatedGlobalTableName: last,
+	}, nil
+}
+
+// TTL Operations
+
+func (s *TableService) UpdateTimeToLive(ctx context.Context, req *models.UpdateTimeToLiveRequest) (*models.UpdateTimeToLiveResponse, error) {
+	if req.TableName == "" {
+		return nil, models.New("ValidationException", "TableName cannot be empty")
+	}
+
+	spec, err := s.store.UpdateTimeToLive(ctx, req)
+	if err != nil {
+		if errors.Is(err, store.ErrTableNotFound) {
+			return nil, models.New("ResourceNotFoundException", fmt.Sprintf("Table not found: %s", req.TableName))
+		}
+		return nil, mapStoreError(err, "failed to update TTL")
+	}
+
+	return &models.UpdateTimeToLiveResponse{
+		TimeToLiveSpecification: *spec,
+	}, nil
+}
+
+func (s *TableService) DescribeTimeToLive(ctx context.Context, req *models.DescribeTimeToLiveRequest) (*models.DescribeTimeToLiveResponse, error) {
+	if req.TableName == "" {
+		return nil, models.New("ValidationException", "TableName cannot be empty")
+	}
+
+	desc, err := s.store.DescribeTimeToLive(ctx, req.TableName)
+	if err != nil {
+		if errors.Is(err, store.ErrTableNotFound) {
+			return nil, models.New("ResourceNotFoundException", fmt.Sprintf("Table not found: %s", req.TableName))
+		}
+		return nil, mapStoreError(err, "failed to describe TTL")
+	}
+
+	return &models.DescribeTimeToLiveResponse{
+		TimeToLiveDescription: *desc,
 	}, nil
 }
 

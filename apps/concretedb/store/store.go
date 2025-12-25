@@ -84,4 +84,9 @@ type Store interface {
 	UpdateGlobalTable(ctx context.Context, request *models.UpdateGlobalTableRequest) (*models.GlobalTableDescription, error)
 	DescribeGlobalTable(ctx context.Context, globalTableName string) (*models.GlobalTableDescription, error)
 	ListGlobalTables(ctx context.Context, limit int, exclusiveStartGlobalTableName string) ([]models.GlobalTable, string, error)
+
+	// TTL Methods
+
+	UpdateTimeToLive(ctx context.Context, request *models.UpdateTimeToLiveRequest) (*models.TimeToLiveSpecification, error)
+	DescribeTimeToLive(ctx context.Context, tableName string) (*models.TimeToLiveDescription, error)
 }

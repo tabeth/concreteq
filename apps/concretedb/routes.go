@@ -66,6 +66,10 @@ func (h *DynamoDBHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.transactGetItemsHandler(w, r)
 	case "DynamoDB_20120810.TransactWriteItems":
 		h.transactWriteItemsHandler(w, r)
+	case "DynamoDB_20120810.UpdateTimeToLive":
+		h.updateTimeToLiveHandler(w, r)
+	case "DynamoDB_20120810.DescribeTimeToLive":
+		h.describeTimeToLiveHandler(w, r)
 	default:
 		writeError(w, "UnknownOperationException", "The requested operation is not supported.", http.StatusBadRequest)
 	}
