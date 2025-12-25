@@ -1,0 +1,5 @@
+Creating FDB store.
+Creating table : usertable
+Using request distribution 'zipfian' a keyrange of [0 1000]
+Total execution time: 3.66192058s
+operation,timestamp_us,latency_us
