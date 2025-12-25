@@ -3,6 +3,7 @@ package vfs
 import (
 	"context"
 	"encoding/binary"
+	"fmt"
 	"log"
 	"sync"
 	"time"
@@ -31,12 +32,14 @@ type File struct {
 }
 
 func NewFile(name string, ps *store.PageStore, lm *store.LockManager, initPageSize int) (*File, error) {
+	fmt.Printf("NewFile: %s\n", name)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	// Fetch current version on open
 	state, err := ps.CurrentVersion(ctx)
 	if err != nil {
+		fmt.Printf("CurrentVersion failed: %v\n", err)
 		return nil, err
 	}
 
@@ -329,6 +332,26 @@ func (f *File) Lock(elock sqlite3vfs.LockType) error {
 
 	if err := f.lockManager.Lock(ctx, elock, f.baseVersion); err != nil {
 		return err
+	}
+
+	// Update view of the world if we just acquired a SHARED lock (or upgraded/re-acquired)
+	// This ensures we are reading the latest committed version.
+	// Only do this if we are transitioning from UNLOCKED state.
+	if elock >= sqlite3vfs.LockShared && f.lock < sqlite3vfs.LockShared {
+		state, err := f.pageStore.CurrentVersion(ctx)
+		if err != nil {
+			// If we fail to read version, we should probably fail the lock?
+			// Or just log warning? Failing lock is safer.
+			// But we already acquired lock in LockManager. We should unlock?
+			f.lockManager.Unlock(elock) // Best effort revert?
+			return err
+		}
+		f.baseVersion = state.Version
+		f.fileSize = state.Size
+		// Also update pageSize if it changed (and is valid)
+		if state.PageSize > 0 && state.PageSize != f.pageSize {
+			f.pageSize = state.PageSize
+		}
 	}
 
 	f.lock = elock

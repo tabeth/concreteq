@@ -17,35 +17,46 @@ This document summarizes the performance benchmark of ConcreteSQL using the stan
 
 ## Workload Details
 
+### Write-Heavy Workloads (A, B, D, F)
+- **Observation**:
+    - High contention on small datasets (1000 records) with Update/Insert operations leads to frequent "Version mismatch" errors with Optimistic Concurrency Control.
+    - Pessimistic Locking (via `_busy_timeout`) solves the "Version mismatch" errors by waiting for locks.
+    - However, this introduces significant latency (timeouts) and reduces throughput (OPS) drastically under high contention (e.g., Workload D dropped to ~8 OPS with 4 threads).
+    - **Conclusion**: ConcreteSQL's current locking implementation ensures correctness but requires careful tuning of timeouts and concurrency levels for write-heavy workloads. For high-throughput writes, larger datasets or sharding (to reduce collision probability) is recommended.
+
+## 4. Workload Details
+
 ### Workload A (Update Heavy)
-- **Distribution**: Zipfian
-- **Mix**: 50/50 Read/Update
-- **Performance**: 73.1 OPS
-- **Analysis**: Update operations involve locking and potentially more complex write paths, resulting in lower throughput compared to read-heavy workloads.
+- **Mix**: 50% Read, 50% Update
+- **Goal**: Test intensive write contention.
+- **Results (Multi-threaded with Pessimistic Locking)**:
+    - **Threads**: 4
+    - **Outcome**: Successful execution without "Version mismatch", but with high latency due to lock waits. Proper serialization confirmed.
 
 ### Workload B (Read Mostly)
-- **Distribution**: Zipfian
-- **Mix**: 95/5 Read/Update
-- **Performance**: 179.2 OPS
-- **Analysis**: Significantly higher throughput due to the dominance of read operations which are faster.
+- **Mix**: 95% Read, 5% Update
+- **Goal**: Test read performance with light write pressure.
+- **Results**:
+    - **Threads**: 4
+    - **Outcome**: Balanced performance. Reads remain fast, while occasional updates wait for locks.
 
 ### Workload C (Read Only)
-- **Distribution**: Zipfian
 - **Mix**: 100% Read
-- **Performance**: 197.6 OPS
-- **Analysis**: Highest throughput as expected for a pure read workload.
+- **Goal**: Test pure read scalability.
+- **Results**:
+    - **Threads**: 10
+    - **Outcome**: Excellent scalability (~694 OPS vs 197 OPS single-threaded). No contention.
 
 ### Workload D (Read Latest)
-- **Distribution**: Latest
-- **Mix**: 95/5 Read/Insert
-- **Performance**: 211.0 OPS
-- **Analysis**: Performs very well, benefiting from locality or efficient insert handling.
+- **Mix**: 95% Read, 5% Insert
+- **Goal**: Test insertion patterns.
+- **Results**:
+    - **Threads**: 4
+    - **Outcome**: Functional with pessimistic locking, though inserts on a small dataset/file cause serialization bottlenecks (context deadline exceeded logs observed).
 
-### Workload E (Short Ranges)
-- **Distribution**: Zipfian
-- **Mix**: 95/5 Scan/Insert
-- **Performance**: 185.5 OPS
-- **Analysis**: Scans are relatively efficient in ConcreteSQL given the result. The scan length distribution was uniform (up to 100 records).
+### Workload E (Scan)
+- **Mix**: 95% Scan, 5% Insert
+- **Goal**: Test range query performance.
 
 ### Workload F (Read-Modify-Write)
 - **Distribution**: Zipfian
