@@ -89,6 +89,13 @@ func (h *DynamoDBHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		describeBackupHandler(h.tableService).ServeHTTP(w, r)
 	case "DynamoDB_20120810.RestoreTableFromBackup":
 		restoreTableFromBackupHandler(h.tableService).ServeHTTP(w, r)
+	// PITR
+	case "DynamoDB_20120810.UpdateContinuousBackups":
+		updateContinuousBackupsHandler(h.tableService).ServeHTTP(w, r)
+	case "DynamoDB_20120810.DescribeContinuousBackups":
+		describeContinuousBackupsHandler(h.tableService).ServeHTTP(w, r)
+	case "DynamoDB_20120810.RestoreTableToPointInTime":
+		restoreTableToPointInTimeHandler(h.tableService).ServeHTTP(w, r)
 	default:
 		writeError(w, "UnknownOperationException", "The requested operation is not supported.", http.StatusBadRequest)
 	}

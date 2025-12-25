@@ -1,0 +1,37 @@
+2025/12/25 21:50:43 Started integration fdbserver on port 4691 with pid 7238
+2025/12/25 21:50:48 FDB initialized successfully for integration tests
+=== RUN   TestIntegration_PITR
+Checking FoundationDB cluster availability...
+FoundationDB cluster is available. Proceeding with tests.
+Creating FDB store.
+Creating table : pitr-test-table
+[DEBUG] writeHistoryRecord: Table=pitr-test-table, TS=1766699448929961050, Deleted=false
+[DEBUG] writeHistoryRecord: Table=pitr-test-table, TS=1766699449057627522, Deleted=false
+[DEBUG] writeHistoryRecord: Table=pitr-test-table, TS=1766699449180030223, Deleted=true
+Creating table : restored-table-v1
+[DEBUG] finalizePK: Verify Read Success! Bytes len=38
+Creating table : restored-table-v2
+[DEBUG] finalizePK: Verify Read Success! Bytes len=38
+Creating table : restored-table-v3
+--- PASS: TestIntegration_PITR (0.54s)
+PASS
+ok  	github.com/tabeth/concretedb	6.295s
+testing: warning: no tests to run
+PASS
+ok  	github.com/tabeth/concretedb/config	(cached) [no tests to run]
+testing: warning: no tests to run
+PASS
+ok  	github.com/tabeth/concretedb/expression	(cached) [no tests to run]
+testing: warning: no tests to run
+PASS
+ok  	github.com/tabeth/concretedb/models	(cached) [no tests to run]
+testing: warning: no tests to run
+PASS
+ok  	github.com/tabeth/concretedb/service	0.081s [no tests to run]
+testing: warning: no tests to run
+PASS
+ok  	github.com/tabeth/concretedb/store	0.083s [no tests to run]
+?   	github.com/tabeth/concretedb/store/internal/fdbadapter	[no test files]
+testing: warning: no tests to run
+PASS
+ok  	github.com/tabeth/concretedb/ttl	(cached) [no tests to run]

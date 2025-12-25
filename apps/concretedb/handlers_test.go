@@ -49,6 +49,10 @@ type mockTableService struct {
 	ListBackupsFunc            func(ctx context.Context, request *models.ListBackupsRequest) (*models.ListBackupsResponse, error)
 	DescribeBackupFunc         func(ctx context.Context, request *models.DescribeBackupRequest) (*models.DescribeBackupResponse, error)
 	RestoreTableFromBackupFunc func(ctx context.Context, request *models.RestoreTableFromBackupRequest) (*models.RestoreTableFromBackupResponse, error)
+	// PITR
+	UpdateContinuousBackupsFunc   func(ctx context.Context, req *models.UpdateContinuousBackupsRequest) (*models.ContinuousBackupsDescription, error)
+	DescribeContinuousBackupsFunc func(ctx context.Context, tableName string) (*models.ContinuousBackupsDescription, error)
+	RestoreTableToPointInTimeFunc func(ctx context.Context, req *models.RestoreTableToPointInTimeRequest) (*models.TableDescription, error)
 }
 
 // CreateTable is the method required to satisfy the interface.
@@ -98,6 +102,28 @@ func (m *mockTableService) BatchGetItem(ctx context.Context, request *models.Bat
 
 func (m *mockTableService) BatchWriteItem(ctx context.Context, request *models.BatchWriteItemRequest) (*models.BatchWriteItemResponse, error) {
 	return m.BatchWriteItemFunc(ctx, request)
+}
+
+// PITR
+func (m *mockTableService) UpdateContinuousBackups(ctx context.Context, req *models.UpdateContinuousBackupsRequest) (*models.ContinuousBackupsDescription, error) {
+	if m.UpdateContinuousBackupsFunc != nil {
+		return m.UpdateContinuousBackupsFunc(ctx, req)
+	}
+	return nil, nil
+}
+
+func (m *mockTableService) DescribeContinuousBackups(ctx context.Context, tableName string) (*models.ContinuousBackupsDescription, error) {
+	if m.DescribeContinuousBackupsFunc != nil {
+		return m.DescribeContinuousBackupsFunc(ctx, tableName)
+	}
+	return nil, nil
+}
+
+func (m *mockTableService) RestoreTableToPointInTime(ctx context.Context, req *models.RestoreTableToPointInTimeRequest) (*models.TableDescription, error) {
+	if m.RestoreTableToPointInTimeFunc != nil {
+		return m.RestoreTableToPointInTimeFunc(ctx, req)
+	}
+	return nil, nil
 }
 
 func (m *mockTableService) TransactGetItems(ctx context.Context, request *models.TransactGetItemsRequest) (*models.TransactGetItemsResponse, error) {

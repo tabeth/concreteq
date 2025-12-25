@@ -698,3 +698,49 @@ type SourceTableFeatureDetails struct {
 	StreamDescription      *StreamSpecification   `json:"StreamDescription,omitempty"`
 	TimeToLiveDescription  *TimeToLiveDescription `json:"TimeToLiveDescription,omitempty"`
 }
+
+// PITR Models
+
+type PointInTimeRecoverySpecification struct {
+	PointInTimeRecoveryEnabled bool `json:"PointInTimeRecoveryEnabled"`
+}
+
+type PointInTimeRecoveryDescription struct {
+	PointInTimeRecoveryStatus  string  `json:"PointInTimeRecoveryStatus"` // ENABLED, DISABLED
+	EarliestRestorableDateTime float64 `json:"EarliestRestorableDateTime,omitempty"`
+	LatestRestorableDateTime   float64 `json:"LatestRestorableDateTime,omitempty"`
+}
+
+type ContinuousBackupsDescription struct {
+	ContinuousBackupsStatus        string                          `json:"ContinuousBackupsStatus"` // ENABLED, DISABLED
+	PointInTimeRecoveryDescription *PointInTimeRecoveryDescription `json:"PointInTimeRecoveryDescription,omitempty"`
+}
+
+type UpdateContinuousBackupsRequest struct {
+	TableName                        string                           `json:"TableName"`
+	PointInTimeRecoverySpecification PointInTimeRecoverySpecification `json:"PointInTimeRecoverySpecification"`
+}
+
+type UpdateContinuousBackupsResponse struct {
+	ContinuousBackupsDescription ContinuousBackupsDescription `json:"ContinuousBackupsDescription"`
+}
+
+type DescribeContinuousBackupsRequest struct {
+	TableName string `json:"TableName"`
+}
+
+type DescribeContinuousBackupsResponse struct {
+	ContinuousBackupsDescription ContinuousBackupsDescription `json:"ContinuousBackupsDescription"`
+}
+
+type RestoreTableToPointInTimeRequest struct {
+	SourceTableName         string  `json:"SourceTableName,omitempty"`
+	SourceTableArn          string  `json:"SourceTableArn,omitempty"`
+	TargetTableName         string  `json:"TargetTableName"`
+	UseLatestRestorableTime bool    `json:"UseLatestRestorableTime,omitempty"`
+	RestoreDateTime         float64 `json:"RestoreDateTime,omitempty"`
+}
+
+type RestoreTableToPointInTimeResponse struct {
+	TableDescription TableDescription `json:"TableDescription"`
+}

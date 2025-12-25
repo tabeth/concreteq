@@ -38,7 +38,7 @@ func TestFoundationDBStore_GlobalTables(t *testing.T) {
 	assert.Len(t, desc2.ReplicationGroup, 2)
 
 	// 3. List Global Tables
-	listReq := &models.ListGlobalTablesRequest{Limit: 10}
+	listReq := &models.ListGlobalTablesRequest{Limit: 100}
 	listResp, _, err := s.ListGlobalTables(ctx, listReq.Limit, listReq.ExclusiveStartGlobalTableName)
 	assert.NoError(t, err)
 	found := false

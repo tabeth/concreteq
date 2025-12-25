@@ -51,6 +51,11 @@ type TableServicer interface {
 	ListBackups(ctx context.Context, req *models.ListBackupsRequest) (*models.ListBackupsResponse, error)
 	DescribeBackup(ctx context.Context, req *models.DescribeBackupRequest) (*models.DescribeBackupResponse, error)
 	RestoreTableFromBackup(ctx context.Context, req *models.RestoreTableFromBackupRequest) (*models.RestoreTableFromBackupResponse, error)
+
+	// PITR Operations
+	UpdateContinuousBackups(ctx context.Context, req *models.UpdateContinuousBackupsRequest) (*models.ContinuousBackupsDescription, error)
+	DescribeContinuousBackups(ctx context.Context, tableName string) (*models.ContinuousBackupsDescription, error)
+	RestoreTableToPointInTime(ctx context.Context, req *models.RestoreTableToPointInTimeRequest) (*models.TableDescription, error)
 }
 
 // TableService contains the business logic for table operations.

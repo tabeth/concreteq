@@ -96,4 +96,9 @@ type Store interface {
 	ListBackups(ctx context.Context, request *models.ListBackupsRequest) ([]models.BackupSummary, string, error)
 	DescribeBackup(ctx context.Context, backupArn string) (*models.BackupDescription, error)
 	RestoreTableFromBackup(ctx context.Context, request *models.RestoreTableFromBackupRequest) (*models.TableDescription, error)
+
+	// PITR Related
+	UpdateContinuousBackups(ctx context.Context, req *models.UpdateContinuousBackupsRequest) (*models.ContinuousBackupsDescription, error)
+	DescribeContinuousBackups(ctx context.Context, tableName string) (*models.ContinuousBackupsDescription, error)
+	RestoreTableToPointInTime(ctx context.Context, req *models.RestoreTableToPointInTimeRequest) (*models.TableDescription, error)
 }

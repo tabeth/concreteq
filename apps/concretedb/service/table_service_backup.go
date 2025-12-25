@@ -76,3 +76,16 @@ func (s *TableService) RestoreTableFromBackup(ctx context.Context, request *mode
 	}
 	return &models.RestoreTableFromBackupResponse{TableDescription: *desc}, nil
 }
+
+// PITR
+func (s *TableService) UpdateContinuousBackups(ctx context.Context, req *models.UpdateContinuousBackupsRequest) (*models.ContinuousBackupsDescription, error) {
+	return s.store.UpdateContinuousBackups(ctx, req)
+}
+
+func (s *TableService) DescribeContinuousBackups(ctx context.Context, tableName string) (*models.ContinuousBackupsDescription, error) {
+	return s.store.DescribeContinuousBackups(ctx, tableName)
+}
+
+func (s *TableService) RestoreTableToPointInTime(ctx context.Context, req *models.RestoreTableToPointInTimeRequest) (*models.TableDescription, error) {
+	return s.store.RestoreTableToPointInTime(ctx, req)
+}

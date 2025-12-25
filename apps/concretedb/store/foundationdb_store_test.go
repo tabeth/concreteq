@@ -16,9 +16,9 @@ import (
 	"github.com/apple/foundationdb/bindings/go/src/fdb/tuple"
 	"github.com/stretchr/testify/assert"
 	"github.com/tabeth/concretedb/models"
+	"github.com/tabeth/concretedb/store/internal/fdbadapter"
 	sharedfdb "github.com/tabeth/kiroku-core/libs/fdb"
 	"github.com/tabeth/kiroku-core/libs/fdb/fdbtest"
-"github.com/tabeth/concretedb/store/internal/fdbadapter"
 )
 
 func TestFoundationDBStore_BatchWriteItem(t *testing.T) {
@@ -522,7 +522,7 @@ func TestFoundationDBStore_PutItem_ReturnValues(t *testing.T) {
 }
 
 func TestFoundationDBStore_CorruptedData_Comprehenisve(t *testing.T) {
-	tableName := "test-corrupted-comprehensive"
+	tableName := "test-corrupted-comprehensive-" + time.Now().Format("20060102150405")
 	store := setupTestStore(t, tableName)
 	ctx := context.Background()
 
@@ -1398,11 +1398,14 @@ func TestFoundationDBStore_FinalPagination_Coverage(t *testing.T) {
 func stringPtrV12(s string) *string { return &s }
 
 func TestFoundationDBStore_StreamCoverage_Detailed(t *testing.T) {
-	s := setupTestStore(t, "StreamDetailedTable")
+	suffix := time.Now().Format("20060102150405")
+	tA := "TableA_" + suffix
+	tB := "TableB_" + suffix
+	s := setupTestStore(t, tA)
 	ctx := context.Background()
 
 	// 1. Create tables with streams
-	tables := []string{"TableA", "TableB"}
+	tables := []string{tA, tB}
 	for _, name := range tables {
 		err := s.CreateTable(ctx, &models.Table{
 			TableName: name,
@@ -1422,15 +1425,15 @@ func TestFoundationDBStore_StreamCoverage_Detailed(t *testing.T) {
 	assert.Empty(t, next)
 
 	// 3. ListStreams - Filtering
-	s1, _, err := s.ListStreams(ctx, "TableA", 1, "")
+	s1, _, err := s.ListStreams(ctx, tA, 1, "")
 	assert.NoError(t, err)
 
 	var arn string
 	if len(s1) == 0 {
-		t.Logf("ListStreams('TableA') returned 0 items. Checking GetTable...")
-		tbl, err := s.GetTable(ctx, "TableA")
+		t.Logf("ListStreams(tA) returned 0 items. Checking GetTable...")
+		tbl, err := s.GetTable(ctx, tA)
 		if err != nil {
-			t.Logf("GetTable('TableA') error: %v", err)
+			t.Logf("GetTable(tA) error: %v", err)
 		} else if tbl != nil {
 			spec := tbl.StreamSpecification
 			t.Logf("TableA found. Spec: %v", spec)
@@ -1438,16 +1441,16 @@ func TestFoundationDBStore_StreamCoverage_Detailed(t *testing.T) {
 				t.Logf("LatestStreamArn: %s", tbl.LatestStreamArn)
 			}
 		} else {
-			t.Logf("GetTable('TableA') returned nil table")
+			t.Logf("GetTable(tA) returned nil table")
 		}
 		t.FailNow()
 	} else {
 		assert.Len(t, s1, 1)
-		assert.Equal(t, "TableA", s1[0].TableName)
+		assert.Equal(t, tA, s1[0].TableName)
 
 		arn = s1[0].StreamArn
 		// ListStreams with ExclusiveStart ARN
-		sSkip, _, err := s.ListStreams(ctx, "TableA", 1, arn)
+		sSkip, _, err := s.ListStreams(ctx, tA, 1, arn)
 		assert.NoError(t, err)
 		assert.Len(t, sSkip, 0)
 	}
@@ -1465,7 +1468,7 @@ func TestFoundationDBStore_StreamCoverage_Detailed(t *testing.T) {
 	_, err = s.DescribeStream(ctx, "arn:aws:dynamodb:local:000:table/NonExistent/stream/label", 10, "")
 	assert.Error(t, err)
 
-	_, err = s.DescribeStream(ctx, "arn:aws:dynamodb:local:000:table/TableA/stream/wrong-label", 10, "")
+	_, err = s.DescribeStream(ctx, fmt.Sprintf("arn:aws:dynamodb:local:000:table/%s/stream/wrong-label", tA), 10, "")
 	assert.Error(t, err)
 }
 

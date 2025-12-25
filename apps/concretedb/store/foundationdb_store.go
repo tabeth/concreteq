@@ -100,7 +100,7 @@ func (s *FoundationDBStore) Scan(ctx context.Context, tableName string, filterEx
 			var item map[string]models.AttributeValue
 			if len(kv.Value) > 0 {
 				if err := json.Unmarshal(kv.Value, &item); err != nil {
-					return nil, err
+					return nil, fmt.Errorf("failed to unmarshal item: %w", err)
 				}
 
 				lastProcessedItem = item
@@ -842,7 +842,12 @@ func (s *FoundationDBStore) putItemInternal(tr fdbadapter.FDBTransaction, table 
 		return nil, err
 	}
 
-	// 7. Stream Record
+	// 7. Write to History (PITR)
+	if err := s.writeHistoryRecord(tr, table, item, false); err != nil {
+		return nil, err
+	}
+
+	// 8. Stream Record
 	eventName := "MODIFY"
 	if oldItem == nil {
 		eventName = "INSERT" // Or INSERT if oldItem was nil/empty
@@ -866,7 +871,7 @@ func (s *FoundationDBStore) GetItem(ctx context.Context, tableName string, key m
 			return nil, err
 		}
 		if table == nil {
-			return nil, nil // Table not found implies item not found
+			return nil, ErrTableNotFound
 		}
 
 		// 2. Extract Key Fields from the *request key map*
@@ -962,7 +967,16 @@ func (s *FoundationDBStore) deleteItemInternal(tr fdbadapter.FDBTransaction, tab
 		return nil, err
 	}
 
-	// 6. Stream Record
+	// 6. Write to History (PITR)
+	// For Delete, we record "Deleted=true" and include the OLD item for context if needed,
+	// or just the keys. But `writeHistoryRecord` takes the item.
+	// If we are deleting, the "Item at Time T" is "Deleted".
+	// We pass the oldItem so we can recover the key.
+	if err := s.writeHistoryRecord(tr, table, oldItem, true); err != nil {
+		return nil, err
+	}
+
+	// 7. Stream Record
 	if oldItem != nil { // Only stream if something was deleted
 		if err := s.writeStreamRecord(tr, table, "REMOVE", oldItem, nil); err != nil {
 			return nil, err
@@ -1200,7 +1214,12 @@ func (s *FoundationDBStore) updateItemInternal(tr fdbadapter.FDBTransaction, tab
 		return nil, err
 	}
 
-	// 8. Stream Record
+	// 8. Write to History (PITR)
+	if err := s.writeHistoryRecord(tr, table, item, false); err != nil {
+		return nil, err
+	}
+
+	// 9. Stream Record
 	eventName := "MODIFY"
 	if oldItem == nil {
 		eventName = "INSERT" // It was a new item (Upsert)
@@ -2017,7 +2036,7 @@ func (s *FoundationDBStore) CreateGlobalTable(ctx context.Context, request *mode
 		now := float64(time.Now().Unix())
 		description := models.GlobalTableDescription{
 			GlobalTableName:   request.GlobalTableName,
-			GlobalTableStatus: "ACTIVE",
+			GlobalTableStatus: "CREATING",
 			CreationDateTime:  now,
 			GlobalTableArn:    fmt.Sprintf("arn:aws:dynamodb:local:000000000000:global-table/%s", request.GlobalTableName),
 			ReplicationGroup:  make([]models.ReplicaDescription, 0),
