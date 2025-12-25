@@ -78,6 +78,17 @@ func (h *DynamoDBHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.getShardIteratorHandler(w, r)
 	case "DynamoDB_20120810.GetRecords":
 		h.getRecordsHandler(w, r)
+	// Backup
+	case "DynamoDB_20120810.CreateBackup":
+		createBackupHandler(h.tableService).ServeHTTP(w, r)
+	case "DynamoDB_20120810.DeleteBackup":
+		deleteBackupHandler(h.tableService).ServeHTTP(w, r)
+	case "DynamoDB_20120810.ListBackups":
+		listBackupsHandler(h.tableService).ServeHTTP(w, r)
+	case "DynamoDB_20120810.DescribeBackup":
+		describeBackupHandler(h.tableService).ServeHTTP(w, r)
+	case "DynamoDB_20120810.RestoreTableFromBackup":
+		restoreTableFromBackupHandler(h.tableService).ServeHTTP(w, r)
 	default:
 		writeError(w, "UnknownOperationException", "The requested operation is not supported.", http.StatusBadRequest)
 	}

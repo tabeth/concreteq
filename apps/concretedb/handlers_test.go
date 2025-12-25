@@ -43,6 +43,12 @@ type mockTableService struct {
 	// TTL
 	UpdateTimeToLiveFunc   func(ctx context.Context, req *models.UpdateTimeToLiveRequest) (*models.UpdateTimeToLiveResponse, error)
 	DescribeTimeToLiveFunc func(ctx context.Context, req *models.DescribeTimeToLiveRequest) (*models.DescribeTimeToLiveResponse, error)
+	// Backup
+	CreateBackupFunc           func(ctx context.Context, request *models.CreateBackupRequest) (*models.CreateBackupResponse, error)
+	DeleteBackupFunc           func(ctx context.Context, request *models.DeleteBackupRequest) (*models.DeleteBackupResponse, error)
+	ListBackupsFunc            func(ctx context.Context, request *models.ListBackupsRequest) (*models.ListBackupsResponse, error)
+	DescribeBackupFunc         func(ctx context.Context, request *models.DescribeBackupRequest) (*models.DescribeBackupResponse, error)
+	RestoreTableFromBackupFunc func(ctx context.Context, request *models.RestoreTableFromBackupRequest) (*models.RestoreTableFromBackupResponse, error)
 }
 
 // CreateTable is the method required to satisfy the interface.
@@ -144,6 +150,37 @@ func (m *mockTableService) UpdateTimeToLive(ctx context.Context, req *models.Upd
 
 func (m *mockTableService) DescribeTimeToLive(ctx context.Context, req *models.DescribeTimeToLiveRequest) (*models.DescribeTimeToLiveResponse, error) {
 	return m.DescribeTimeToLiveFunc(ctx, req)
+}
+
+func (m *mockTableService) CreateBackup(ctx context.Context, request *models.CreateBackupRequest) (*models.CreateBackupResponse, error) {
+	if m.CreateBackupFunc != nil {
+		return m.CreateBackupFunc(ctx, request)
+	}
+	return nil, nil
+}
+func (m *mockTableService) DeleteBackup(ctx context.Context, request *models.DeleteBackupRequest) (*models.DeleteBackupResponse, error) {
+	if m.DeleteBackupFunc != nil {
+		return m.DeleteBackupFunc(ctx, request)
+	}
+	return nil, nil
+}
+func (m *mockTableService) ListBackups(ctx context.Context, request *models.ListBackupsRequest) (*models.ListBackupsResponse, error) {
+	if m.ListBackupsFunc != nil {
+		return m.ListBackupsFunc(ctx, request)
+	}
+	return nil, nil
+}
+func (m *mockTableService) DescribeBackup(ctx context.Context, request *models.DescribeBackupRequest) (*models.DescribeBackupResponse, error) {
+	if m.DescribeBackupFunc != nil {
+		return m.DescribeBackupFunc(ctx, request)
+	}
+	return nil, nil
+}
+func (m *mockTableService) RestoreTableFromBackup(ctx context.Context, request *models.RestoreTableFromBackupRequest) (*models.RestoreTableFromBackupResponse, error) {
+	if m.RestoreTableFromBackupFunc != nil {
+		return m.RestoreTableFromBackupFunc(ctx, request)
+	}
+	return nil, nil
 }
 
 func TestCreateTableHandler_Success(t *testing.T) {

@@ -601,3 +601,100 @@ type DescribeTimeToLiveRequest struct {
 type DescribeTimeToLiveResponse struct {
 	TimeToLiveDescription TimeToLiveDescription `json:"TimeToLiveDescription"`
 }
+
+// Backup Operations
+
+type CreateBackupRequest struct {
+	TableName  string `json:"TableName"`
+	BackupName string `json:"BackupName"`
+}
+
+type CreateBackupResponse struct {
+	BackupDetails BackupDetails `json:"BackupDetails"`
+}
+
+type DescribeBackupRequest struct {
+	BackupArn string `json:"BackupArn"`
+}
+
+type DescribeBackupResponse struct {
+	BackupDescription BackupDescription `json:"BackupDescription"`
+}
+
+type ListBackupsRequest struct {
+	TableName               string  `json:"TableName,omitempty"`
+	Limit                   int     `json:"Limit,omitempty"`
+	TimeRangeLowerBound     float64 `json:"TimeRangeLowerBound,omitempty"`
+	TimeRangeUpperBound     float64 `json:"TimeRangeUpperBound,omitempty"`
+	ExclusiveStartBackupArn string  `json:"ExclusiveStartBackupArn,omitempty"`
+	BackupType              string  `json:"BackupType,omitempty"` // USER or SYSTEM
+}
+
+type ListBackupsResponse struct {
+	BackupSummaries        []BackupSummary `json:"BackupSummaries"`
+	LastEvaluatedBackupArn string          `json:"LastEvaluatedBackupArn,omitempty"`
+}
+
+type DeleteBackupRequest struct {
+	BackupArn string `json:"BackupArn"`
+}
+
+type DeleteBackupResponse struct {
+	BackupDescription BackupDescription `json:"BackupDescription"`
+}
+
+type RestoreTableFromBackupRequest struct {
+	TargetTableName string `json:"TargetTableName"`
+	BackupArn       string `json:"BackupArn"`
+}
+
+type RestoreTableFromBackupResponse struct {
+	TableDescription TableDescription `json:"TableDescription"`
+}
+
+type BackupDescription struct {
+	BackupDetails             BackupDetails              `json:"BackupDetails"`
+	SourceTableDetails        *SourceTableDetails        `json:"SourceTableDetails,omitempty"`
+	SourceTableFeatureDetails *SourceTableFeatureDetails `json:"SourceTableFeatureDetails,omitempty"`
+}
+
+type BackupDetails struct {
+	BackupArn              string  `json:"BackupArn"`
+	BackupName             string  `json:"BackupName"`
+	BackupSizeBytes        int64   `json:"BackupSizeBytes,omitempty"`
+	BackupStatus           string  `json:"BackupStatus"` // CREATING, DELETED, AVAILABLE
+	BackupType             string  `json:"BackupType"`   // USER, SYSTEM
+	BackupCreationDateTime float64 `json:"BackupCreationDateTime"`
+	BackupExpiryDateTime   float64 `json:"BackupExpiryDateTime,omitempty"`
+}
+
+type BackupSummary struct {
+	BackupArn              string  `json:"BackupArn"`
+	BackupName             string  `json:"BackupName"`
+	BackupCreationDateTime float64 `json:"BackupCreationDateTime"`
+	BackupExpiryDateTime   float64 `json:"BackupExpiryDateTime,omitempty"`
+	BackupStatus           string  `json:"BackupStatus"`
+	BackupType             string  `json:"BackupType"`
+	BackupSizeBytes        int64   `json:"BackupSizeBytes,omitempty"`
+	TableArn               string  `json:"TableArn,omitempty"`
+	TableId                string  `json:"TableId,omitempty"`
+	TableName              string  `json:"TableName,omitempty"`
+}
+
+type SourceTableDetails struct {
+	TableName             string                `json:"TableName"`
+	TableId               string                `json:"TableId"`
+	TableArn              string                `json:"TableArn"`
+	TableSizeBytes        int64                 `json:"TableSizeBytes"`
+	KeySchema             []KeySchemaElement    `json:"KeySchema"`
+	TableCreationDateTime float64               `json:"TableCreationDateTime"`
+	ProvisionedThroughput ProvisionedThroughput `json:"ProvisionedThroughput"`
+	ItemCount             int64                 `json:"ItemCount"`
+}
+
+type SourceTableFeatureDetails struct {
+	GlobalSecondaryIndexes []GlobalSecondaryIndex `json:"GlobalSecondaryIndexes,omitempty"`
+	LocalSecondaryIndexes  []LocalSecondaryIndex  `json:"LocalSecondaryIndexes,omitempty"`
+	StreamDescription      *StreamSpecification   `json:"StreamDescription,omitempty"`
+	TimeToLiveDescription  *TimeToLiveDescription `json:"TimeToLiveDescription,omitempty"`
+}

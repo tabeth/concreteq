@@ -38,6 +38,12 @@ type mockTableService struct {
 	GetShardIteratorFunc    func(ctx context.Context, input *models.GetShardIteratorRequest) (*models.GetShardIteratorResponse, error)
 	GetRecordsFunc          func(ctx context.Context, input *models.GetRecordsRequest) (*models.GetRecordsResponse, error)
 	UpdateTimeToLiveFunc    func(ctx context.Context, req *models.UpdateTimeToLiveRequest) (*models.UpdateTimeToLiveResponse, error)
+	// Backup
+	CreateBackupFunc           func(ctx context.Context, request *models.CreateBackupRequest) (*models.CreateBackupResponse, error)
+	DeleteBackupFunc           func(ctx context.Context, request *models.DeleteBackupRequest) (*models.DeleteBackupResponse, error)
+	ListBackupsFunc            func(ctx context.Context, request *models.ListBackupsRequest) (*models.ListBackupsResponse, error)
+	DescribeBackupFunc         func(ctx context.Context, request *models.DescribeBackupRequest) (*models.DescribeBackupResponse, error)
+	RestoreTableFromBackupFunc func(ctx context.Context, request *models.RestoreTableFromBackupRequest) (*models.RestoreTableFromBackupResponse, error)
 }
 
 func (m *mockTableService) ListTables(ctx context.Context, limit int, exclusiveStartTableName string) ([]string, string, error) {
@@ -134,6 +140,37 @@ func (m *mockTableService) GetRecords(ctx context.Context, input *models.GetReco
 	return nil, nil
 }
 func (m *mockTableService) UpdateTimeToLive(ctx context.Context, req *models.UpdateTimeToLiveRequest) (*models.UpdateTimeToLiveResponse, error) {
+	return nil, nil
+}
+
+func (m *mockTableService) CreateBackup(ctx context.Context, request *models.CreateBackupRequest) (*models.CreateBackupResponse, error) {
+	if m.CreateBackupFunc != nil {
+		return m.CreateBackupFunc(ctx, request)
+	}
+	return nil, nil
+}
+func (m *mockTableService) DeleteBackup(ctx context.Context, request *models.DeleteBackupRequest) (*models.DeleteBackupResponse, error) {
+	if m.DeleteBackupFunc != nil {
+		return m.DeleteBackupFunc(ctx, request)
+	}
+	return nil, nil
+}
+func (m *mockTableService) ListBackups(ctx context.Context, request *models.ListBackupsRequest) (*models.ListBackupsResponse, error) {
+	if m.ListBackupsFunc != nil {
+		return m.ListBackupsFunc(ctx, request)
+	}
+	return nil, nil
+}
+func (m *mockTableService) DescribeBackup(ctx context.Context, request *models.DescribeBackupRequest) (*models.DescribeBackupResponse, error) {
+	if m.DescribeBackupFunc != nil {
+		return m.DescribeBackupFunc(ctx, request)
+	}
+	return nil, nil
+}
+func (m *mockTableService) RestoreTableFromBackup(ctx context.Context, request *models.RestoreTableFromBackupRequest) (*models.RestoreTableFromBackupResponse, error) {
+	if m.RestoreTableFromBackupFunc != nil {
+		return m.RestoreTableFromBackupFunc(ctx, request)
+	}
 	return nil, nil
 }
 

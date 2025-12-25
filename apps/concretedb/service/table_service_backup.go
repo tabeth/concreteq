@@ -1,0 +1,78 @@
+package service
+
+import (
+	"context"
+
+	"github.com/tabeth/concretedb/models"
+)
+
+// Helper to validate generic requests?
+// For now, we trust the store validation or add basic checks.
+
+func (s *TableService) CreateBackup(ctx context.Context, request *models.CreateBackupRequest) (*models.CreateBackupResponse, error) {
+	if request.TableName == "" {
+		return nil, models.New("ValidationException", "TableName is required")
+	}
+	if request.BackupName == "" {
+		return nil, models.New("ValidationException", "BackupName is required")
+	}
+	// We could validate name format here.
+
+	// Delegate to store
+	details, err := s.store.CreateBackup(ctx, request)
+	if err != nil {
+		return nil, err
+	}
+	return &models.CreateBackupResponse{BackupDetails: *details}, nil
+}
+
+func (s *TableService) DeleteBackup(ctx context.Context, request *models.DeleteBackupRequest) (*models.DeleteBackupResponse, error) {
+	if request.BackupArn == "" {
+		return nil, models.New("ValidationException", "BackupArn is required")
+	}
+	desc, err := s.store.DeleteBackup(ctx, request.BackupArn)
+	if err != nil {
+		return nil, err
+	}
+	return &models.DeleteBackupResponse{BackupDescription: *desc}, nil
+}
+
+func (s *TableService) ListBackups(ctx context.Context, request *models.ListBackupsRequest) (*models.ListBackupsResponse, error) {
+	summaries, lastKey, err := s.store.ListBackups(ctx, request)
+	if err != nil {
+		return nil, err
+	}
+
+	resp := &models.ListBackupsResponse{
+		BackupSummaries: summaries,
+	}
+	if lastKey != "" {
+		resp.LastEvaluatedBackupArn = lastKey
+	}
+	return resp, nil
+}
+
+func (s *TableService) DescribeBackup(ctx context.Context, request *models.DescribeBackupRequest) (*models.DescribeBackupResponse, error) {
+	if request.BackupArn == "" {
+		return nil, models.New("ValidationException", "BackupArn is required")
+	}
+	desc, err := s.store.DescribeBackup(ctx, request.BackupArn)
+	if err != nil {
+		return nil, err
+	}
+	return &models.DescribeBackupResponse{BackupDescription: *desc}, nil
+}
+
+func (s *TableService) RestoreTableFromBackup(ctx context.Context, request *models.RestoreTableFromBackupRequest) (*models.RestoreTableFromBackupResponse, error) {
+	if request.TargetTableName == "" {
+		return nil, models.New("ValidationException", "TargetTableName is required")
+	}
+	if request.BackupArn == "" {
+		return nil, models.New("ValidationException", "BackupArn is required")
+	}
+	desc, err := s.store.RestoreTableFromBackup(ctx, request)
+	if err != nil {
+		return nil, err
+	}
+	return &models.RestoreTableFromBackupResponse{TableDescription: *desc}, nil
+}

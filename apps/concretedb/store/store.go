@@ -89,4 +89,11 @@ type Store interface {
 
 	UpdateTimeToLive(ctx context.Context, request *models.UpdateTimeToLiveRequest) (*models.TimeToLiveSpecification, error)
 	DescribeTimeToLive(ctx context.Context, tableName string) (*models.TimeToLiveDescription, error)
+
+	// Backup Methods
+	CreateBackup(ctx context.Context, request *models.CreateBackupRequest) (*models.BackupDetails, error)
+	DeleteBackup(ctx context.Context, backupArn string) (*models.BackupDescription, error)
+	ListBackups(ctx context.Context, request *models.ListBackupsRequest) ([]models.BackupSummary, string, error)
+	DescribeBackup(ctx context.Context, backupArn string) (*models.BackupDescription, error)
+	RestoreTableFromBackup(ctx context.Context, request *models.RestoreTableFromBackupRequest) (*models.TableDescription, error)
 }

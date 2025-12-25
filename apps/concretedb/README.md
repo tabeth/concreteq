@@ -14,6 +14,7 @@ ConcreteDB is a DynamoDB-compatible database implemented on top of FoundationDB.
   - Global Secondary Indexes (GSI)
   - Local Secondary Indexes (LSI)
 - **Table Management**: `CreateTable`, `DeleteTable`, `ListTables`, `DescribeTable`.
+- **Backup & Restore**: On-Demand Backups with Snapshot Isolation. See [BACKUPS.md](BACKUPS.md) for details.
 
 ### Architecture
 - **Storage Engine**: FoundationDB (FDB).

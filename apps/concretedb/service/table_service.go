@@ -44,6 +44,13 @@ type TableServicer interface {
 	DescribeStream(ctx context.Context, input *models.DescribeStreamRequest) (*models.DescribeStreamResponse, error)
 	GetShardIterator(ctx context.Context, input *models.GetShardIteratorRequest) (*models.GetShardIteratorResponse, error)
 	GetRecords(ctx context.Context, input *models.GetRecordsRequest) (*models.GetRecordsResponse, error)
+
+	// Backup Operations
+	CreateBackup(ctx context.Context, req *models.CreateBackupRequest) (*models.CreateBackupResponse, error)
+	DeleteBackup(ctx context.Context, req *models.DeleteBackupRequest) (*models.DeleteBackupResponse, error)
+	ListBackups(ctx context.Context, req *models.ListBackupsRequest) (*models.ListBackupsResponse, error)
+	DescribeBackup(ctx context.Context, req *models.DescribeBackupRequest) (*models.DescribeBackupResponse, error)
+	RestoreTableFromBackup(ctx context.Context, req *models.RestoreTableFromBackupRequest) (*models.RestoreTableFromBackupResponse, error)
 }
 
 // TableService contains the business logic for table operations.

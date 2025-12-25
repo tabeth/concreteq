@@ -41,6 +41,12 @@ type mockStore struct {
 	// TTL
 	UpdateTimeToLiveFunc   func(ctx context.Context, req *models.UpdateTimeToLiveRequest) (*models.TimeToLiveSpecification, error)
 	DescribeTimeToLiveFunc func(ctx context.Context, tableName string) (*models.TimeToLiveDescription, error)
+	// Backup
+	CreateBackupFunc           func(ctx context.Context, request *models.CreateBackupRequest) (*models.BackupDetails, error)
+	DeleteBackupFunc           func(ctx context.Context, backupArn string) (*models.BackupDescription, error)
+	ListBackupsFunc            func(ctx context.Context, request *models.ListBackupsRequest) ([]models.BackupSummary, string, error)
+	DescribeBackupFunc         func(ctx context.Context, backupArn string) (*models.BackupDescription, error)
+	RestoreTableFromBackupFunc func(ctx context.Context, request *models.RestoreTableFromBackupRequest) (*models.TableDescription, error)
 }
 
 func (m *mockStore) CreateTable(ctx context.Context, table *models.Table) error {
@@ -142,6 +148,27 @@ func (m *mockStore) UpdateTimeToLive(ctx context.Context, req *models.UpdateTime
 
 func (m *mockStore) DescribeTimeToLive(ctx context.Context, tableName string) (*models.TimeToLiveDescription, error) {
 	return m.DescribeTimeToLiveFunc(ctx, tableName)
+}
+
+// Backup Methods
+func (m *mockStore) CreateBackup(ctx context.Context, request *models.CreateBackupRequest) (*models.BackupDetails, error) {
+	return m.CreateBackupFunc(ctx, request)
+}
+
+func (m *mockStore) DeleteBackup(ctx context.Context, backupArn string) (*models.BackupDescription, error) {
+	return m.DeleteBackupFunc(ctx, backupArn)
+}
+
+func (m *mockStore) ListBackups(ctx context.Context, request *models.ListBackupsRequest) ([]models.BackupSummary, string, error) {
+	return m.ListBackupsFunc(ctx, request)
+}
+
+func (m *mockStore) DescribeBackup(ctx context.Context, backupArn string) (*models.BackupDescription, error) {
+	return m.DescribeBackupFunc(ctx, backupArn)
+}
+
+func (m *mockStore) RestoreTableFromBackup(ctx context.Context, request *models.RestoreTableFromBackupRequest) (*models.TableDescription, error) {
+	return m.RestoreTableFromBackupFunc(ctx, request)
 }
 
 func TestTableService_DeleteTable_NotFound(t *testing.T) {
