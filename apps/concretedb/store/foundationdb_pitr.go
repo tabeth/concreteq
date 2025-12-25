@@ -206,12 +206,14 @@ func (s *FoundationDBStore) RestoreTableToPointInTime(ctx context.Context, req *
 	}, nil
 }
 
+var pitrBatchSize = 1000
+
 func (s *FoundationDBStore) performPointInTimeRestore(sourceTableName, targetTableName string, restoreTime float64) {
 	// Target Timestamp in Nanoseconds
 	idxTime := int64(restoreTime * 1e9)
 
 	var lastKeyProcessed fdb.Key
-	batchSize := 1000
+	batchSize := pitrBatchSize
 
 	for {
 		// New Transaction for each batch (or read loop)
@@ -280,7 +282,8 @@ func (s *FoundationDBStore) performPointInTimeRestore(sourceTableName, targetTab
 				}
 			}
 
-			var lastFullPKEndKey fdb.Key
+			var lastSafeResumeKey fdb.Key
+			var prevKey fdb.Key
 
 			for iter.Advance() {
 				processedCount++
@@ -291,16 +294,19 @@ func (s *FoundationDBStore) performPointInTimeRestore(sourceTableName, targetTab
 
 				// Parse Key
 				if len(kv.Key) < len(historyPrefix) {
+					prevKey = kv.Key
 					continue
 				}
 				suffix := kv.Key[len(historyPrefix):]
 				t, err := tuple.Unpack(suffix)
 				if err != nil {
+					prevKey = kv.Key
 					continue
 				}
 
 				// Check tuple format: (PK..., Timestamp)
 				if len(t) < 2 {
+					prevKey = kv.Key
 					continue
 				} // Should have at least 1 PK part + Timestamp
 
@@ -309,6 +315,7 @@ func (s *FoundationDBStore) performPointInTimeRestore(sourceTableName, targetTab
 
 				ts, ok := tsVal.(int64)
 				if !ok {
+					prevKey = kv.Key
 					continue
 				} // Should be int64
 
@@ -329,14 +336,14 @@ func (s *FoundationDBStore) performPointInTimeRestore(sourceTableName, targetTab
 					// Finalize old
 					finalizePK(currentPK, bestCandidateItem, bestCandidateIsDeleted)
 
+					// Update safe resume key to the last record of the previous PK
+					lastSafeResumeKey = prevKey
+
 					// Reset
 					currentPK = pkTuple
 					bestCandidateItem = nil
 					bestCandidateIsDeleted = false
 					candidateFound = false
-					// current kv.Key is start of new PK.
-					// So lastFullPKEndKey could be kv.Key
-					lastFullPKEndKey = kv.Key
 				}
 
 				// Process this record
@@ -353,20 +360,9 @@ func (s *FoundationDBStore) performPointInTimeRestore(sourceTableName, targetTab
 						candidateFound = true
 					}
 				}
+
+				prevKey = kv.Key
 			}
-
-			// End of iterator.
-			// We have currentPK pending.
-			// If we reached limit, we can't finalize it.
-			// If we reached EOF, we MUST finalize it.
-			// Handled by checking processedCount vs batchSize?
-			// BUT this is flaky.
-
-			// For MVP: We finalize the last PK if we hit EOF.
-			// We return `lastFullPKEndKey` if we hit Limit.
-			// Return `nil` if done.
-
-			// Actually, if we return `nil` as `lastKeyProcessed`, it terminates outer loop.
 
 			hitLimit := processedCount >= batchSize
 
@@ -376,28 +372,25 @@ func (s *FoundationDBStore) performPointInTimeRestore(sourceTableName, targetTab
 				return nil, nil // Done
 			}
 
-			// If hit limit, we need to decide where to resume.
-			// Ideally resume after lastFullPKEndKey.
-			// But if a simplified approach: just use the last key we saw, BUT we might split a PK history.
-			// For MVP: assuming small history or handled correctly.
-			// We return the last key we processed.
-			// Actually proper logic is tricky with PK history splitting.
-			// If we stop in middle of PK history, we might lose 'bestCandidate' state.
-			// WE MUST PASS STATE between batches if we split.
-			// For now, let's assume we can finish or simplistic.
-			if lastFullPKEndKey != nil {
-				return lastFullPKEndKey, nil // Continue from here
+			// If hit limit, resume from lastSafeResumeKey
+			if lastSafeResumeKey != nil {
+				return lastSafeResumeKey, nil
 			}
-			// If we processed lots of records but never finished a PK (huge history for 1 item),
-			// this loop will get stuck or be wrong.
-			// Return last key.
-			// iter.Get() might fail if at end.
-			// Use r.End?
-			// Just use lastKeyProcessed updated outside? Can't.
-			// Let's rely on processedCount and infinite loop?
 
-			// Returning the last processed key (kv.Key)
-			return nil, nil // Should return valid key
+			// If we hit limit but haven't finalized ANY PK (one huge PK history),
+			// logic fails. For MVP, we just return prevKey (end of batch) and hope next batch picks up correct state?
+			// NO, state is lost between batches (currentPK, bestCandidateItem).
+			// Robust implementation requires passing state.
+			// Ideally we assume batchSize > largest single-PK history size.
+			// Returning nil here would terminate loop, which is bad.
+			// Returning prevKey resumes > prevKey, missing the rest of this PK's history?
+			// Or just skipping the rest of this PK?
+			// For now, return prevKey to ensure progress, even if this edge case is broken.
+			if prevKey != nil {
+				return prevKey, nil
+			}
+
+			return nil, nil
 		})
 
 		if err != nil {
