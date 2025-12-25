@@ -1,37 +1,39 @@
-2025/12/25 21:50:43 Started integration fdbserver on port 4691 with pid 7238
-2025/12/25 21:50:48 FDB initialized successfully for integration tests
-=== RUN   TestIntegration_PITR
+2025/12/25 22:37:04 Started store fdbserver on port 4692 with pid 52599
+2025/12/25 22:37:10 FDB initialized successfully for store tests
+=== RUN   TestFoundationDBStore_BackupRestore
 Checking FoundationDB cluster availability...
 FoundationDB cluster is available. Proceeding with tests.
 Creating FDB store.
-Creating table : pitr-test-table
-[DEBUG] writeHistoryRecord: Table=pitr-test-table, TS=1766699448929961050, Deleted=false
-[DEBUG] writeHistoryRecord: Table=pitr-test-table, TS=1766699449057627522, Deleted=false
-[DEBUG] writeHistoryRecord: Table=pitr-test-table, TS=1766699449180030223, Deleted=true
-Creating table : restored-table-v1
-[DEBUG] finalizePK: Verify Read Success! Bytes len=38
-Creating table : restored-table-v2
-[DEBUG] finalizePK: Verify Read Success! Bytes len=38
-Creating table : restored-table-v3
---- PASS: TestIntegration_PITR (0.54s)
-PASS
-ok  	github.com/tabeth/concretedb	6.295s
-testing: warning: no tests to run
-PASS
-ok  	github.com/tabeth/concretedb/config	(cached) [no tests to run]
-testing: warning: no tests to run
-PASS
-ok  	github.com/tabeth/concretedb/expression	(cached) [no tests to run]
-testing: warning: no tests to run
-PASS
-ok  	github.com/tabeth/concretedb/models	(cached) [no tests to run]
-testing: warning: no tests to run
-PASS
-ok  	github.com/tabeth/concretedb/service	0.081s [no tests to run]
-testing: warning: no tests to run
-PASS
-ok  	github.com/tabeth/concretedb/store	0.083s [no tests to run]
-?   	github.com/tabeth/concretedb/store/internal/fdbadapter	[no test files]
-testing: warning: no tests to run
-PASS
-ok  	github.com/tabeth/concretedb/ttl	(cached) [no tests to run]
+Creating table : backup-test-table
+DEBUG: [getItemInternal] fdb package path: github.com/apple/foundationdb/bindings/go/src/fdb
+DEBUG: [getItemInternal] tableDir pointer: 0xc0000288e0
+DEBUG: [getItemInternal] tableDir.Bytes(): 0502636f6e74656e7400001512
+DEBUG: [getItemInternal] tableDir.FDBKey() returned type: fdb.Key, val: 5c7830355c7830325c783033
+DEBUG: [getItemInternal] tableDir prefix: 0502636f6e74656e7400001512
+DEBUG: [getItemInternal] itemKey: 0502636f6e74656e7400001512026461746100026974656d3100
+DEBUG: [getItemInternal] fdb package path: github.com/apple/foundationdb/bindings/go/src/fdb
+DEBUG: [getItemInternal] tableDir pointer: 0xc000116470
+DEBUG: [getItemInternal] tableDir.Bytes(): 0502636f6e74656e7400001512
+DEBUG: [getItemInternal] tableDir.FDBKey() returned type: fdb.Key, val: 5c7830355c7830325c783033
+DEBUG: [getItemInternal] tableDir prefix: 0502636f6e74656e7400001512
+DEBUG: [getItemInternal] itemKey: 0502636f6e74656e7400001512026461746100026974656d3100
+DEBUG: [backup] src=[0502636f6e74656e7400001512026461746100026974656d3100] dest=[0502636f6e74656e7400001537026461746100026974656d3100] val_len=39
+DEBUG: [backup] src=[0502636f6e74656e7400001512026d6574616461746100] dest=[0502636f6e74656e7400001537026d6574616461746100] val_len=461
+Backup Total Bytes: 1010, Count: 2
+Creating table : backup-restore-table
+DEBUG: [restore] backup=[0502636f6e74656e7400001537026461746100026974656d3100] dest=[0502636f6e74656e7400001509026461746100026974656d3100] val_len=39
+DEBUG: [getItemInternal] fdb package path: github.com/apple/foundationdb/bindings/go/src/fdb
+DEBUG: [getItemInternal] tableDir pointer: 0xc000116c00
+DEBUG: [getItemInternal] tableDir.Bytes(): 0502636f6e74656e7400001509
+DEBUG: [getItemInternal] tableDir.FDBKey() returned type: fdb.Key, val: 5c7830355c7830325c783033
+DEBUG: [getItemInternal] tableDir prefix: 0502636f6e74656e7400001509
+DEBUG: [getItemInternal] itemKey: 0502636f6e74656e7400001509026461746100026974656d3100
+    foundationdb_backup_test.go:93: 
+        	Error Trace:	/config/kiroku-core/apps/concretedb/store/foundationdb_backup_test.go:93
+        	Error:      	Expected value not to be nil.
+        	Test:       	TestFoundationDBStore_BackupRestore
+    foundationdb_backup_test.go:102: Item Val key missing. Item: map[]
+--- FAIL: TestFoundationDBStore_BackupRestore (0.16s)
+FAIL
+FAIL	github.com/tabeth/concretedb/store	5.460s
+FAIL

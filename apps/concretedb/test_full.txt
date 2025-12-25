@@ -1,0 +1,609 @@
+2025/12/25 23:07:10 Started store fdbserver on port 4692 with pid 84946
+2025/12/25 23:07:16 FDB initialized successfully for store tests
+=== RUN   TestFoundationDBStore_BackupRestore
+Checking FoundationDB cluster availability...
+FoundationDB cluster is available. Proceeding with tests.
+Creating FDB store.
+Creating table : backup-test-table
+Backup Total Bytes: 1010, Count: 2
+Creating table : backup-restore-table
+--- PASS: TestFoundationDBStore_BackupRestore (0.26s)
+=== RUN   TestFoundationDBStore_ListBackups
+Creating FDB store.
+Creating table : backup-list-test
+Backup Total Bytes: 943, Count: 1
+Backup Total Bytes: 943, Count: 1
+Backup Total Bytes: 943, Count: 1
+--- PASS: TestFoundationDBStore_ListBackups (0.05s)
+=== RUN   TestFoundationDBStore_DeleteBackup
+Creating FDB store.
+Creating table : backup-del-test
+Backup Total Bytes: 941, Count: 1
+--- PASS: TestFoundationDBStore_DeleteBackup (0.15s)
+=== RUN   TestFoundationDBStore_Backup_Errors
+Creating FDB store.
+Creating table : exist-restore
+Creating table : err-table
+--- PASS: TestFoundationDBStore_Backup_Errors (0.05s)
+=== RUN   TestFoundationDBStore_PITR_EdgeCases
+=== RUN   TestFoundationDBStore_PITR_EdgeCases/UpdateContinuousBackups_TableNotFound
+Creating FDB store.
+Backup Total Bytes: 775, Count: 1
+=== RUN   TestFoundationDBStore_PITR_EdgeCases/UpdateContinuousBackups_PersistConfig
+Creating FDB store.
+Creating table : pitr-config-test
+=== RUN   TestFoundationDBStore_PITR_EdgeCases/UpdateContinuousBackups_CorruptConfig
+Creating FDB store.
+Creating table : pitr-corrupt-test
+=== RUN   TestFoundationDBStore_PITR_EdgeCases/DescribeContinuousBackups_TableNotFound
+Creating FDB store.
+=== RUN   TestFoundationDBStore_PITR_EdgeCases/DescribeContinuousBackups_CorruptConfig
+Creating FDB store.
+Creating table : pitr-desc-corrupt-test
+=== RUN   TestFoundationDBStore_PITR_EdgeCases/RestoreTableToPointInTime_Validations
+Creating FDB store.
+Creating table : pitr-restore-validation-source
+Creating table : existing-target
+=== RUN   TestFoundationDBStore_PITR_EdgeCases/UpdateContinuousBackups_KeepEarliestTime
+Creating FDB store.
+Creating table : pitr-keep-time
+--- PASS: TestFoundationDBStore_PITR_EdgeCases (0.16s)
+    --- PASS: TestFoundationDBStore_PITR_EdgeCases/UpdateContinuousBackups_TableNotFound (0.00s)
+    --- PASS: TestFoundationDBStore_PITR_EdgeCases/UpdateContinuousBackups_PersistConfig (0.04s)
+    --- PASS: TestFoundationDBStore_PITR_EdgeCases/UpdateContinuousBackups_CorruptConfig (0.03s)
+    --- PASS: TestFoundationDBStore_PITR_EdgeCases/DescribeContinuousBackups_TableNotFound (0.00s)
+    --- PASS: TestFoundationDBStore_PITR_EdgeCases/DescribeContinuousBackups_CorruptConfig (0.02s)
+    --- PASS: TestFoundationDBStore_PITR_EdgeCases/RestoreTableToPointInTime_Validations (0.04s)
+    --- PASS: TestFoundationDBStore_PITR_EdgeCases/UpdateContinuousBackups_KeepEarliestTime (0.04s)
+=== RUN   TestFoundationDBStore_WriteHistory_CorruptConfig
+Creating FDB store.
+Creating table : pitr-write-corrupt
+--- PASS: TestFoundationDBStore_WriteHistory_CorruptConfig (0.03s)
+=== RUN   TestFoundationDBStore_Restore_Pagination
+Creating FDB store.
+Creating table : pitr-pagination-test
+Creating table : pitr-pagination-target
+--- PASS: TestFoundationDBStore_Restore_Pagination (0.17s)
+=== RUN   TestFoundationDBStore_Restore_NoHistory
+Creating FDB store.
+Creating table : pitr-no-history
+Creating table : pitr-no-history-target
+--- PASS: TestFoundationDBStore_Restore_NoHistory (0.04s)
+=== RUN   TestFoundationDBStore_GlobalTables
+Creating FDB store.
+--- PASS: TestFoundationDBStore_GlobalTables (0.03s)
+=== RUN   TestFoundationDBStore_UpdateTable_GSI
+Creating FDB store.
+Creating table : UpdateTableGSI_20251225230717
+--- PASS: TestFoundationDBStore_UpdateTable_GSI (0.03s)
+=== RUN   TestFoundationDBStore_BatchWriteItem
+Creating FDB store.
+Creating table : test-batch-write
+--- PASS: TestFoundationDBStore_BatchWriteItem (0.04s)
+=== RUN   TestFoundationDBStore_BatchGetItem
+Creating FDB store.
+Creating FDB store.
+Creating table : test-batch-get-1
+Creating table : test-batch-get-2
+--- PASS: TestFoundationDBStore_BatchGetItem (0.05s)
+=== RUN   TestFoundationDBStore_ListStreams_Panic
+Creating FDB store.
+--- PASS: TestFoundationDBStore_ListStreams_Panic (0.03s)
+=== RUN   TestFoundationDBStore_UpdateItem_Comprehensive
+Creating FDB store.
+Creating table : test-update-comprehensive
+--- PASS: TestFoundationDBStore_UpdateItem_Comprehensive (0.05s)
+=== RUN   TestFoundationDBStore_ItemOperations_NotFound
+Creating FDB store.
+--- PASS: TestFoundationDBStore_ItemOperations_NotFound (0.00s)
+=== RUN   TestFoundationDBStore_Scan_Comprehensive
+Creating FDB store.
+Creating table : test-scan-comprehensive
+--- PASS: TestFoundationDBStore_Scan_Comprehensive (0.06s)
+=== RUN   TestFoundationDBStore_Query_Comprehensive
+Creating FDB store.
+Creating table : test-query-comprehensive
+--- PASS: TestFoundationDBStore_Query_Comprehensive (0.08s)
+=== RUN   TestFoundationDBStore_ListTables_Comprehensive
+Creating FDB store.
+Creating table : list-table-0
+Creating table : list-table-1
+Creating table : list-table-2
+Creating table : list-table-3
+Creating table : list-table-4
+--- PASS: TestFoundationDBStore_ListTables_Comprehensive (0.07s)
+=== RUN   TestFoundationDBStore_PutItem_ReturnValues
+Creating FDB store.
+Creating table : test-put-return-values
+--- PASS: TestFoundationDBStore_PutItem_ReturnValues (0.03s)
+=== RUN   TestFoundationDBStore_CorruptedData_Comprehenisve
+Creating FDB store.
+Creating table : test-corrupted-comprehensive-20251225230717
+--- PASS: TestFoundationDBStore_CorruptedData_Comprehenisve (0.07s)
+=== RUN   TestFoundationDBStore_DeleteTable_ExistingMetadata_Missing
+Creating FDB store.
+Creating table : test-delete-missing-meta
+--- PASS: TestFoundationDBStore_DeleteTable_ExistingMetadata_Missing (0.02s)
+=== RUN   TestFoundationDBStore_KeyValidation
+Creating FDB store.
+Creating table : test-key-validation
+--- PASS: TestFoundationDBStore_KeyValidation (0.01s)
+=== RUN   TestFoundationDBStore_Query_EdgeCases
+Creating FDB store.
+Creating table : test-query-edges-1766704037668720822
+--- PASS: TestFoundationDBStore_Query_EdgeCases (0.07s)
+=== RUN   TestFoundationDBStore_UpdateItem_ALL_OLD_NonExistent
+Creating FDB store.
+Creating table : test-update-all-old-missing
+--- PASS: TestFoundationDBStore_UpdateItem_ALL_OLD_NonExistent (0.02s)
+=== RUN   TestFoundationDBStore_DeleteItem_ALL_OLD
+Creating FDB store.
+Creating table : test-delete-all-old
+--- PASS: TestFoundationDBStore_DeleteItem_ALL_OLD (0.03s)
+=== RUN   TestFoundationDBStore_Scan_FilterError
+Creating FDB store.
+Creating table : test-scan-filter-err
+--- PASS: TestFoundationDBStore_Scan_FilterError (0.02s)
+=== RUN   TestFoundationDBStore_Query_ResolvedPK_Fail
+Creating FDB store.
+Creating table : test-query-pk-fail
+--- PASS: TestFoundationDBStore_Query_ResolvedPK_Fail (0.01s)
+=== RUN   TestFoundationDBStore_Internal_EdgeCases
+Creating FDB store.
+Creating table : test-internal-edges
+Creating table : test-internal-edges
+--- PASS: TestFoundationDBStore_Internal_EdgeCases (0.04s)
+=== RUN   TestFoundationDBStore_Query_AllOperators
+Creating FDB store.
+Creating table : test-query-all-ops
+--- PASS: TestFoundationDBStore_Query_AllOperators (0.08s)
+=== RUN   TestFoundationDBStore_FinalEdgeCases
+Creating FDB store.
+Creating table : test-final-edges
+--- PASS: TestFoundationDBStore_FinalEdgeCases (0.02s)
+=== RUN   TestFoundationDBStore_CorruptedMetadata_Extra
+Creating FDB store.
+Creating table : test-corrupted-meta-extra
+--- PASS: TestFoundationDBStore_CorruptedMetadata_Extra (0.03s)
+=== RUN   TestFoundationDBStore_CorruptedItem_Extra
+Creating FDB store.
+Creating table : test-corrupted-item-extra
+--- PASS: TestFoundationDBStore_CorruptedItem_Extra (0.02s)
+=== RUN   TestFoundationDBStore_TableNotFound_Internal
+Creating FDB store.
+--- PASS: TestFoundationDBStore_TableNotFound_Internal (0.00s)
+=== RUN   TestFoundationDBStore_KeyEdges
+Creating FDB store.
+Creating table : test-key-edges
+    foundationdb_store_test.go:1042: Got expected error: unsupported key type or null
+--- PASS: TestFoundationDBStore_KeyEdges (0.01s)
+=== RUN   TestFoundationDBStore_ListTables_LimitZero
+Creating FDB store.
+--- PASS: TestFoundationDBStore_ListTables_LimitZero (0.00s)
+=== RUN   TestFoundationDBStore_CRUD_TableNotFound
+Creating FDB store.
+--- PASS: TestFoundationDBStore_CRUD_TableNotFound (0.00s)
+=== RUN   TestFoundationDBStore_Pagination_ListTables
+Creating FDB store.
+Creating table : a
+Creating table : b
+--- PASS: TestFoundationDBStore_Pagination_ListTables (0.09s)
+=== RUN   TestFoundationDBStore_RangeKey_GetItem
+Creating FDB store.
+Creating table : test-range-get
+--- PASS: TestFoundationDBStore_RangeKey_GetItem (0.02s)
+=== RUN   TestFoundationDBStore_Query_SK_Edges
+Creating FDB store.
+Creating table : test-query-sk-edges
+--- PASS: TestFoundationDBStore_Query_SK_Edges (0.01s)
+=== RUN   TestFoundationDBStore_Cycle_PutItem
+Creating FDB store.
+Creating table : test-cycle
+--- PASS: TestFoundationDBStore_Cycle_PutItem (0.01s)
+=== RUN   TestFoundationDBStore_CorruptedItem_Operations
+Creating FDB store.
+Creating table : test-corrupted-ops
+--- PASS: TestFoundationDBStore_CorruptedItem_Operations (0.02s)
+=== RUN   TestFoundationDBStore_LSI_Query_Coverage
+Creating FDB store.
+Creating table : LSIQueryTable
+--- PASS: TestFoundationDBStore_LSI_Query_Coverage (0.03s)
+=== RUN   TestFoundationDBStore_Final_EdgeCases
+Creating FDB store.
+Creating table : FinalEdgeTable
+--- PASS: TestFoundationDBStore_Final_EdgeCases (0.05s)
+=== RUN   TestFoundationDBStore_FinalPagination_Coverage
+Creating FDB store.
+Creating table : TableA
+Creating table : TableB
+Creating table : TableC
+Creating table : QueryIdxTable
+--- PASS: TestFoundationDBStore_FinalPagination_Coverage (0.06s)
+=== RUN   TestFoundationDBStore_StreamCoverage_Detailed
+Creating FDB store.
+Creating table : TableA_20251225230718
+Creating table : TableB_20251225230718
+--- PASS: TestFoundationDBStore_StreamCoverage_Detailed (0.08s)
+=== RUN   TestFoundationDBStore_Misc_Coverage
+Creating FDB store.
+Creating table : MiscTable
+--- PASS: TestFoundationDBStore_Misc_Coverage (0.03s)
+=== RUN   TestFoundationDBStore_ListStreams_Pagination_Coverage
+Creating FDB store.
+Creating table : PagerTable0
+Creating table : PagerTable1
+Creating table : PagerTable2
+Creating table : PagerTable3
+Creating table : PagerTable4
+--- PASS: TestFoundationDBStore_ListStreams_Pagination_Coverage (0.06s)
+=== RUN   TestFoundationDBStore_BatchTransact_Errors_Coverage
+Creating FDB store.
+Creating table : CheckTable
+--- PASS: TestFoundationDBStore_BatchTransact_Errors_Coverage (0.02s)
+=== RUN   TestFoundationDBStore_KeyBuilding_Errors_Coverage
+Creating FDB store.
+Creating table : KeyErrorsTable
+--- PASS: TestFoundationDBStore_KeyBuilding_Errors_Coverage (0.01s)
+=== RUN   TestFoundationDBStore_FinalCoverage_EdgeCases
+Creating FDB store.
+Creating table : FinalEdgeTable
+--- PASS: TestFoundationDBStore_FinalCoverage_EdgeCases (0.02s)
+=== RUN   TestFoundationDBStore_IndexEdgeCases_Coverage
+Creating FDB store.
+Creating table : IdxEdgeTable
+--- PASS: TestFoundationDBStore_IndexEdgeCases_Coverage (0.04s)
+=== RUN   TestFoundationDBStore_Coverage_V5_EdgeCases
+Creating FDB store.
+Creating table : CoverageV5Table
+Creating table : CoverageV5Table
+--- PASS: TestFoundationDBStore_Coverage_V5_EdgeCases (0.04s)
+=== RUN   TestFoundationDBStore_Coverage_V6_ComplexBatch
+Creating FDB store.
+Creating table : TableV6_1
+Creating table : TableV6_2
+--- PASS: TestFoundationDBStore_Coverage_V6_ComplexBatch (0.05s)
+=== RUN   TestFoundationDBStore_IndexMulti_Coverage
+Creating FDB store.
+Creating table : IndexMultiTable
+--- PASS: TestFoundationDBStore_IndexMulti_Coverage (0.05s)
+=== RUN   TestFoundationDBStore_Boundaries_Coverage
+Creating FDB store.
+Creating table : BoundaryTable
+--- PASS: TestFoundationDBStore_Boundaries_Coverage (0.02s)
+=== RUN   TestFoundationDBStore_Internal_Coverage
+Creating FDB store.
+Creating table : BatchErr
+Creating table : ScanSkip
+--- PASS: TestFoundationDBStore_Internal_Coverage (0.04s)
+=== RUN   TestFoundationDBStore_Pagination_Coverage
+Creating FDB store.
+Creating table : PagerTable
+Creating table : PagerTableQuery
+--- PASS: TestFoundationDBStore_Pagination_Coverage (0.16s)
+=== RUN   TestFoundationDBStore_FinalPolish_Coverage
+Creating FDB store.
+Creating table : FinalPolishTable
+--- PASS: TestFoundationDBStore_FinalPolish_Coverage (0.03s)
+=== RUN   TestFoundationDBStore_IndexFinal_Coverage
+Creating FDB store.
+Creating table : IdxFinalTable
+--- PASS: TestFoundationDBStore_IndexFinal_Coverage (0.03s)
+=== RUN   TestFoundationDBStore_Scan_Filter
+Creating FDB store.
+Creating table : test-scan-filter-1766704039014223123
+=== RUN   TestFoundationDBStore_Scan_Filter/FilterByTypeUser
+=== RUN   TestFoundationDBStore_Scan_Filter/FilterByAgeGT25
+=== RUN   TestFoundationDBStore_Scan_Filter/FilterByAgeAndType
+--- PASS: TestFoundationDBStore_Scan_Filter (0.04s)
+    --- PASS: TestFoundationDBStore_Scan_Filter/FilterByTypeUser (0.00s)
+    --- PASS: TestFoundationDBStore_Scan_Filter/FilterByAgeGT25 (0.00s)
+    --- PASS: TestFoundationDBStore_Scan_Filter/FilterByAgeAndType (0.00s)
+=== RUN   TestFoundationDBStore_Query_Filter
+Creating FDB store.
+Creating table : test-query-filter-1766704039058506381
+=== RUN   TestFoundationDBStore_Query_Filter/QueryPKOnly_FilterActive
+=== RUN   TestFoundationDBStore_Query_Filter/QueryPKAndSK_FilterStatus
+--- PASS: TestFoundationDBStore_Query_Filter (0.05s)
+    --- PASS: TestFoundationDBStore_Query_Filter/QueryPKOnly_FilterActive (0.00s)
+    --- PASS: TestFoundationDBStore_Query_Filter/QueryPKAndSK_FilterStatus (0.00s)
+=== RUN   TestFoundationDBStore_IndexCoverage
+Creating FDB store.
+Creating table : IndexCoverageTable
+--- PASS: TestFoundationDBStore_IndexCoverage (0.05s)
+=== RUN   TestFoundationDBStore_IndexProjections_Coverage
+Creating FDB store.
+Creating table : ProjTable
+--- PASS: TestFoundationDBStore_IndexProjections_Coverage (0.02s)
+=== RUN   TestFoundationDBStore_IndexErrors_Coverage
+Creating FDB store.
+Creating table : ErrorTable
+--- PASS: TestFoundationDBStore_IndexErrors_Coverage (0.02s)
+=== RUN   TestFoundationDBStore_Indexes_CreateTable
+Creating FDB store.
+Creating table : test-indexes-create-1766704039205356324
+--- PASS: TestFoundationDBStore_Indexes_CreateTable (0.02s)
+=== RUN   TestFoundationDBStore_Indexes_PutItem
+Creating FDB store.
+Creating table : test-indexes-put-1766704039221101330
+--- PASS: TestFoundationDBStore_Indexes_PutItem (0.02s)
+=== RUN   TestFoundationDBStore_Indexes_Query
+Creating FDB store.
+Creating table : test-indexes-query-1766704039242055622
+--- PASS: TestFoundationDBStore_Indexes_Query (0.05s)
+=== RUN   TestFoundationDBStore_Integration_Workflow
+Creating FDB store.
+Creating table : UserActions-20251225230719
+--- PASS: TestFoundationDBStore_Integration_Workflow (0.05s)
+=== RUN   TestFoundationDBStore_toTupleElement
+=== RUN   TestFoundationDBStore_toTupleElement/String
+=== RUN   TestFoundationDBStore_toTupleElement/Number
+=== RUN   TestFoundationDBStore_toTupleElement/Binary
+=== RUN   TestFoundationDBStore_toTupleElement/Unsupported_Bool
+=== RUN   TestFoundationDBStore_toTupleElement/Unsupported_Null
+=== RUN   TestFoundationDBStore_toTupleElement/Empty
+--- PASS: TestFoundationDBStore_toTupleElement (0.00s)
+    --- PASS: TestFoundationDBStore_toTupleElement/String (0.00s)
+    --- PASS: TestFoundationDBStore_toTupleElement/Number (0.00s)
+    --- PASS: TestFoundationDBStore_toTupleElement/Binary (0.00s)
+    --- PASS: TestFoundationDBStore_toTupleElement/Unsupported_Bool (0.00s)
+    --- PASS: TestFoundationDBStore_toTupleElement/Unsupported_Null (0.00s)
+    --- PASS: TestFoundationDBStore_toTupleElement/Empty (0.00s)
+=== RUN   TestFoundationDBStore_buildKeyTuple
+=== RUN   TestFoundationDBStore_buildKeyTuple/Valid_CompositeKey
+=== RUN   TestFoundationDBStore_buildKeyTuple/Missing_PartitionKey
+=== RUN   TestFoundationDBStore_buildKeyTuple/Missing_SortKey
+=== RUN   TestFoundationDBStore_buildKeyTuple/Invalid_Type_In_Key
+--- PASS: TestFoundationDBStore_buildKeyTuple (0.00s)
+    --- PASS: TestFoundationDBStore_buildKeyTuple/Valid_CompositeKey (0.00s)
+    --- PASS: TestFoundationDBStore_buildKeyTuple/Missing_PartitionKey (0.00s)
+    --- PASS: TestFoundationDBStore_buildKeyTuple/Missing_SortKey (0.00s)
+    --- PASS: TestFoundationDBStore_buildKeyTuple/Invalid_Type_In_Key (0.00s)
+=== RUN   TestFoundationDBStore_Pagination
+Creating FDB store.
+Creating table : test-pagination-20251225230719
+--- PASS: TestFoundationDBStore_Pagination (0.14s)
+=== RUN   TestFoundationDBStore_DeleteItem_Condition
+Creating FDB store.
+Creating table : test-del-cond-20251225230719
+--- PASS: TestFoundationDBStore_DeleteItem_Condition (0.06s)
+=== RUN   TestFoundationDBStore_Projection
+Creating FDB store.
+Creating table : test-projection-1766704039544821549
+=== RUN   TestFoundationDBStore_Projection/Scan_ProjectName
+=== RUN   TestFoundationDBStore_Projection/Scan_ProjectNameAndAge
+=== RUN   TestFoundationDBStore_Projection/Query_ProjectRole_WithAlias
+=== RUN   TestFoundationDBStore_Projection/Scan_ProjectNonExistent
+--- PASS: TestFoundationDBStore_Projection (0.05s)
+    --- PASS: TestFoundationDBStore_Projection/Scan_ProjectName (0.00s)
+    --- PASS: TestFoundationDBStore_Projection/Scan_ProjectNameAndAge (0.00s)
+    --- PASS: TestFoundationDBStore_Projection/Query_ProjectRole_WithAlias (0.00s)
+    --- PASS: TestFoundationDBStore_Projection/Scan_ProjectNonExistent (0.00s)
+=== RUN   TestFoundationDBStore_Query_SortKeyConditions
+Creating FDB store.
+Creating table : test-query-sk-1766704039593056759
+=== RUN   TestFoundationDBStore_Query_SortKeyConditions/Equals
+=== RUN   TestFoundationDBStore_Query_SortKeyConditions/GreaterThan
+=== RUN   TestFoundationDBStore_Query_SortKeyConditions/LessThan
+=== RUN   TestFoundationDBStore_Query_SortKeyConditions/Between
+=== RUN   TestFoundationDBStore_Query_SortKeyConditions/BeginsWith
+--- PASS: TestFoundationDBStore_Query_SortKeyConditions (0.13s)
+    --- PASS: TestFoundationDBStore_Query_SortKeyConditions/Equals (0.00s)
+    --- PASS: TestFoundationDBStore_Query_SortKeyConditions/GreaterThan (0.00s)
+    --- PASS: TestFoundationDBStore_Query_SortKeyConditions/LessThan (0.00s)
+    --- PASS: TestFoundationDBStore_Query_SortKeyConditions/Between (0.00s)
+    --- PASS: TestFoundationDBStore_Query_SortKeyConditions/BeginsWith (0.00s)
+=== RUN   TestFoundationDBStore_Streams
+Creating FDB store.
+Creating table : StreamTestTable_20251225230719
+--- PASS: TestFoundationDBStore_Streams (0.18s)
+=== RUN   TestFoundationDBStore_UpdateTable
+Creating FDB store.
+Creating table : UpdateStreamTestTable_20251225230719
+--- PASS: TestFoundationDBStore_UpdateTable (0.03s)
+=== RUN   TestFoundationDBStore_TransactGetItems
+Creating FDB store.
+Creating table : test-txn-get-1-20251225230719
+Creating table : test-txn-get-2-20251225230719
+--- PASS: TestFoundationDBStore_TransactGetItems (0.04s)
+=== RUN   TestFoundationDBStore_TransactWriteItems_Success
+Creating FDB store.
+Creating table : test-txn-write-20251225230719
+--- PASS: TestFoundationDBStore_TransactWriteItems_Success (0.05s)
+=== RUN   TestFoundationDBStore_TransactWriteItems_ConditionFail_Atomicity
+Creating FDB store.
+Creating table : test-txn-fail-20251225230720
+--- PASS: TestFoundationDBStore_TransactWriteItems_ConditionFail_Atomicity (0.01s)
+=== RUN   TestFoundationDBStore_TransactWriteItems_Validation
+Creating FDB store.
+--- PASS: TestFoundationDBStore_TransactWriteItems_Validation (0.00s)
+=== RUN   TestFoundationDBStore_UpdateExpressions
+Creating FDB store.
+Creating table : UpdateExprTable
+--- PASS: TestFoundationDBStore_UpdateExpressions (0.04s)
+=== RUN   TestFoundationDBStore_TimeToLive
+Creating FDB store.
+Creating table : test-ttl-table
+--- PASS: TestFoundationDBStore_TimeToLive (0.03s)
+=== RUN   TestFoundationDBStore_ReturnValues
+Creating FDB store.
+Creating table : test-return-values-1766704040123622815
+--- PASS: TestFoundationDBStore_ReturnValues (0.06s)
+=== RUN   TestFoundationDBStore_ConsistentRead
+Creating FDB store.
+Creating table : test-consistent-read-1766704040180865966
+--- PASS: TestFoundationDBStore_ConsistentRead (0.03s)
+=== RUN   TestListStreams_Pagination_Logic
+--- PASS: TestListStreams_Pagination_Logic (0.00s)
+=== RUN   TestConditionCheck_EdgeCases
+--- PASS: TestConditionCheck_EdgeCases (0.00s)
+=== RUN   TestGetRecords_Iterator_Logic
+--- PASS: TestGetRecords_Iterator_Logic (0.00s)
+=== RUN   TestGlobalTables_Errors
+--- PASS: TestGlobalTables_Errors (0.00s)
+=== RUN   TestListStreams_Error_Paths
+    store_coverage_test.go:331: ReadTransact called
+    store_coverage_test.go:333: ListFunc called
+    store_coverage_test.go:346: ReadTransact returning val=[T1] err=<nil>
+    store_coverage_test.go:331: ReadTransact called
+    store_coverage_test.go:338: ExistsFunc called
+    store_coverage_test.go:342: OpenFunc called
+    store_coverage_test.go:346: ReadTransact returning val=<nil> err=open error
+--- PASS: TestListStreams_Error_Paths (0.00s)
+=== RUN   TestConditionCheck_Internal_Errors
+--- PASS: TestConditionCheck_Internal_Errors (0.00s)
+=== RUN   TestExtraCoverage_Gaps
+=== RUN   TestExtraCoverage_Gaps/DescribeGlobalTable_NotFound
+    store_extra_test.go:38: 
+        	Error Trace:	/config/kiroku-core/apps/concretedb/store/store_extra_test.go:38
+        	Error:      	Not equal: 
+        	            	expected: *errors.errorString(&errors.errorString{s:"table not found"})
+        	            	actual  : *models.APIError(&models.APIError{Type:"GlobalTableNotFoundException", Message:"Global table not found: NonExistent"})
+        	Test:       	TestExtraCoverage_Gaps/DescribeGlobalTable_NotFound
+=== RUN   TestExtraCoverage_Gaps/DeleteItem_TableNotFound
+=== RUN   TestExtraCoverage_Gaps/UpdateItem_TableNotFound
+=== RUN   TestExtraCoverage_Gaps/RestoreTableFromBackup_MissingMetadata_Extra
+    store_extra_test.go:125: 
+        	Error Trace:	/config/kiroku-core/apps/concretedb/store/store_extra_test.go:125
+        	Error:      	"ResourceNotFoundException: Backup not found" does not contain "Corrupted backup: missing metadata"
+        	Test:       	TestExtraCoverage_Gaps/RestoreTableFromBackup_MissingMetadata_Extra
+=== RUN   TestExtraCoverage_Gaps/BatchWriteItem_Delete_Extra
+    store_extra_test.go:169: 
+        	Error Trace:	/config/kiroku-core/apps/concretedb/store/store_extra_test.go:169
+        	Error:      	Received unexpected error:
+        	            	json: cannot unmarshal string into Go value of type models.AttributeValue
+        	Test:       	TestExtraCoverage_Gaps/BatchWriteItem_Delete_Extra
+--- FAIL: TestExtraCoverage_Gaps (0.00s)
+    --- FAIL: TestExtraCoverage_Gaps/DescribeGlobalTable_NotFound (0.00s)
+    --- PASS: TestExtraCoverage_Gaps/DeleteItem_TableNotFound (0.00s)
+    --- PASS: TestExtraCoverage_Gaps/UpdateItem_TableNotFound (0.00s)
+    --- FAIL: TestExtraCoverage_Gaps/RestoreTableFromBackup_MissingMetadata_Extra (0.00s)
+    --- FAIL: TestExtraCoverage_Gaps/BatchWriteItem_Delete_Extra (0.00s)
+=== RUN   TestFoundationDBStore_Backup_Lifecycle_Coverage
+Creating FDB store.
+Creating table : BackupLifeTable
+Backup Total Bytes: 862, Count: 1
+--- PASS: TestFoundationDBStore_Backup_Lifecycle_Coverage (0.05s)
+=== RUN   TestFoundationDBStore_Backup_Errors_Coverage
+Creating FDB store.
+--- PASS: TestFoundationDBStore_Backup_Errors_Coverage (0.00s)
+=== RUN   TestFoundationDBStore_PITR_Coverage
+Creating FDB store.
+Creating table : PITRTable
+--- PASS: TestFoundationDBStore_PITR_Coverage (0.03s)
+=== RUN   TestFoundationDBStore_GlobalTable_Errors_Coverage
+Creating FDB store.
+--- PASS: TestFoundationDBStore_GlobalTable_Errors_Coverage (0.01s)
+=== RUN   TestFoundationDBStore_RestoreFromBackup_Errors_Coverage
+Creating FDB store.
+Creating table : TargetErrTable
+Creating table : SourceTable
+--- PASS: TestFoundationDBStore_RestoreFromBackup_Errors_Coverage (0.03s)
+=== RUN   TestFoundationDBStore_UpdateBackupStatus_Internal
+Creating FDB store.
+Creating table : InternalBackupTable
+Backup Total Bytes: 780, Count: 1
+Backup Total Bytes: 796, Count: 1
+--- PASS: TestFoundationDBStore_UpdateBackupStatus_Internal (0.03s)
+=== RUN   TestFoundationDBStore_PITR_CorruptConfig_Coverage
+Creating FDB store.
+Creating table : PITRCorruptTable
+--- PASS: TestFoundationDBStore_PITR_CorruptConfig_Coverage (0.04s)
+=== RUN   TestFoundationDBStore_Indexes_Internal
+Creating FDB store.
+Creating table : IdxInternalTable
+--- PASS: TestFoundationDBStore_Indexes_Internal (0.01s)
+=== RUN   TestIndexes_Types_Logic_Isolated
+--- PASS: TestIndexes_Types_Logic_Isolated (0.00s)
+=== RUN   TestIndexes_Error_Logic_Isolated
+--- PASS: TestIndexes_Error_Logic_Isolated (0.00s)
+=== RUN   TestIndexes_LSI_Logic_Isolated
+--- PASS: TestIndexes_LSI_Logic_Isolated (0.00s)
+=== RUN   TestCreateTable_Logic
+Creating table : T1
+--- PASS: TestCreateTable_Logic (0.00s)
+=== RUN   TestGetTable_Logic
+--- PASS: TestGetTable_Logic (0.00s)
+=== RUN   TestUpdateDeleteTable_Logic
+--- PASS: TestUpdateDeleteTable_Logic (0.00s)
+=== RUN   TestListTables_Logic
+--- PASS: TestListTables_Logic (0.00s)
+=== RUN   TestPutGetItem_Logic
+--- PASS: TestPutGetItem_Logic (0.00s)
+=== RUN   TestUpdateDeleteItem_Logic
+--- PASS: TestUpdateDeleteItem_Logic (0.00s)
+=== RUN   TestScanQuery_Logic
+--- PASS: TestScanQuery_Logic (0.00s)
+=== RUN   TestBatchTransact_Logic
+--- PASS: TestBatchTransact_Logic (0.00s)
+=== RUN   TestGlobalStreams_Logic
+--- PASS: TestGlobalStreams_Logic (0.00s)
+=== RUN   TestAttributeCloning_Logic
+--- PASS: TestAttributeCloning_Logic (0.00s)
+=== RUN   TestCoverage_Ext_Logic
+--- PASS: TestCoverage_Ext_Logic (0.00s)
+=== RUN   TestMoreCoverage_Logic
+--- PASS: TestMoreCoverage_Logic (0.00s)
+=== RUN   TestFinalCoverage_Logic
+--- PASS: TestFinalCoverage_Logic (0.00s)
+=== RUN   TestSystematicError_Logic
+--- PASS: TestSystematicError_Logic (0.00s)
+=== RUN   TestGapClosing_Logic
+--- PASS: TestGapClosing_Logic (0.00s)
+=== RUN   TestAggressiveCoverage_Logic
+--- PASS: TestAggressiveCoverage_Logic (0.00s)
+=== RUN   TestQuery_Complex_Logic
+--- PASS: TestQuery_Complex_Logic (0.00s)
+=== RUN   TestIndexUpdates_Logic
+--- PASS: TestIndexUpdates_Logic (0.00s)
+=== RUN   TestLimits_Logic
+--- PASS: TestLimits_Logic (0.00s)
+=== RUN   TestLogic_Expansion
+--- PASS: TestLogic_Expansion (0.00s)
+=== RUN   TestError_Expansion
+--- PASS: TestError_Expansion (0.00s)
+=== RUN   TestComponentFailures_Logic
+--- PASS: TestComponentFailures_Logic (0.00s)
+=== RUN   TestGlobalTables_Logic
+--- PASS: TestGlobalTables_Logic (0.00s)
+=== RUN   TestStreams_Logic
+--- PASS: TestStreams_Logic (0.00s)
+=== RUN   TestBatch_Logic_Extended
+--- PASS: TestBatch_Logic_Extended (0.00s)
+=== RUN   TestTransact_Logic_Extended
+--- PASS: TestTransact_Logic_Extended (0.00s)
+=== RUN   TestUpdateTable_Streams_Logic
+--- PASS: TestUpdateTable_Streams_Logic (0.00s)
+=== RUN   TestQuery_Operators_Logic
+--- PASS: TestQuery_Operators_Logic (0.00s)
+=== RUN   TestNewFoundationDBStore_Logic
+Creating FDB store.
+--- PASS: TestNewFoundationDBStore_Logic (0.00s)
+=== RUN   TestError_Logic
+Creating table : T_Exist
+--- PASS: TestError_Logic (0.00s)
+=== RUN   TestStreams_Pagination_Logic
+--- PASS: TestStreams_Pagination_Logic (0.00s)
+=== RUN   TestDeepFailure_Logic
+Creating table : T_Fail
+--- PASS: TestDeepFailure_Logic (0.00s)
+=== RUN   TestIndexes_Types_Logic
+--- PASS: TestIndexes_Types_Logic (0.00s)
+=== RUN   TestIndexes_Error_Logic
+--- PASS: TestIndexes_Error_Logic (0.00s)
+=== RUN   TestDescribeStream_Coverage
+--- PASS: TestDescribeStream_Coverage (0.00s)
+=== RUN   TestStreams_Detailed_Coverage
+--- PASS: TestStreams_Detailed_Coverage (0.00s)
+=== RUN   TestGetRecords_Coverage
+--- PASS: TestGetRecords_Coverage (0.00s)
+=== RUN   TestUpdateTable_Coverage
+--- PASS: TestUpdateTable_Coverage (0.00s)
+=== RUN   TestListStreams_FilterLogic
+--- PASS: TestListStreams_FilterLogic (0.00s)
+=== RUN   TestDescribeStream_EdgeCases
+--- PASS: TestDescribeStream_EdgeCases (0.00s)
+=== RUN   TestListStreams_Limits
+--- PASS: TestListStreams_Limits (0.00s)
+FAIL
+FAIL	github.com/tabeth/concretedb/store	9.574s
+FAIL

@@ -241,4 +241,16 @@ func TestFoundationDBStore_Backup_Errors(t *testing.T) {
 		BackupArn:       "fake-arn",
 	})
 	assert.ErrorContains(t, err, "Backup not found")
+
+	// Restore - Backup not AVAILABLE (manually set status to CREATING)
+	// We'll create a backup but NOT wait for it to be AVAILABLE
+	backupReq := &models.CreateBackupRequest{TableName: "err-table", BackupName: "not-ready"}
+	err = s.CreateTable(ctx, &models.Table{TableName: "err-table"})
+	assert.NoError(t, err)
+	bdesc, _ := s.CreateBackup(ctx, backupReq)
+	_, err = s.RestoreTableFromBackup(ctx, &models.RestoreTableFromBackupRequest{
+		TargetTableName: "wont-work",
+		BackupArn:       bdesc.BackupArn,
+	})
+	assert.ErrorContains(t, err, "Backup is not available")
 }

@@ -1,0 +1,39 @@
+2025/12/25 22:37:58 Started store fdbserver on port 4692 with pid 53119
+2025/12/25 22:38:03 FDB initialized successfully for store tests
+=== RUN   TestFoundationDBStore_BackupRestore
+Checking FoundationDB cluster availability...
+FoundationDB cluster is available. Proceeding with tests.
+Creating FDB store.
+Creating table : backup-test-table
+DEBUG: [getItemInternal] fdb package path: github.com/apple/foundationdb/bindings/go/src/fdb
+DEBUG: [getItemInternal] tableDir pointer: 0xc000180390
+DEBUG: [getItemInternal] tableDir.Bytes(): 0502636f6e74656e740000151b
+DEBUG: [getItemInternal] tableDir.FDBKey() returned type: fdb.Key, val: 5c7830355c783032636f6e74656e745c7830305c7830305c7831355c783162
+DEBUG: [getItemInternal] tableDir prefix: 0502636f6e74656e740000151b
+DEBUG: [getItemInternal] itemKey: 0502636f6e74656e740000151b026461746100026974656d3100
+DEBUG: [getItemInternal] fdb package path: github.com/apple/foundationdb/bindings/go/src/fdb
+DEBUG: [getItemInternal] tableDir pointer: 0xc0001165b0
+DEBUG: [getItemInternal] tableDir.Bytes(): 0502636f6e74656e740000151b
+DEBUG: [getItemInternal] tableDir.FDBKey() returned type: fdb.Key, val: 5c7830355c783032636f6e74656e745c7830305c7830305c7831355c783162
+DEBUG: [getItemInternal] tableDir prefix: 0502636f6e74656e740000151b
+DEBUG: [getItemInternal] itemKey: 0502636f6e74656e740000151b026461746100026974656d3100
+DEBUG: [backup] src=[0502636f6e74656e740000151b026461746100026974656d3100] dest=[0502636f6e74656e740000151e026461746100026974656d3100] val_len=39
+DEBUG: [backup] src=[0502636f6e74656e740000151b026d6574616461746100] dest=[0502636f6e74656e740000151e026d6574616461746100] val_len=461
+Backup Total Bytes: 1010, Count: 2
+Creating table : backup-restore-table
+DEBUG: [restore] backup=[0502636f6e74656e740000151e026461746100026974656d3100] dest=[0502636f6e74656e7400001527026461746100026974656d3100] val_len=39
+DEBUG: [getItemInternal] fdb package path: github.com/apple/foundationdb/bindings/go/src/fdb
+DEBUG: [getItemInternal] tableDir pointer: 0xc000116f00
+DEBUG: [getItemInternal] tableDir.Bytes(): 0502636f6e74656e7400001527
+DEBUG: [getItemInternal] tableDir.FDBKey() returned type: fdb.Key, val: 5c7830355c783032636f6e74656e745c7830305c7830305c78313527
+DEBUG: [getItemInternal] tableDir prefix: 0502636f6e74656e7400001527
+DEBUG: [getItemInternal] itemKey: 0502636f6e74656e7400001527026461746100026974656d3100
+    foundationdb_backup_test.go:93: 
+        	Error Trace:	/config/kiroku-core/apps/concretedb/store/foundationdb_backup_test.go:93
+        	Error:      	Expected value not to be nil.
+        	Test:       	TestFoundationDBStore_BackupRestore
+    foundationdb_backup_test.go:102: Item Val key missing. Item: map[]
+--- FAIL: TestFoundationDBStore_BackupRestore (0.16s)
+FAIL
+FAIL	github.com/tabeth/concretedb/store	5.490s
+FAIL

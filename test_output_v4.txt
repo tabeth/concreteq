@@ -1,0 +1,6 @@
+# github.com/tabeth/concretedb/store [github.com/tabeth/concretedb/store.test]
+apps/concretedb/store/foundationdb_backup.go:334:4: syntax error: unexpected newline in argument list; possibly missing comma or )
+apps/concretedb/store/foundationdb_backup.go:335:3: syntax error: unexpected keyword return at end of statement
+apps/concretedb/store/foundationdb_backup.go:336:3: syntax error: unexpected ) after top level declaration
+FAIL	github.com/tabeth/concretedb/store [build failed]
+FAIL

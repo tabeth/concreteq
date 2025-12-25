@@ -165,15 +165,15 @@ type RealFDBDirectorySubspace struct {
 }
 
 func (s *RealFDBDirectorySubspace) Pack(t tuple.Tuple) fdb.Key {
-	return s.ds.Pack(t)
+	return subspace.FromBytes(s.ds.Bytes()).Pack(t)
 }
 
 func (s *RealFDBDirectorySubspace) Sub(t tuple.Tuple) FDBDirectorySubspace {
-	return &RealFDBDirectorySubspace{ds: s.ds.Sub(t)}
+	return &RealFDBDirectorySubspace{ds: subspace.FromBytes(s.ds.Bytes()).Sub(t)}
 }
 
 func (s *RealFDBDirectorySubspace) FDBKey() fdb.Key {
-	return s.ds.FDBKey()
+	return fdb.Key(s.ds.Bytes())
 }
 
 func (s *RealFDBDirectorySubspace) Bytes() []byte {
@@ -189,7 +189,7 @@ func (s *RealFDBDirectorySubspace) Contains(k fdb.KeyConvertible) bool {
 }
 
 func (s *RealFDBDirectorySubspace) FDBRangeKeys() (fdb.Key, fdb.Key) {
-	k1, k2 := s.ds.FDBRangeKeys()
+	k1, k2 := subspace.FromBytes(s.ds.Bytes()).FDBRangeKeys()
 	return k1.FDBKey(), k2.FDBKey()
 }
 

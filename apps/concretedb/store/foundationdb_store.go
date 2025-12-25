@@ -495,7 +495,9 @@ func (s *FoundationDBStore) CreateTable(ctx context.Context, table *models.Table
 	fmt.Println("Creating table :", table.TableName)
 	_, err := s.db.Transact(func(tr fdbadapter.FDBTransaction) (interface{}, error) {
 		// Simulating instant provisioning for ConcreteDB
-		table.Status = models.StatusActive
+		if table.Status == "" {
+			table.Status = models.StatusActive
+		}
 
 		if table.StreamSpecification != nil && table.StreamSpecification.StreamEnabled {
 			now := time.Now().UTC()
@@ -1023,7 +1025,7 @@ func (s *FoundationDBStore) getItemInternal(rt fdbadapter.FDBReadTransaction, ta
 		return nil, err
 	}
 	itemKey := tableDir.Pack(append(tuple.Tuple{"data"}, keyTuple...))
-	valBytes, err := rt.Get(itemKey).Get()
+	valBytes, err := rt.Get(itemKey.FDBKey()).Get()
 	if err != nil {
 		return nil, err
 	}

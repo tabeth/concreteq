@@ -63,10 +63,31 @@ func TestFoundationDBStore_GlobalTables(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Len(t, desc3.ReplicationGroup, 3) // 2 original + 1 new
 
-	// Verify update in Describe
-	desc4, err := s.DescribeGlobalTable(ctx, tableName)
+	// 5. Delete Replica (via Update)
+	deleteReq := &models.UpdateGlobalTableRequest{
+		GlobalTableName: tableName,
+		ReplicaUpdates: []models.ReplicaUpdate{
+			{
+				Delete: &models.DeleteReplicaAction{RegionName: "us-west-2"},
+			},
+		},
+	}
+	deleteRes, err := s.UpdateGlobalTable(ctx, deleteReq)
 	assert.NoError(t, err)
-	assert.Len(t, desc4.ReplicationGroup, 3)
+	assert.Len(t, deleteRes.ReplicationGroup, 2)
+
+	// 6. Error Paths
+	_, err = s.DescribeGlobalTable(ctx, "non-existent")
+	assert.Error(t, err)
+
+	_, err = s.UpdateGlobalTable(ctx, &models.UpdateGlobalTableRequest{
+		GlobalTableName: "non-existent",
+	})
+	assert.Error(t, err)
+
+	// 7. List with ExclusiveStartGlobalTableName
+	_, _, err = s.ListGlobalTables(ctx, 1, tableName)
+	assert.NoError(t, err)
 }
 
 func TestFoundationDBStore_UpdateTable_GSI(t *testing.T) {

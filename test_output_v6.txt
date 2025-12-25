@@ -1,0 +1,34 @@
+2025/12/25 22:39:57 Started store fdbserver on port 4692 with pid 55066
+2025/12/25 22:40:02 FDB initialized successfully for store tests
+=== RUN   TestFoundationDBStore_BackupRestore
+Checking FoundationDB cluster availability...
+FoundationDB cluster is available. Proceeding with tests.
+Creating FDB store.
+Creating table : backup-test-table
+DEBUG: [getItemInternal] fdb package path: github.com/apple/foundationdb/bindings/go/src/fdb
+DEBUG: [getItemInternal] tableDir pointer: 0xc000028510
+DEBUG: [getItemInternal] tableDir.Bytes(): 0502636f6e74656e740000153b
+DEBUG: [getItemInternal] tableDir.FDBKey() returned type: fdb.Key, val: 5c7830355c783032636f6e74656e745c7830305c7830305c7831353b
+DEBUG: [getItemInternal] tableDir prefix: 0502636f6e74656e740000153b
+DEBUG: [getItemInternal] itemKey: 0502636f6e74656e740000153b026461746100026974656d3100
+DEBUG: [getItemInternal] fdb package path: github.com/apple/foundationdb/bindings/go/src/fdb
+DEBUG: [getItemInternal] tableDir pointer: 0xc00018c6e0
+DEBUG: [getItemInternal] tableDir.Bytes(): 0502636f6e74656e740000153b
+DEBUG: [getItemInternal] tableDir.FDBKey() returned type: fdb.Key, val: 5c7830355c783032636f6e74656e745c7830305c7830305c7831353b
+DEBUG: [getItemInternal] tableDir prefix: 0502636f6e74656e740000153b
+DEBUG: [getItemInternal] itemKey: 0502636f6e74656e740000153b026461746100026974656d3100
+DEBUG: [backup] src=[0502636f6e74656e740000153b026461746100026974656d3100] dest=[0502636f6e74656e740000152a026461746100026974656d3100] val_len=39
+DEBUG: [backup] src=[0502636f6e74656e740000153b026d6574616461746100] dest=[0502636f6e74656e740000152a026d6574616461746100] val_len=461
+Backup Total Bytes: 1010, Count: 2
+Creating table : backup-restore-table
+DEBUG: [restore] backup=[0502636f6e74656e740000152a026461746100026974656d3100] dest=[0502636f6e74656e7400001523026461746100026974656d3100] val_len=39
+DEBUG: [restore] VERIFY SUCCESS for dest [0502636f6e74656e7400001523026461746100026974656d3100], got_len=39
+DEBUG: [getItemInternal] fdb package path: github.com/apple/foundationdb/bindings/go/src/fdb
+DEBUG: [getItemInternal] tableDir pointer: 0xc000028bd0
+DEBUG: [getItemInternal] tableDir.Bytes(): 0502636f6e74656e7400001523
+DEBUG: [getItemInternal] tableDir.FDBKey() returned type: fdb.Key, val: 5c7830355c783032636f6e74656e745c7830305c7830305c78313523
+DEBUG: [getItemInternal] tableDir prefix: 0502636f6e74656e7400001523
+DEBUG: [getItemInternal] itemKey: 0502636f6e74656e7400001523026461746100026974656d3100
+--- PASS: TestFoundationDBStore_BackupRestore (0.27s)
+PASS
+ok  	github.com/tabeth/concretedb/store	5.548s

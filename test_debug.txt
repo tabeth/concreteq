@@ -1,0 +1,32 @@
+2025/12/25 23:02:16 Started store fdbserver on port 4692 with pid 79274
+2025/12/25 23:02:22 FDB initialized successfully for store tests
+=== RUN   TestFinalCoverage_Gaps_V2
+=== RUN   TestFinalCoverage_Gaps_V2/ListGlobalTables_Pagination
+=== RUN   TestFinalCoverage_Gaps_V2/DeleteItem_KeyValidationError
+=== RUN   TestFinalCoverage_Gaps_V2/BatchWriteItem_TableValidationError
+=== RUN   TestFinalCoverage_Gaps_V2/UpdateTable_Streams_Error
+=== RUN   TestFinalCoverage_Gaps_V2/DeleteTable_InternalError
+=== RUN   TestFinalCoverage_Gaps_V2/UpdateItem_InternalError
+=== RUN   TestFinalCoverage_Gaps_V2/BatchWriteItem_Delete
+    store_final_v3_test.go:154: 
+        	Error Trace:	/config/kiroku-core/apps/concretedb/store/store_final_v3_test.go:154
+        	Error:      	Received unexpected error:
+        	            	json: cannot unmarshal string into Go value of type models.AttributeValue
+        	Test:       	TestFinalCoverage_Gaps_V2/BatchWriteItem_Delete
+=== RUN   TestFinalCoverage_Gaps_V2/RestoreTableFromBackup_MissingMetadata
+    store_final_v3_test.go:201: 
+        	Error Trace:	/config/kiroku-core/apps/concretedb/store/store_final_v3_test.go:201
+        	Error:      	"Time.UnmarshalJSON: input is not a JSON string" does not contain "Corrupted backup: missing metadata"
+        	Test:       	TestFinalCoverage_Gaps_V2/RestoreTableFromBackup_MissingMetadata
+--- FAIL: TestFinalCoverage_Gaps_V2 (0.00s)
+    --- PASS: TestFinalCoverage_Gaps_V2/ListGlobalTables_Pagination (0.00s)
+    --- PASS: TestFinalCoverage_Gaps_V2/DeleteItem_KeyValidationError (0.00s)
+    --- PASS: TestFinalCoverage_Gaps_V2/BatchWriteItem_TableValidationError (0.00s)
+    --- PASS: TestFinalCoverage_Gaps_V2/UpdateTable_Streams_Error (0.00s)
+    --- PASS: TestFinalCoverage_Gaps_V2/DeleteTable_InternalError (0.00s)
+    --- PASS: TestFinalCoverage_Gaps_V2/UpdateItem_InternalError (0.00s)
+    --- FAIL: TestFinalCoverage_Gaps_V2/BatchWriteItem_Delete (0.00s)
+    --- FAIL: TestFinalCoverage_Gaps_V2/RestoreTableFromBackup_MissingMetadata (0.00s)
+FAIL
+FAIL	github.com/tabeth/concretedb/store	5.263s
+FAIL

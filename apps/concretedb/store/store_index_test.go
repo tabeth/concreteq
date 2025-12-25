@@ -139,3 +139,73 @@ func TestIndexes_Error_Logic_Isolated(t *testing.T) {
 		t.Error("PutItem should fail on index directory error")
 	}
 }
+
+func TestIndexes_LSI_Logic_Isolated(t *testing.T) {
+	store, db, dir := setupMockStore()
+	ctx := context.Background()
+
+	table := &models.Table{
+		TableName: "T_Lsi",
+		KeySchema: []models.KeySchemaElement{{AttributeName: "pk", KeyType: "HASH"}, {AttributeName: "sk", KeyType: "RANGE"}},
+		LocalSecondaryIndexes: []models.LocalSecondaryIndex{
+			{IndexName: "Il_S", KeySchema: []models.KeySchemaElement{{AttributeName: "pk", KeyType: "HASH"}, {AttributeName: "lsk", KeyType: "RANGE"}}, Projection: models.Projection{ProjectionType: "ALL"}},
+		},
+	}
+
+	db.TransactFunc = func(f func(fdbadapter.FDBTransaction) (interface{}, error)) (interface{}, error) {
+		dir.OpenFunc = func(tr fdbadapter.FDBReadTransaction, path []string, layer []byte) (fdbadapter.FDBDirectorySubspace, error) {
+			return &MockFDBDirectorySubspace{path: stringSliceToTuple(path)}, nil
+		}
+		mockTR := &MockFDBTransaction{
+			MockFDBReadTransaction: MockFDBReadTransaction{
+				GetFunc: func(k fdb.KeyConvertible) fdbadapter.FDBFutureByteSlice {
+					if strings.Contains(string(k.FDBKey()), "metadata") {
+						b, _ := json.Marshal(table)
+						return &MockFDBFutureByteSlice{GetFunc: func() ([]byte, error) { return b, nil }}
+					}
+					return &MockFDBFutureByteSlice{GetFunc: func() ([]byte, error) { return nil, nil }}
+				},
+			},
+			SetFunc:   func(k fdb.KeyConvertible, v []byte) {},
+			ClearFunc: func(k fdb.KeyConvertible) {},
+		}
+		return f(mockTR)
+	}
+
+	item := map[string]models.AttributeValue{
+		"pk":  {S: stringPtr("p1")},
+		"sk":  {S: stringPtr("s1")},
+		"lsk": {S: stringPtr("l1")},
+	}
+	// This covers LSI loop in putIndexEntries
+	if _, err := store.PutItem(ctx, "T_Lsi", item, "", nil, nil, "NONE"); err != nil {
+		t.Fatalf("PutItem with LSI failed: %v", err)
+	}
+
+	// This covers LSI loop in deleteIndexEntries (via PutItem with same PK/SK replacing old)
+	// Mock non-nil old item to trigger deletion
+	db.TransactFunc = func(f func(fdbadapter.FDBTransaction) (interface{}, error)) (interface{}, error) {
+		mockTR := &MockFDBTransaction{
+			MockFDBReadTransaction: MockFDBReadTransaction{
+				GetFunc: func(k fdb.KeyConvertible) fdbadapter.FDBFutureByteSlice {
+					if strings.Contains(string(k.FDBKey()), "metadata") {
+						b, _ := json.Marshal(table)
+						return &MockFDBFutureByteSlice{GetFunc: func() ([]byte, error) { return b, nil }}
+					}
+					// Return "old" item for data key
+					if strings.Contains(string(k.FDBKey()), "data") {
+						b, _ := json.Marshal(item)
+						return &MockFDBFutureByteSlice{GetFunc: func() ([]byte, error) { return b, nil }}
+					}
+					return &MockFDBFutureByteSlice{GetFunc: func() ([]byte, error) { return nil, nil }}
+				},
+			},
+			SetFunc:   func(k fdb.KeyConvertible, v []byte) {},
+			ClearFunc: func(k fdb.KeyConvertible) {},
+		}
+		return f(mockTR)
+	}
+	if _, err := store.PutItem(ctx, "T_Lsi", item, "", nil, nil, "NONE"); err != nil {
+		t.Fatalf("PutItem replacing LSI item failed: %v", err)
+	}
+}

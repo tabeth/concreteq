@@ -153,6 +153,26 @@ func TestFoundationDBStore_PITR_EdgeCases(t *testing.T) {
 		_, err = s.RestoreTableToPointInTime(ctx, req)
 		assert.ErrorContains(t, err, "Target table already exists")
 	})
+
+	t.Run("UpdateContinuousBackups_KeepEarliestTime", func(t *testing.T) {
+		tableName := "pitr-keep-time"
+		s := setupTestStore(t, tableName)
+		createTable(t, s, tableName)
+
+		// 1. Enable
+		req := &models.UpdateContinuousBackupsRequest{
+			TableName:                        tableName,
+			PointInTimeRecoverySpecification: models.PointInTimeRecoverySpecification{PointInTimeRecoveryEnabled: true},
+		}
+		resp1, _ := s.UpdateContinuousBackups(ctx, req)
+		earliest := resp1.PointInTimeRecoveryDescription.EarliestRestorableDateTime
+
+		// 2. Enable again (should keep same earliest time)
+		time.Sleep(10 * time.Millisecond)
+		resp2, err := s.UpdateContinuousBackups(ctx, req)
+		assert.NoError(t, err)
+		assert.Equal(t, earliest, resp2.PointInTimeRecoveryDescription.EarliestRestorableDateTime)
+	})
 }
 
 // Ensure `writeHistoryRecord` handles corrupt config silently?

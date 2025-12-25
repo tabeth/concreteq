@@ -1,0 +1,9 @@
+# github.com/tabeth/concretedb/store [github.com/tabeth/concretedb/store.test]
+apps/concretedb/store/foundationdb_backup.go:284:3: declared and not used: targetDir
+apps/concretedb/store/foundationdb_backup.go:315:19: undefined: destKey
+apps/concretedb/store/foundationdb_backup.go:318:101: undefined: destKey
+apps/concretedb/store/foundationdb_backup.go:320:28: undefined: destKey
+apps/concretedb/store/foundationdb_backup.go:322:73: undefined: destKey
+apps/concretedb/store/foundationdb_backup.go:324:86: undefined: destKey
+FAIL	github.com/tabeth/concretedb/store [build failed]
+FAIL

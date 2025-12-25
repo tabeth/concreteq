@@ -127,7 +127,6 @@ func (s *FoundationDBStore) performBackupAsyncCorrect(tableName string, backupAr
 	})
 
 	if err != nil {
-		fmt.Printf("Backup failed: %v\n", err)
 		s.updateBackupStatus(backupArn, "DELETED")
 		return
 	}
@@ -308,7 +307,6 @@ func (s *FoundationDBStore) performRestoreAsync(tableName string, backupArn stri
 					}
 				}
 			}
-
 			destKey := append(targetDir.Bytes(), suffix...)
 			tr.Set(fdb.Key(destKey), kv.Value)
 			count++
@@ -444,7 +442,9 @@ func (s *FoundationDBStore) DeleteBackup(ctx context.Context, backupArn string) 
 		}
 		tr.Clear(metaDir.Pack(tuple.Tuple{backupArn}))
 
-		s.dir.Remove(tr, []string{"backups", "data", backupArn})
+		if _, err := s.dir.Remove(tr, []string{"backups", "data", backupArn}); err != nil {
+			return nil, err
+		}
 		return nil, nil
 	})
 
