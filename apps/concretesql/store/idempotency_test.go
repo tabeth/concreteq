@@ -20,7 +20,7 @@ func TestIdempotency_Success_Retry(t *testing.T) {
 	db := NewTestDB(t)
 
 	prefix := tuple.Tuple{"test", uuid.New().String()}
-	ps := NewPageStore(db, prefix)
+	ps := NewPageStore(db, prefix, DefaultConfig())
 	ctx := context.Background()
 
 	// Initial setup
@@ -57,7 +57,7 @@ func TestIdempotency_Conflict(t *testing.T) {
 	db := NewTestDB(t)
 
 	prefix := tuple.Tuple{"test", uuid.New().String()}
-	ps := NewPageStore(db, prefix)
+	ps := NewPageStore(db, prefix, DefaultConfig())
 	ctx := context.Background()
 
 	// Initial setup: Version 100
@@ -81,7 +81,7 @@ func TestIdempotency_GC(t *testing.T) {
 	}
 	db := NewTestDB(t)
 	prefix := tuple.Tuple{"test", uuid.New().String()}
-	ps := NewPageStore(db, prefix)
+	ps := NewPageStore(db, prefix, DefaultConfig())
 	ctx := context.Background()
 
 	// Manually insert an expired key

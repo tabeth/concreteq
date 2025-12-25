@@ -124,3 +124,17 @@ If you want to read the code yourself, start here:
 1.  **Data Write Path**: `vfs.Sync` -> `ps.WritePages` -> `ps.SetVersionAndSize`.
 2.  **Data Read Path**: `vfs.ReadAt` -> `ps.ReadPage`.
 3.  **Locking**: `vfs.Lock` -> `lm.Lock` -> `lm.tryLock`.
+
+---
+
+## 6. Configuration
+
+The system uses a `store.Config` struct to parameterize key behaviors. These can be adjusted via the `vfs.Register` call.
+
+| Parameter | Default | Description |
+| :--- | :--- | :--- |
+| `PageSize` | 4096 | Default page size for *new* databases. Existing DBs use their own. |
+| `MaxTxBytes` | 9MB | Max size of a single FDB transaction. Large writes are split. |
+| `LockLeaseDuration` | 5s | Distributed lock TTL. If client crashes, lock expires after this. |
+| `LockHeartbeatInterval` | 2s | How often we refresh the lease. |
+| `LockPollInterval` | 50ms | How often we check for lock availability when blocked. |

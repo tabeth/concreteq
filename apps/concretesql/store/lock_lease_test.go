@@ -51,8 +51,8 @@ func TestLockManager_LeaseStealing(t *testing.T) {
 		return nil, nil
 	})
 
-	lm1 := NewLockManager(db, prefix) // "Owner" (Simulated Crash)
-	lm2 := NewLockManager(db, prefix) // "Stealer"
+	lm1 := NewLockManager(db, prefix, DefaultConfig()) // "Owner" (Simulated Crash)
+	lm2 := NewLockManager(db, prefix, DefaultConfig()) // "Stealer"
 	ctx := context.Background()
 
 	// 1. LM1 acquires Exclusive Lock
@@ -107,7 +107,7 @@ func TestLockManager_Heartbeat(t *testing.T) {
 		return nil, nil
 	})
 
-	lm := NewLockManager(db, prefix)
+	lm := NewLockManager(db, prefix, DefaultConfig())
 	ctx := context.Background()
 
 	err := lm.Lock(ctx, sqlite3vfs.LockExclusive, 0)
@@ -145,7 +145,7 @@ func TestLockManager_Heartbeat(t *testing.T) {
 func TestLockManager_IsLocked_EdgeCases(t *testing.T) {
 	db := newTestDBLocal(t)
 	prefix := tuple.Tuple{"test", "islocked_" + uuid.New().String()}
-	lm := NewLockManager(db, prefix)
+	lm := NewLockManager(db, prefix, DefaultConfig())
 
 	// Test 1: Empty -> False
 	assert.False(t, lm.isLocked(nil))
@@ -173,7 +173,7 @@ func TestLockManager_IsLocked_EdgeCases(t *testing.T) {
 func TestLockManager_RefreshLegacy(t *testing.T) {
 	db := newTestDBLocal(t)
 	prefix := tuple.Tuple{"test", "legacy_" + uuid.New().String()}
-	lm := NewLockManager(db, prefix)
+	lm := NewLockManager(db, prefix, DefaultConfig())
 	// 1. Manually create a Legacy Shared Lock (8 bytes)
 	expiry := time.Now().Add(time.Minute).UnixNano()
 	val := make([]byte, 8)
@@ -208,7 +208,7 @@ func TestLockManager_RefreshLegacy(t *testing.T) {
 func TestLockManager_SharedBlockedByPending(t *testing.T) {
 	db := newTestDBLocal(t)
 	prefix := tuple.Tuple{"test", "blocked_pending_" + uuid.New().String()}
-	lm := NewLockManager(db, prefix)
+	lm := NewLockManager(db, prefix, DefaultConfig())
 	ctx := context.Background()
 
 	// 1. Manually place PENDING lock
@@ -233,8 +233,8 @@ func TestLockManager_SharedBlockedByPending(t *testing.T) {
 func TestLockManager_ReservedBlocked(t *testing.T) {
 	db := newTestDBLocal(t)
 	prefix := tuple.Tuple{"test", "blocked_reserved_" + uuid.New().String()}
-	lm1 := NewLockManager(db, prefix)
-	lm2 := NewLockManager(db, prefix)
+	lm1 := NewLockManager(db, prefix, DefaultConfig())
+	lm2 := NewLockManager(db, prefix, DefaultConfig())
 	ctx := context.Background()
 
 	// 1. LM1 acquires RESERVED (via Shared)

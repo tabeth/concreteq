@@ -9,6 +9,7 @@ import (
 
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
 	sqlite "github.com/mattn/go-sqlite3"
+	"github.com/tabeth/concretesql/store"
 	"github.com/tabeth/concretesql/vfs"
 	sharedfdb "github.com/tabeth/kiroku-core/libs/fdb"
 )
@@ -48,7 +49,7 @@ func (d *SQLiteDriver) Open(dsn string) (conn driver.Conn, err error) {
 	})
 
 	vfsOnce.Do(func() {
-		if err := vfs.Register("concretesql", database); err != nil {
+		if err := vfs.Register("concretesql", database, store.DefaultConfig()); err != nil {
 			log.Panicf("failed to register vfs: %v", err)
 		}
 	})

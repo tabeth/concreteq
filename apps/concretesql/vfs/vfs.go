@@ -10,12 +10,14 @@ import (
 type FDBVFS struct {
 	db     fdb.Database
 	fsName string
+	config store.Config
 }
 
-func Register(fsName string, db fdb.Database) error {
+func Register(fsName string, db fdb.Database, config store.Config) error {
 	vfs := &FDBVFS{
 		db:     db,
 		fsName: fsName,
+		config: config,
 	}
 	return sqlite3vfs.RegisterVFS(fsName, vfs)
 }
@@ -25,8 +27,8 @@ func (v *FDBVFS) Open(name string, flags sqlite3vfs.OpenFlag) (sqlite3vfs.File, 
 	prefix := tuple.Tuple{v.fsName, name}
 
 	// Create PageStore
-	ps := store.NewPageStore(v.db, prefix)
-	lm := store.NewLockManager(v.db, prefix)
+	ps := store.NewPageStore(v.db, prefix, v.config)
+	lm := store.NewLockManager(v.db, prefix, v.config)
 
 	// PageSize is handled dynamically via PRAGMA page_size (header detection)
 	// or default.

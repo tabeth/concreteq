@@ -23,9 +23,6 @@ const (
 	LockReserved  LockLevel = 2
 	LockPending   LockLevel = 3
 	LockExclusive LockLevel = 4
-
-	LeaseDuration     = 5 * time.Second
-	HeartbeatInterval = 2 * time.Second
 )
 
 // LockManager handles distributed locking on FDB.
@@ -36,9 +33,10 @@ type LockManager struct {
 	currentLevel    LockLevel
 	heartbeatCancel context.CancelFunc
 	heartbeatWg     sync.WaitGroup
+	config          Config
 }
 
-func NewLockManager(db fdb.Database, prefix tuple.Tuple) *LockManager {
+func NewLockManager(db fdb.Database, prefix tuple.Tuple, config Config) *LockManager {
 	// Locks stored under (Prefix, "locks")
 	// Keys:
 	// "reserved" -> OwnerID
@@ -50,6 +48,7 @@ func NewLockManager(db fdb.Database, prefix tuple.Tuple) *LockManager {
 		lockSubspace: subspace.FromBytes(prefix.Pack()).Sub("locks"),
 		id:           uuid.New().String(),
 		currentLevel: LockNone,
+		config:       config,
 	}
 }
 
@@ -65,7 +64,7 @@ func (lm *LockManager) Lock(ctx context.Context, level sqlite3vfs.LockType, snap
 	target := LockLevel(level)
 
 	// Poll interval
-	ticker := time.NewTicker(50 * time.Millisecond)
+	ticker := time.NewTicker(lm.config.LockPollInterval)
 	defer ticker.Stop()
 
 	// State machine loop: Upgrade step-by-step
@@ -122,7 +121,7 @@ func (lm *LockManager) startHeartbeat() {
 
 	go func() {
 		defer lm.heartbeatWg.Done()
-		ticker := time.NewTicker(HeartbeatInterval)
+		ticker := time.NewTicker(lm.config.LockHeartbeatInterval)
 		defer ticker.Stop()
 
 		for {
@@ -148,7 +147,7 @@ func (lm *LockManager) refreshLease() {
 	// Refresh all held locks
 	_, err := lm.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
 		now := time.Now().UnixNano()
-		expiry := now + LeaseDuration.Nanoseconds()
+		expiry := now + lm.config.LockLeaseDuration.Nanoseconds()
 
 		val := make([]byte, 8)
 		binary.BigEndian.PutUint64(val, uint64(expiry))
@@ -240,7 +239,7 @@ func (lm *LockManager) tryLock(target LockLevel, snapshotVersion int64) (bool, e
 
 			// Acquire Shared
 			now := time.Now().UnixNano()
-			expiry := now + LeaseDuration.Nanoseconds()
+			expiry := now + lm.config.LockLeaseDuration.Nanoseconds()
 
 			// Store Expiry (8) + Version (8)
 			val := make([]byte, 16)
@@ -273,7 +272,7 @@ func (lm *LockManager) tryLock(target LockLevel, snapshotVersion int64) (bool, e
 			}
 			// Acquire Reserved
 			now := time.Now().UnixNano()
-			expiry := now + LeaseDuration.Nanoseconds()
+			expiry := now + lm.config.LockLeaseDuration.Nanoseconds()
 			val := make([]byte, 8)
 			binary.BigEndian.PutUint64(val, uint64(expiry))
 
@@ -310,7 +309,7 @@ func (lm *LockManager) tryLock(target LockLevel, snapshotVersion int64) (bool, e
 
 		_, err := lm.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
 			now := time.Now().UnixNano()
-			expiry := now + LeaseDuration.Nanoseconds()
+			expiry := now + lm.config.LockLeaseDuration.Nanoseconds()
 			val := make([]byte, 8)
 			binary.BigEndian.PutUint64(val, uint64(expiry))
 
@@ -362,7 +361,7 @@ func (lm *LockManager) tryLock(target LockLevel, snapshotVersion int64) (bool, e
 		// 3. Acquire EXCLUSIVE
 		_, err = lm.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
 			now := time.Now().UnixNano()
-			expiry := now + LeaseDuration.Nanoseconds()
+			expiry := now + lm.config.LockLeaseDuration.Nanoseconds()
 			val := make([]byte, 8)
 			binary.BigEndian.PutUint64(val, uint64(expiry))
 
@@ -463,7 +462,7 @@ func (lm *LockManager) Unlock(level sqlite3vfs.LockType) error {
 			// Let's use 0 for now. It assumes "I might need old data".
 
 			now := time.Now().UnixNano()
-			expiry := now + LeaseDuration.Nanoseconds()
+			expiry := now + lm.config.LockLeaseDuration.Nanoseconds()
 			val := make([]byte, 16)
 			binary.BigEndian.PutUint64(val[0:8], uint64(expiry))
 			binary.BigEndian.PutUint64(val[8:16], uint64(0))

@@ -11,21 +11,18 @@ import (
 	"github.com/apple/foundationdb/bindings/go/src/fdb/tuple"
 )
 
-const (
-	DefaultPageSize = 4096
-	MaxTxBytes      = 9 * 1024 * 1024 // 9MB safety limit
-)
-
 type PageStore struct {
 	db       fdb.Database
 	subspace subspace.Subspace
+	config   Config
 }
 
-func NewPageStore(db fdb.Database, prefix tuple.Tuple) *PageStore {
+func NewPageStore(db fdb.Database, prefix tuple.Tuple, config Config) *PageStore {
 	// Correctly create a subspace from the tuple
 	return &PageStore{
 		db:       db,
 		subspace: subspace.FromBytes(prefix.Pack()),
+		config:   config,
 	}
 }
 
@@ -52,7 +49,7 @@ func (ps *PageStore) CurrentVersion(ctx context.Context) (DBState, error) {
 		if len(pageSizeBytes) > 0 {
 			s.PageSize = int(binary.BigEndian.Uint64(pageSizeBytes))
 		} else {
-			s.PageSize = DefaultPageSize // Fallback for existing DBs
+			s.PageSize = ps.config.PageSize // Fallback for existing DBs to configured default
 		}
 		return s, nil
 	})
@@ -218,7 +215,7 @@ func (ps *PageStore) WritePages(ctx context.Context, targetVersion int64, pages 
 		batch = append(batch, kv{k: key, v: content})
 		batchSize += len(key) + len(content)
 
-		if batchSize >= MaxTxBytes {
+		if batchSize >= ps.config.MaxTxBytes {
 			if err := commit(batch); err != nil {
 				return err
 			}

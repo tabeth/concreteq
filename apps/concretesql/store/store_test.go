@@ -34,7 +34,7 @@ func TestPageStore_ReadWrite(t *testing.T) {
 		return nil, nil
 	})
 	require.NoError(t, err)
-	ps := NewPageStore(db, prefix)
+	ps := NewPageStore(db, prefix, DefaultConfig())
 	ctx := context.Background()
 
 	// Initial State
@@ -101,8 +101,8 @@ func TestLockManager(t *testing.T) {
 		tr.ClearRange(subspace.FromBytes(prefix.Pack()))
 		return nil, nil
 	})
-	lm1 := NewLockManager(db, prefix)
-	lm2 := NewLockManager(db, prefix)
+	lm1 := NewLockManager(db, prefix, DefaultConfig())
+	lm2 := NewLockManager(db, prefix, DefaultConfig())
 	ctx := context.Background()
 
 	// 1. LM1 acquires SHARED
@@ -159,7 +159,7 @@ func TestVacuum(t *testing.T) {
 		return nil, nil
 	})
 	require.NoError(t, err)
-	ps := NewPageStore(db, prefix)
+	ps := NewPageStore(db, prefix, DefaultConfig())
 	ctx := context.Background()
 
 	// Setup:
@@ -200,7 +200,7 @@ func TestVacuum_Shadowing(t *testing.T) {
 	db := NewTestDB(t)
 	prefix := tuple.Tuple{"test", "vacuum_shadow_" + uuid.New().String()}
 
-	ps := NewPageStore(db, prefix)
+	ps := NewPageStore(db, prefix, DefaultConfig())
 	ctx := context.Background()
 
 	// 1. Write V1 (Page 0)
@@ -235,8 +235,8 @@ func TestVacuum_Shadowing(t *testing.T) {
 func TestVacuum_ActiveReader(t *testing.T) {
 	db := NewTestDB(t)
 	prefix := tuple.Tuple{"test", "vacuum_active_" + uuid.New().String()}
-	ps := NewPageStore(db, prefix)
-	lm := NewLockManager(db, prefix) // Locks stored in same prefix under "locks"
+	ps := NewPageStore(db, prefix, DefaultConfig())
+	lm := NewLockManager(db, prefix, DefaultConfig()) // Locks stored in same prefix under "locks"
 	ctx := context.Background()
 
 	// 1. Write V1
@@ -280,7 +280,7 @@ func TestVacuum_ActiveReader(t *testing.T) {
 func TestPageStore_SetPageSize(t *testing.T) {
 	db := NewTestDB(t)
 	prefix := tuple.Tuple{"test", "pagesize_" + uuid.New().String()}
-	ps := NewPageStore(db, prefix)
+	ps := NewPageStore(db, prefix, DefaultConfig())
 	ctx := context.Background()
 
 	err := ps.SetPageSize(ctx, 8192)
@@ -294,7 +294,7 @@ func TestPageStore_SetPageSize(t *testing.T) {
 func TestLockManager_CheckReserved(t *testing.T) {
 	db := NewTestDB(t)
 	prefix := tuple.Tuple{"test", "reserved_" + uuid.New().String()}
-	lm := NewLockManager(db, prefix)
+	lm := NewLockManager(db, prefix, DefaultConfig())
 	ctx := context.Background()
 
 	// Initially false
@@ -322,7 +322,7 @@ func TestLockManager_CheckReserved(t *testing.T) {
 func TestLockManager_Downgrade(t *testing.T) {
 	db := NewTestDB(t)
 	prefix := tuple.Tuple{"test", "downgrade_" + uuid.New().String()}
-	lm := NewLockManager(db, prefix)
+	lm := NewLockManager(db, prefix, DefaultConfig())
 	ctx := context.Background()
 
 	// Exclusive -> Shared
@@ -354,7 +354,7 @@ func TestLockManager_Downgrade(t *testing.T) {
 func TestPageStore_WriteLargeBatch(t *testing.T) {
 	db := NewTestDB(t)
 	prefix := tuple.Tuple{"test", "largebatch_" + uuid.New().String()}
-	ps := NewPageStore(db, prefix)
+	ps := NewPageStore(db, prefix, DefaultConfig())
 	ctx := context.Background()
 
 	// 10MB Transaction Limit. We need > 10MB.
