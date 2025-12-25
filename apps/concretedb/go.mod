@@ -7,7 +7,11 @@ require (
 	github.com/tabeth/kiroku-core/libs/fdb v0.0.0-00010101000000-000000000000
 )
 
-require github.com/stretchr/testify v1.11.1 // indirect
+require (
+	github.com/aws/aws-sdk-go v1.55.8 // indirect
+	github.com/jmespath/go-jmespath v0.4.0 // indirect
+	github.com/stretchr/testify v1.11.1 // indirect
+)
 
 replace (
 	github.com/tabeth/kiroku-core/libs/fdb => ../../libs/fdb

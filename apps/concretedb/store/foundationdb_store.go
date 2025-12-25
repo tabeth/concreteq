@@ -605,6 +605,49 @@ func (s *FoundationDBStore) UpdateTable(ctx context.Context, request *models.Upd
 			return nil, ErrTableNotFound
 		}
 
+		// 1.5. Update AttributeDefinitions
+		for _, newAttr := range request.AttributeDefinitions {
+			found := false
+			for i, existing := range table.AttributeDefinitions {
+				if existing.AttributeName == newAttr.AttributeName {
+					table.AttributeDefinitions[i] = newAttr
+					found = true
+					break
+				}
+			}
+			if !found {
+				table.AttributeDefinitions = append(table.AttributeDefinitions, newAttr)
+			}
+		}
+
+		// 1.6 Process GSI Updates
+		// Note: Robust implementation should validate schemas and backfill data.
+		// For MVP, we metadata-only update and set status to ACTIVE.
+		if len(request.GlobalSecondaryIndexUpdates) > 0 {
+			for _, update := range request.GlobalSecondaryIndexUpdates {
+				if update.Create != nil {
+					gsi := models.GlobalSecondaryIndex{
+						IndexName:             update.Create.IndexName,
+						KeySchema:             update.Create.KeySchema,
+						Projection:            update.Create.Projection,
+						ProvisionedThroughput: update.Create.ProvisionedThroughput,
+						IndexStatus:           "ACTIVE",
+					}
+					table.GlobalSecondaryIndexes = append(table.GlobalSecondaryIndexes, gsi)
+				}
+				// Handle Delete/Update as needed for completeness
+				if update.Delete != nil {
+					newIndexes := []models.GlobalSecondaryIndex{}
+					for _, existing := range table.GlobalSecondaryIndexes {
+						if existing.IndexName != update.Delete.IndexName {
+							newIndexes = append(newIndexes, existing)
+						}
+					}
+					table.GlobalSecondaryIndexes = newIndexes
+				}
+			}
+		}
+
 		// 2. Process Stream Updates
 		if request.StreamSpecification != nil {
 			if request.StreamSpecification.StreamEnabled {

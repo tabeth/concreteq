@@ -70,6 +70,14 @@ func (h *DynamoDBHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.updateTimeToLiveHandler(w, r)
 	case "DynamoDB_20120810.DescribeTimeToLive":
 		h.describeTimeToLiveHandler(w, r)
+	case "DynamoDB_20120810.ListStreams":
+		h.listStreamsHandler(w, r)
+	case "DynamoDB_20120810.DescribeStream":
+		h.describeStreamHandler(w, r)
+	case "DynamoDB_20120810.GetShardIterator":
+		h.getShardIteratorHandler(w, r)
+	case "DynamoDB_20120810.GetRecords":
+		h.getRecordsHandler(w, r)
 	default:
 		writeError(w, "UnknownOperationException", "The requested operation is not supported.", http.StatusBadRequest)
 	}
