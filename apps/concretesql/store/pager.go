@@ -254,6 +254,47 @@ func (ps *PageStore) Vacuum(ctx context.Context) error {
 	}
 	currentVersion := state.Version
 
+	// 1. Determine Minimum Active Version from Shared Locks
+	// Default to currentVersion if no readers.
+	// If there are readers with Version < currentVersion, we must preserve pages for them.
+	minActiveVersion := currentVersion
+
+	// Function to scan shared locks
+	// We need to access locks subspace. PageStore has "db" and "subspace" (prefix).
+	// LockManager uses prefix + "locks".
+	// We reconstruct that path.
+	lockSharedSubspace := ps.subspace.Sub("locks", "shared")
+
+	_, err = ps.db.ReadTransact(func(r fdb.ReadTransaction) (interface{}, error) {
+		rr := r.GetRange(lockSharedSubspace, fdb.RangeOptions{})
+		iter := rr.Iterator()
+		for iter.Advance() {
+			kv, err := iter.Get()
+			if err != nil {
+				return nil, err
+			}
+
+			// Value format: [Expiry 8b][Version 8b]
+			if len(kv.Value) == 16 {
+				expiry := int64(binary.BigEndian.Uint64(kv.Value[0:8]))
+				if time.Now().UnixNano() < expiry {
+					// Active Lock
+					ver := int64(binary.BigEndian.Uint64(kv.Value[8:16]))
+					// Version 0 means "reading genesis" or "unknown/safe".
+					// If 0, we must preserve EVERYTHING from 0? That prevents any GC.
+					// Let's assume 0 is valid and implies full history retention if active.
+					if ver < minActiveVersion {
+						minActiveVersion = ver
+					}
+				}
+			}
+		}
+		return nil, nil
+	})
+	if err != nil {
+		return err
+	}
+
 	// Manual range construction
 	begin := ps.subspace.Sub("data").FDBKey()
 	// end is prefix + 0xFF
@@ -332,14 +373,105 @@ func (ps *PageStore) Vacuum(ctx context.Context) error {
 					tr.Clear(kv.Key)
 				} else {
 					// Valid version candidate
-					// If we have a previously kept version for THIS page, it is now shadowed by `ver`.
+					// Rules:
+					// 1. We must keep the version `V` that satisfies `V <= minActiveVersion` and is the *latest* such version.
+					//    (This is the version the active reader sees).
+					// 2. We must keep the version `V` that satisfies `V <= currentVersion` and is the *latest* such version.
+					//    (This is the current state).
+
+					// Actually, simplified rule:
+					// A version `V` is needed if there exists a Snapshot S (where S is minActiveVersion OR currentVersion)
+					// such that `V` is the visible version for S.
+					// `V` is visible for S if `V <= S` and there is no `V'` such that `V < V' <= S`.
+
+					// Since we iterate versions, detecting this "next" relationship is hard in a single pass unless we look ahead or keep multiple candidates.
+					// But we only care about `minActiveVersion` and `currentVersion`.
+					// Wait, if we have multiple readers at different older versions, we need `minActive` to be the *minimum* of them.
+					// If we preserve up to `minActive`, do we cover everyone?
+					// Yes, because if we keep `V` for `minActive`, and some other reader is at `minActive + 5`,
+					// and we have `V` (at active) and `V_new` (at active+5).
+					// Reader(active) needs `V`.
+					// Reader(active+5) needs `V_new`.
+					// So `minActive` logic alone isn't enough if there are intermediate versions.
+					// BUT `Vacuum` logic usually is: "Delete V if it is shadowed by V_next AND V_next <= minActive".
+					// If V_next <= minActive, then ALL active readers (who are >= minActive) will see V_next (or something newer).
+					// None of them will see V.
+					// So the condition is: Can we delete `V`?
+					// Yes IF there exists `V_next` > `V` AND `V_next` <= `minActiveVersion`.
+
+					// Here: `ver` is the version we are looking at.
+					// `lKeptKey` is the previous version we kept (older than `ver`).
+					// We are iterating keys. FDB iteration order for integers?
+					// Key structure: ("data", PageID, VersionID).
+					// Tuple packing of integers preserves order.
+					// So we see Version 1, then Version 2, then Version 3.
+
+					// When we see `ver` (say V2):
+					// `lKeptKey` points to V1.
+					// `lKeptPageID` is PageID.
+					// Can we delete V1?
+					// Yes, if V2 <= minActiveVersion.
+					// If V2 > minActiveVersion, then Reader(minActive) needs V1 (because they don't see V2).
+
+					// So logic:
+					// If `ver` (current scanned) <= minActiveVersion:
+					//     It shadows `lKeptKey`. `lKeptKey` is obsolete. Delete `lKeptKey`.
+					//     `ver` becomes `lKeptKey`.
+					// If `ver` > minActiveVersion:
+					//     It does NOT shadow `lKeptKey` for the slowest reader.
+					//     We must KEEP `lKeptKey`.
+					//     But do we keep `ver`?
+					//     Yes, `ver` is valid for newer readers (or current).
+					//     So `lKeptKey` remains kept.
+					//     `ver` ALSO becomes a kept key?
+					//     Actually, if we have a chain V1, V2, V3.
+					//     minActive = V1.
+					//     Scan V1. Kept = V1.
+					//     Scan V2. V2 > minActive.
+					//     V2 shadows V1 for *new* guys, but not for minActive.
+					//     So we don't delete V1.
+					//     We keep V2? Yes.
+					//     Update `lKeptKey` = V2?
+					//     If we update `lKeptKey` to V2, and then see V3.
+					//     V3 > minActive.
+					//     Does V3 shadow V2?
+					//     Yes, for everyone >= V3.
+					//     Does anyone need V2?
+					//     Readers between V2 and V3.
+					//     We only track `minActive`. We assume *conservative* approach:
+					//     If we only track MIN, we assume there *might* be readers anywhere between min and current.
+					//     So we must keep ALL versions > minActiveVersion.
+					//     And we must keep ONE version <= minActiveVersion (the latest one).
+
+					// 2. It is needed if it is the LATEST version <= minActive.
+					// We can only know if it is the latest if we see the *next* one.
+					// But we are processing strictly in order.
+					// So, when we are at `ver` (V2), we look at `lKeptKey` (V1).
+					// If V2 <= minActive:
+					//    V2 shadows V1. V1 is not needed. Delete V1.
+					//    V2 becomes the candidate for "Latest <= minActive".
+					// If V2 > minActive:
+					//    V2 cannot shadow V1 for the minActive reader.
+					//    V1 is verified as "Latest <= minActive".
+					//    We keep V1 (already kept).
+					//    V2 is also kept (Rule 1).
+
 					if lKeptKey != nil {
-						tr.Clear(lKeptKey)
+						// Check if current `ver` shadows `lKeptKey` SAFELY.
+						// Safely means `ver` <= minActiveVersion.
+						if ver <= minActiveVersion {
+							// Safe to delete old one
+							tr.Clear(lKeptKey)
+						} else {
+							// Not safe. `lKeptKey` is preserved.
+							// And `ver` is preserved (will be set as lKeptKey below).
+						}
 					}
-					// This version becomes the kept one
+
 					lKeptKey = kv.Key
 					lKeptPageID = pageID
 				}
+
 			}
 
 			done := count < 1000

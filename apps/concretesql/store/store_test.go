@@ -106,11 +106,13 @@ func TestLockManager(t *testing.T) {
 	ctx := context.Background()
 
 	// 1. LM1 acquires SHARED
-	err := lm1.Lock(ctx, sqlite3vfs.LockShared)
+	err := lm1.Lock(ctx, sqlite3vfs.LockShared, 0)
+
 	require.NoError(t, err)
 
 	// 2. LM2 acquires SHARED (Allowed)
-	err = lm2.Lock(ctx, sqlite3vfs.LockShared)
+	err = lm2.Lock(ctx, sqlite3vfs.LockShared, 0)
+
 	require.NoError(t, err)
 
 	// 3. LM1 tries EXCLUSIVE (Should Block because LM2 has SHARED)
@@ -120,7 +122,8 @@ func TestLockManager(t *testing.T) {
 	ctxTimeout, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
 	defer cancel()
 
-	err = lm1.Lock(ctxTimeout, sqlite3vfs.LockExclusive)
+	err = lm1.Lock(ctxTimeout, sqlite3vfs.LockExclusive, 0)
+
 	require.Error(t, err) // Should timeout
 
 	// 4. LM2 Releases SHARED
@@ -133,7 +136,8 @@ func TestLockManager(t *testing.T) {
 	// Start async because Lock blocks
 	done := make(chan error)
 	go func() {
-		done <- lm1.Lock(ctx2, sqlite3vfs.LockExclusive)
+		done <- lm1.Lock(ctx2, sqlite3vfs.LockExclusive, 0)
+
 	}()
 
 	// Ensure cleanup
@@ -226,4 +230,151 @@ func TestVacuum_Shadowing(t *testing.T) {
 	data, err = ps.ReadPage(ctx, 2, 0)
 	require.NoError(t, err)
 	assert.Equal(t, []byte("v2_current"), data)
+}
+
+func TestVacuum_ActiveReader(t *testing.T) {
+	db := NewTestDB(t)
+	prefix := tuple.Tuple{"test", "vacuum_active_" + uuid.New().String()}
+	ps := NewPageStore(db, prefix)
+	lm := NewLockManager(db, prefix) // Locks stored in same prefix under "locks"
+	ctx := context.Background()
+
+	// 1. Write V1
+	require.NoError(t, ps.WritePages(ctx, 1, map[int][]byte{0: []byte("v1")}))
+	require.NoError(t, ps.SetVersionAndSize(ctx, 1, 4096, "", 0))
+
+	// 2. Write V2 (Shadows V1)
+	require.NoError(t, ps.WritePages(ctx, 2, map[int][]byte{0: []byte("v2")}))
+	require.NoError(t, ps.SetVersionAndSize(ctx, 2, 4096, "", 1))
+
+	// 3. Start Reader at V1 (Acquire Shared Lock with Version 1)
+	// We manually acquire the lock as if we were a client.
+	err := lm.Lock(ctx, sqlite3vfs.LockShared, 1)
+	require.NoError(t, err)
+
+	// 4. Run Vacuum
+	// Should NOT delete V1 because active reader needs it.
+	err = ps.Vacuum(ctx)
+	require.NoError(t, err)
+
+	// 5. Verify V1 still exists
+	data, err := ps.ReadPage(ctx, 1, 0)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("v1"), data, "V1 should be preserved for active reader")
+
+	// 6. Release Reader Lock
+	err = lm.Unlock(sqlite3vfs.LockNone)
+	require.NoError(t, err)
+
+	// 7. Run Vacuum again
+	// Now V1 should be deleted because V2 shadows it and no active reader needs < V2.
+	err = ps.Vacuum(ctx)
+	require.NoError(t, err)
+
+	// 8. Verify V1 gone
+	data, err = ps.ReadPage(ctx, 1, 0)
+	require.NoError(t, err)
+	assert.Nil(t, data, "V1 should be deleted after reader releases lock")
+}
+
+func TestPageStore_SetPageSize(t *testing.T) {
+	db := NewTestDB(t)
+	prefix := tuple.Tuple{"test", "pagesize_" + uuid.New().String()}
+	ps := NewPageStore(db, prefix)
+	ctx := context.Background()
+
+	err := ps.SetPageSize(ctx, 8192)
+	require.NoError(t, err)
+
+	state, err := ps.CurrentVersion(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 8192, state.PageSize)
+}
+
+func TestLockManager_CheckReserved(t *testing.T) {
+	db := NewTestDB(t)
+	prefix := tuple.Tuple{"test", "reserved_" + uuid.New().String()}
+	lm := NewLockManager(db, prefix)
+	ctx := context.Background()
+
+	// Initially false
+	res, err := lm.CheckReserved()
+	require.NoError(t, err)
+	assert.False(t, res)
+
+	// Acquire Reserved (via Shared -> Reserved)
+	err = lm.Lock(ctx, sqlite3vfs.LockReserved, 0)
+	require.NoError(t, err)
+
+	// Should be true
+	res, err = lm.CheckReserved()
+	require.NoError(t, err)
+	assert.True(t, res)
+
+	// Release
+	err = lm.Unlock(sqlite3vfs.LockNone)
+	require.NoError(t, err)
+	res, err = lm.CheckReserved()
+	require.NoError(t, err)
+	assert.False(t, res)
+}
+
+func TestLockManager_Downgrade(t *testing.T) {
+	db := NewTestDB(t)
+	prefix := tuple.Tuple{"test", "downgrade_" + uuid.New().String()}
+	lm := NewLockManager(db, prefix)
+	ctx := context.Background()
+
+	// Exclusive -> Shared
+	err := lm.Lock(ctx, sqlite3vfs.LockExclusive, 100)
+	require.NoError(t, err)
+
+	// Verify Exclusive
+	// We can check internal state or external observation
+	assert.Equal(t, LockExclusive, lm.currentLevel)
+
+	// Downgrade to Shared
+	err = lm.Unlock(sqlite3vfs.LockShared)
+	require.NoError(t, err)
+	assert.Equal(t, LockShared, lm.currentLevel)
+
+	// Verify Shared Lock exists in DB
+	// Just by checking we can re-upgrade without error?
+	// Or check CheckReserved is false
+	res, err := lm.CheckReserved()
+	require.NoError(t, err)
+	assert.False(t, res)
+
+	// Unlock all
+	err = lm.Unlock(sqlite3vfs.LockNone)
+	require.NoError(t, err)
+	assert.Equal(t, LockNone, lm.currentLevel)
+}
+
+func TestPageStore_WriteLargeBatch(t *testing.T) {
+	db := NewTestDB(t)
+	prefix := tuple.Tuple{"test", "largebatch_" + uuid.New().String()}
+	ps := NewPageStore(db, prefix)
+	ctx := context.Background()
+
+	// 10MB Transaction Limit. We need > 10MB.
+	// 4KB Pages. 2500 pages = 10MB approx.
+	// Let's do 3000 pages of 4KB.
+	pages := make(map[int][]byte)
+	payload := make([]byte, 4096) // empty payload, but takes space
+	for i := 0; i < 3000; i++ {
+		pages[i] = payload
+	}
+
+	err := ps.WritePages(ctx, 1, pages)
+	require.NoError(t, err)
+
+	// Verify we can read page 0 and page 2999
+	d, err := ps.ReadPage(ctx, 1, 0)
+	require.NoError(t, err)
+	assert.Equal(t, payload, d)
+
+	d, err = ps.ReadPage(ctx, 1, 2999)
+	require.NoError(t, err)
+	assert.Equal(t, payload, d)
 }

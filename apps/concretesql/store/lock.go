@@ -57,7 +57,11 @@ func NewLockManager(db fdb.Database, prefix tuple.Tuple) *LockManager {
 // It blocks (with polling) until successful or error.
 // Lock attempts to upgrade the lock to the requested level.
 // It blocks (with polling) until successful or error.
-func (lm *LockManager) Lock(ctx context.Context, level sqlite3vfs.LockType) error {
+// Lock attempts to upgrade the lock to the requested level.
+// It blocks (with polling) until successful or error.
+// For SHARED locks, snapshotVersion explicitly declares what version the reader is using.
+func (lm *LockManager) Lock(ctx context.Context, level sqlite3vfs.LockType, snapshotVersion int64) error {
+
 	target := LockLevel(level)
 
 	// Poll interval
@@ -85,7 +89,8 @@ func (lm *LockManager) Lock(ctx context.Context, level sqlite3vfs.LockType) erro
 
 			// Try to acquire
 			// Try to acquire
-			ok, err := lm.tryLock(nextStep)
+			ok, err := lm.tryLock(nextStep, snapshotVersion)
+
 			if err != nil {
 				return err
 			}
@@ -150,16 +155,33 @@ func (lm *LockManager) refreshLease() {
 
 		// Always refresh Shared if we have it
 		if lm.currentLevel >= LockShared {
-			tr.Set(lm.lockSubspace.Pack(tuple.Tuple{"shared", lm.id}), val)
+			// We need to preserve the Version if it exists.
+			// However, we don't store the version in local state easily (except maybe we should?).
+			// Or we just read the old value to get the version?
+			// Reading inside refresh adds latency.
+			// Let's rely on checking the key.
+			key := lm.lockSubspace.Pack(tuple.Tuple{"shared", lm.id})
+			existing := tr.Get(key).MustGet()
+
+			if len(existing) == 16 {
+				// Preserve version
+				// New expiry + Old Version
+				newVal := make([]byte, 16)
+				binary.BigEndian.PutUint64(newVal[0:8], uint64(expiry))
+				copy(newVal[8:16], existing[8:16])
+				tr.Set(key, newVal)
+			} else {
+				// Setup default or overwrite?
+				// If we are Shared, we SHOULD have a version.
+				// But for backwards compat or non-versioned locks?
+				// Just update expiry.
+				tr.Set(key, val)
+			}
 		}
 
 		// Refresh others if we own them
 		if lm.currentLevel >= LockReserved {
-			// Verify we still own it? Or just overwrite?
-			// To be safe, we should check ownership, but standard FDB lock approach implies we trust our state
-			// unless we were fenced.
-			// For PoC, blindly refresh.
-			tr.Set(lm.lockSubspace.Pack(tuple.Tuple{"reserved"}), val) // Key does not contain ID!
+			tr.Set(lm.lockSubspace.Pack(tuple.Tuple{"reserved"}), val)
 		}
 		if lm.currentLevel >= LockPending {
 			tr.Set(lm.lockSubspace.Pack(tuple.Tuple{"pending"}), val)
@@ -170,8 +192,6 @@ func (lm *LockManager) refreshLease() {
 		return nil, nil
 	})
 
-	// If refresh fails (e.g. FDB down), we might lose the lock.
-	// In a strict implementation, we might panic or close the file.
 	if err != nil {
 		// Log warning?
 	}
@@ -181,25 +201,25 @@ func (lm *LockManager) refreshLease() {
 // Returns ownerID (if available/stored) and validity.
 // Current impl stores Expiry as value for single-slots (Reserved/Pending/Exclusive)
 // For Shared: Key=("shared", OwnerID), Value=Expiry
+// isLocked checks if a lock key is present and valid (not expired)
 func (lm *LockManager) isLocked(val []byte) bool {
 	if len(val) == 0 {
 		return false // Not locked
 	}
 
-	if len(val) != 8 {
-		// Assume legacy string format or invalid -> treat as valid to be safe?
-		// Or treat as garbage/expired?
-		// Let's assume expired if not 8 bytes to allow self-correction?
-		// Returning true (locked) is safer default.
-		return true
+	if len(val) == 8 || len(val) == 16 {
+		// First 8 bytes are expiry
+		expiry := int64(binary.BigEndian.Uint64(val[0:8]))
+		return time.Now().UnixNano() < expiry
 	}
 
-	expiry := int64(binary.BigEndian.Uint64(val))
-	return time.Now().UnixNano() < expiry
+	// Assume legacy/invalid is valid lock to be safe?
+	return true
 }
 
 // tryLock attempts a single state transition
-func (lm *LockManager) tryLock(target LockLevel) (bool, error) {
+func (lm *LockManager) tryLock(target LockLevel, snapshotVersion int64) (bool, error) {
+
 	// Implementation based on SQLite "The Locking Protocol"
 
 	// NONE -> SHARED
@@ -221,8 +241,11 @@ func (lm *LockManager) tryLock(target LockLevel) (bool, error) {
 			// Acquire Shared
 			now := time.Now().UnixNano()
 			expiry := now + LeaseDuration.Nanoseconds()
-			val := make([]byte, 8)
-			binary.BigEndian.PutUint64(val, uint64(expiry))
+
+			// Store Expiry (8) + Version (8)
+			val := make([]byte, 16)
+			binary.BigEndian.PutUint64(val[0:8], uint64(expiry))
+			binary.BigEndian.PutUint64(val[8:16], uint64(snapshotVersion))
 
 			tr.Set(lm.lockSubspace.Pack(tuple.Tuple{"shared", lm.id}), val)
 			return nil, nil
@@ -266,8 +289,9 @@ func (lm *LockManager) tryLock(target LockLevel) (bool, error) {
 	// SHARED -> EXCLUSIVE (Automatic escalation)
 	// Must upgrade to RESERVED first.
 	if lm.currentLevel == LockShared && target == LockExclusive {
-		ok, err := lm.tryLock(LockReserved)
+		ok, err := lm.tryLock(LockReserved, snapshotVersion)
 		if err != nil {
+
 			return false, err
 		}
 		if !ok {
@@ -422,13 +446,31 @@ func (lm *LockManager) Unlock(level sqlite3vfs.LockType) error {
 				tr.Clear(lm.lockSubspace.Pack(tuple.Tuple{"exclusive"}))
 			}
 			// Ensure Shared lock is set (it should be, but just in case)
+			// We need to restore it with SOME version.
+			// Ideally we shouldn't be downgrading without knowing our version.
+			// But Unlock() doesn't take version.
+			// AND we are downgrading from Exclusive. We probably want to keep the version we had when we were Shared?
+			// But we cleared it.
+			// For now, let's just allow it (Version 0?) or reuse current?
+			// Realistically, SQLite downgrades after a commit. It essentially "is done" with the transaction but keeps Shared for potentially new read.
+			// Usually it downgrades to NONE.
+			// If it downgrades to Shared, it might be starting a new read?
+			// Let's use 0 (safest - "oldest possible" so valid for everything, but might block vacuum? No, 0 means "reading genesis". Safe.)
+			// Actually 0 might block Vacuum from deleting version 1.
+			// Maybe use Current Time as version? No.
+			// If we don't know, we shouldn't claim a version.
+			// Or we should read the current version?
+			// Let's use 0 for now. It assumes "I might need old data".
+
 			now := time.Now().UnixNano()
 			expiry := now + LeaseDuration.Nanoseconds()
-			val := make([]byte, 8)
-			binary.BigEndian.PutUint64(val, uint64(expiry))
+			val := make([]byte, 16)
+			binary.BigEndian.PutUint64(val[0:8], uint64(expiry))
+			binary.BigEndian.PutUint64(val[8:16], uint64(0))
 
 			tr.Set(lm.lockSubspace.Pack(tuple.Tuple{"shared", lm.id}), val)
 			return nil, nil
+
 		})
 		if err != nil {
 			return err
@@ -456,6 +498,9 @@ func (lm *LockManager) CheckReserved() (bool, error) {
 // ParseExpiry helps tests parse the expiry time
 // ParseExpiry helps tests parse the expiry time
 func ParseExpiry(val []byte) int64 {
+	if len(val) == 16 {
+		return int64(binary.BigEndian.Uint64(val[0:8]))
+	}
 	if len(val) != 8 {
 		return 0
 	}

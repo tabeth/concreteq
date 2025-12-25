@@ -327,7 +327,7 @@ func (f *File) Lock(elock sqlite3vfs.LockType) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second) // 10s wait for lock
 	defer cancel()
 
-	if err := f.lockManager.Lock(ctx, elock); err != nil {
+	if err := f.lockManager.Lock(ctx, elock, f.baseVersion); err != nil {
 		return err
 	}
 
