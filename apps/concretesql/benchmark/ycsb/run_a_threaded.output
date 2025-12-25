@@ -555,3 +555,322 @@ Acquired Lock 1. Ver: 1766682768443512543 Size: 1486848
 NewFile: /tmp/bench_optimized.db-journal
 Acquired Lock 1. Ver: 1766682768443512543 Size: 1486848
 LockManager failed: context deadline exceeded
+LockManager failed: context deadline exceeded
+LockManager failed: context deadline exceeded
+LockManager failed: context deadline exceeded
+LockManager failed: context deadline exceeded
+Acquired Lock 1. Ver: 1766682768443512543 Size: 1486848
+Acquired Lock 1. Ver: 1766682768443512543 Size: 1486848
+Acquired Lock 1. Ver: 1766682768443512543 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766682768443512543 Size: 1486848
+LockManager failed: context deadline exceeded
+LockManager failed: context deadline exceeded
+LockManager failed: context deadline exceeded
+LockManager failed: context deadline exceeded
+Acquired Lock 1. Ver: 1766682768443512543 Size: 1486848
+Acquired Lock 1. Ver: 1766682768443512543 Size: 1486848
+Acquired Lock 1. Ver: 1766682768443512543 Size: 1486848
+Acquired Lock 1. Ver: 1766682768443512543 Size: 1486848
+Acquired Lock 1. Ver: 1766682768443512543 Size: 1486848
+Acquired Lock 1. Ver: 1766682768443512543 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766682768443512543 Size: 1486848
+Acquired Lock 1. Ver: 1766682768443512543 Size: 1486848
+LockManager failed: context deadline exceeded
+LockManager failed: context deadline exceeded
+LockManager failed: context deadline exceeded
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766682838426194280 Size: 1486848
+Acquired Lock 1. Ver: 1766682838426194280 Size: 1486848
+Acquired Lock 1. Ver: 1766682838426194280 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766682838456882789 Size: 1486848
+Acquired Lock 1. Ver: 1766682838456882789 Size: 1486848
+Acquired Lock 1. Ver: 1766682838456882789 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766682838456882789 Size: 1486848
+Acquired Lock 1. Ver: 1766682838529591198 Size: 1486848
+Acquired Lock 1. Ver: 1766682838529591198 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766682838557489101 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766682838580526288 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766682838599846842 Size: 1486848
+Acquired Lock 1. Ver: 1766682838599846842 Size: 1486848
+Acquired Lock 1. Ver: 1766682838599846842 Size: 1486848
+Acquired Lock 1. Ver: 1766682838599846842 Size: 1486848
+Acquired Lock 1. Ver: 1766682838599846842 Size: 1486848
+Acquired Lock 1. Ver: 1766682838599846842 Size: 1486848
+Acquired Lock 1. Ver: 1766682838599846842 Size: 1486848
+Acquired Lock 1. Ver: 1766682838599846842 Size: 1486848
+Acquired Lock 1. Ver: 1766682838599846842 Size: 1486848
+Acquired Lock 1. Ver: 1766682838599846842 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+LockManager failed: context deadline exceeded
+LockManager failed: context deadline exceeded
+LockManager failed: context deadline exceeded
+Acquired Lock 1. Ver: 1766682848645312377 Size: 1486848
+Acquired Lock 1. Ver: 1766682848645312377 Size: 1486848
+Acquired Lock 1. Ver: 1766682848645312377 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766682848682746076 Size: 1486848
+Acquired Lock 1. Ver: 1766682848682746076 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+LockManager failed: context deadline exceeded
+LockManager failed: context deadline exceeded
+LockManager failed: context deadline exceeded
+LockManager failed: context deadline exceeded
+Acquired Lock 1. Ver: 1766682848682746076 Size: 1486848
+Acquired Lock 1. Ver: 1766682848682746076 Size: 1486848
+Acquired Lock 1. Ver: 1766682848682746076 Size: 1486848
+Acquired Lock 1. Ver: 1766682848682746076 Size: 1486848
+Acquired Lock 1. Ver: 1766682848682746076 Size: 1486848
+Acquired Lock 1. Ver: 1766682848682746076 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766682848682746076 Size: 1486848
+LockManager failed: context deadline exceeded
+LockManager failed: context deadline exceeded
+LockManager failed: context deadline exceeded
+LockManager failed: context deadline exceeded
+Acquired Lock 1. Ver: 1766682848682746076 Size: 1486848
+Acquired Lock 1. Ver: 1766682848682746076 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766682848682746076 Size: 1486848
+LockManager failed: context deadline exceeded
+LockManager failed: context deadline exceeded
+Acquired Lock 1. Ver: 1766682878698790253 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766682878723619618 Size: 1486848
+Acquired Lock 1. Ver: 1766682878723619618 Size: 1486848
+Acquired Lock 1. Ver: 1766682878723619618 Size: 1486848
+Acquired Lock 1. Ver: 1766682878723619618 Size: 1486848
+Acquired Lock 1. Ver: 1766682878723619618 Size: 1486848
+Acquired Lock 1. Ver: 1766682878723619618 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+LockManager failed: context deadline exceeded
+LockManager failed: context deadline exceeded
+LockManager failed: context deadline exceeded
+LockManager failed: context deadline exceeded
+Acquired Lock 1. Ver: 1766682878723619618 Size: 1486848
+Acquired Lock 1. Ver: 1766682878723619618 Size: 1486848
+Acquired Lock 1. Ver: 1766682878723619618 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766682878723619618 Size: 1486848
+LockManager failed: context deadline exceeded
+LockManager failed: context deadline exceeded
+LockManager failed: context deadline exceeded
+LockManager failed: context deadline exceeded
+Acquired Lock 1. Ver: 1766682878723619618 Size: 1486848
+Acquired Lock 1. Ver: 1766682878723619618 Size: 1486848
+Acquired Lock 1. Ver: 1766682878723619618 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766682878723619618 Size: 1486848
+Acquired Lock 1. Ver: 1766682878723619618 Size: 1486848
+LockManager failed: context deadline exceeded
+LockManager failed: context deadline exceeded
+LockManager failed: context deadline exceeded
+LockManager failed: context deadline exceeded
+Acquired Lock 1. Ver: 1766682878723619618 Size: 1486848
+Acquired Lock 1. Ver: 1766682878723619618 Size: 1486848
+Acquired Lock 1. Ver: 1766682878723619618 Size: 1486848
+Acquired Lock 1. Ver: 1766682878723619618 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766682878723619618 Size: 1486848
+Acquired Lock 1. Ver: 1766682878723619618 Size: 1486848
+LockManager failed: context deadline exceeded
+LockManager failed: context deadline exceeded
+LockManager failed: context deadline exceeded
+LockManager failed: context deadline exceeded
+Acquired Lock 1. Ver: 1766682878723619618 Size: 1486848
+Acquired Lock 1. Ver: 1766682878723619618 Size: 1486848
+Acquired Lock 1. Ver: 1766682878723619618 Size: 1486848
+Acquired Lock 1. Ver: 1766682878723619618 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766682878723619618 Size: 1486848
+LockManager failed: context deadline exceeded
+LockManager failed: context deadline exceeded
+LockManager failed: context deadline exceeded
+Acquired Lock 1. Ver: 1766682948655246994 Size: 1486848
+Acquired Lock 1. Ver: 1766682948655246994 Size: 1486848
+Acquired Lock 1. Ver: 1766682948655246994 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766682948691844168 Size: 1486848
+Acquired Lock 1. Ver: 1766682948691844168 Size: 1486848
+Acquired Lock 1. Ver: 1766682948691844168 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766682948721623989 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766682948750945982 Size: 1486848
+Acquired Lock 1. Ver: 1766682948750945982 Size: 1486848
+Acquired Lock 1. Ver: 1766682948750945982 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+LockManager failed: context deadline exceeded
+LockManager failed: context deadline exceeded
+LockManager failed: context deadline exceeded
+LockManager failed: context deadline exceeded
+Acquired Lock 1. Ver: 1766682948750945982 Size: 1486848
+Acquired Lock 1. Ver: 1766682948750945982 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766682948750945982 Size: 1486848
+Acquired Lock 1. Ver: 1766682948750945982 Size: 1486848
+LockManager failed: context deadline exceeded
+LockManager failed: context deadline exceeded
+LockManager failed: context deadline exceeded
+LockManager failed: context deadline exceeded
+Acquired Lock 1. Ver: 1766682948750945982 Size: 1486848
+Acquired Lock 1. Ver: 1766682948750945982 Size: 1486848
+Acquired Lock 1. Ver: 1766682948750945982 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+LockManager failed: context deadline exceeded
+LockManager failed: context deadline exceeded
+LockManager failed: context deadline exceeded
+LockManager failed: context deadline exceeded
+Acquired Lock 1. Ver: 1766682988776067378 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766682988799012374 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766682988799012374 Size: 1486848
+LockManager failed: context deadline exceeded
+LockManager failed: context deadline exceeded
+LockManager failed: context deadline exceeded
+LockManager failed: context deadline exceeded
+Acquired Lock 1. Ver: 1766682988799012374 Size: 1486848
+Acquired Lock 1. Ver: 1766682988799012374 Size: 1486848
+Acquired Lock 1. Ver: 1766682988799012374 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766682988799012374 Size: 1486848
+Acquired Lock 1. Ver: 1766682988799012374 Size: 1486848
+LockManager failed: context deadline exceeded
+LockManager failed: context deadline exceeded
+LockManager failed: context deadline exceeded
+LockManager failed: context deadline exceeded
+Acquired Lock 1. Ver: 1766682988799012374 Size: 1486848
+Acquired Lock 1. Ver: 1766682988799012374 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766682988799012374 Size: 1486848
+LockManager failed: context deadline exceeded
+LockManager failed: context deadline exceeded
+LockManager failed: context deadline exceeded
+LockManager failed: context deadline exceeded
+Acquired Lock 1. Ver: 1766682988799012374 Size: 1486848
+Acquired Lock 1. Ver: 1766682988799012374 Size: 1486848
+Acquired Lock 1. Ver: 1766682988799012374 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+LockManager failed: context deadline exceeded
+LockManager failed: context deadline exceeded
+LockManager failed: context deadline exceeded
+LockManager failed: context deadline exceeded
+LockManager failed: context deadline exceeded
+Acquired Lock 1. Ver: 1766682988799012374 Size: 1486848
+Acquired Lock 1. Ver: 1766682988799012374 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683048685128520 Size: 1486848
+Acquired Lock 1. Ver: 1766683048685128520 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+LockManager failed: context deadline exceeded
+LockManager failed: context deadline exceeded
+LockManager failed: context deadline exceeded
+Acquired Lock 1. Ver: 1766683058710515892 Size: 1486848
+Acquired Lock 1. Ver: 1766683058710515892 Size: 1486848
+Acquired Lock 1. Ver: 1766683058710515892 Size: 1486848
+Acquired Lock 1. Ver: 1766683058710515892 Size: 1486848
+Acquired Lock 1. Ver: 1766683058710515892 Size: 1486848
+Acquired Lock 1. Ver: 1766683058710515892 Size: 1486848
+Acquired Lock 1. Ver: 1766683058710515892 Size: 1486848
+Acquired Lock 1. Ver: 1766683058710515892 Size: 1486848
+Acquired Lock 1. Ver: 1766683058710515892 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683058710515892 Size: 1486848
+Acquired Lock 1. Ver: 1766683058710515892 Size: 1486848
+Acquired Lock 1. Ver: 1766683058811425014 Size: 1486848
+Acquired Lock 1. Ver: 1766683058811425014 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683058841808791 Size: 1486848
+Acquired Lock 1. Ver: 1766683058841808791 Size: 1486848
+Acquired Lock 1. Ver: 1766683058841808791 Size: 1486848
+Acquired Lock 1. Ver: 1766683058841808791 Size: 1486848
+Acquired Lock 1. Ver: 1766683058841808791 Size: 1486848
+Acquired Lock 1. Ver: 1766683058841808791 Size: 1486848
+Acquired Lock 1. Ver: 1766683058841808791 Size: 1486848
+Acquired Lock 1. Ver: 1766683058841808791 Size: 1486848
+Acquired Lock 1. Ver: 1766683058841808791 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+LockManager failed: context deadline exceeded
+LockManager failed: context deadline exceeded
+LockManager failed: context deadline exceeded
+Acquired Lock 1. Ver: 1766683068882909621 Size: 1486848
+Acquired Lock 1. Ver: 1766683068882909621 Size: 1486848
+Acquired Lock 1. Ver: 1766683068882909621 Size: 1486848
+Acquired Lock 1. Ver: 1766683068882909621 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683068882909621 Size: 1486848
+Acquired Lock 1. Ver: 1766683068882909621 Size: 1486848
+Acquired Lock 1. Ver: 1766683068882909621 Size: 1486848
+LockManager failed: context deadline exceeded
+LockManager failed: context deadline exceeded
+LockManager failed: context deadline exceeded
+LockManager failed: context deadline exceeded
+Acquired Lock 1. Ver: 1766683068882909621 Size: 1486848
+Acquired Lock 1. Ver: 1766683068882909621 Size: 1486848
+Acquired Lock 1. Ver: 1766683068882909621 Size: 1486848
+Acquired Lock 1. Ver: 1766683068882909621 Size: 1486848
+Acquired Lock 1. Ver: 1766683068882909621 Size: 1486848
+Acquired Lock 1. Ver: 1766683068882909621 Size: 1486848
+Acquired Lock 1. Ver: 1766683068882909621 Size: 1486848
+Acquired Lock 1. Ver: 1766683068882909621 Size: 1486848
+Acquired Lock 1. Ver: 1766683068882909621 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683068882909621 Size: 1486848
+LockManager failed: context deadline exceeded
+LockManager failed: context deadline exceeded
+LockManager failed: context deadline exceeded
+LockManager failed: context deadline exceeded
+Acquired Lock 1. Ver: 1766683068882909621 Size: 1486848
+Acquired Lock 1. Ver: 1766683068882909621 Size: 1486848
+Acquired Lock 1. Ver: 1766683068882909621 Size: 1486848
+Acquired Lock 1. Ver: 1766683068882909621 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+LockManager failed: context deadline exceeded
+LockManager failed: context deadline exceeded
+LockManager failed: context deadline exceeded
+Acquired Lock 1. Ver: 1766683108894665607 Size: 1486848
+Acquired Lock 1. Ver: 1766683108894665607 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683108938716869 Size: 1486848
+Acquired Lock 1. Ver: 1766683108938716869 Size: 1486848
+Acquired Lock 1. Ver: 1766683108938716869 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683108981237337 Size: 1486848
+Acquired Lock 1. Ver: 1766683108981237337 Size: 1486848
+Acquired Lock 1. Ver: 1766683108981237337 Size: 1486848
+Acquired Lock 1. Ver: 1766683108981237337 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+LockManager failed: context deadline exceeded
+LockManager failed: context deadline exceeded
+LockManager failed: context deadline exceeded
+LockManager failed: context deadline exceeded
+Acquired Lock 1. Ver: 1766683108981237337 Size: 1486848
+Acquired Lock 1. Ver: 1766683108981237337 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683108981237337 Size: 1486848
+LockManager failed: context deadline exceeded
+LockManager failed: context deadline exceeded
+LockManager failed: context deadline exceeded
+LockManager failed: context deadline exceeded
+LockManager failed: context deadline exceeded
+Acquired Lock 1. Ver: 1766683108981237337 Size: 1486848
+Acquired Lock 1. Ver: 1766683108981237337 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+LockManager failed: context deadline exceeded
+Acquired Lock 1. Ver: 1766683108981237337 Size: 1486848
+Acquired Lock 1. Ver: 1766683108981237337 Size: 1486848
+Acquired Lock 1. Ver: 1766683138994568721 Size: 1486848
+Acquired Lock 1. Ver: 1766683138994568721 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683139023657907 Size: 1486848
+Acquired Lock 1. Ver: 1766683139023657907 Size: 1486848
+Acquired Lock 1. Ver: 1766683139023657907 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683139023657907 Size: 1486848

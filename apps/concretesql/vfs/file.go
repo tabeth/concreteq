@@ -3,7 +3,6 @@ package vfs
 import (
 	"context"
 	"encoding/binary"
-	"fmt"
 	"log"
 	"sync"
 	"time"
@@ -32,14 +31,12 @@ type File struct {
 }
 
 func NewFile(name string, ps *store.PageStore, lm *store.LockManager, initPageSize int) (*File, error) {
-	fmt.Printf("NewFile: %s\n", name)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	// Fetch current version on open
 	state, err := ps.CurrentVersion(ctx)
 	if err != nil {
-		fmt.Printf("CurrentVersion failed: %v\n", err)
 		return nil, err
 	}
 

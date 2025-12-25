@@ -81,8 +81,8 @@ func go_vfs_open(name *C.char, fileOut *unsafe.Pointer, flags C.int, outFlags *C
 	prefix := tuple.Tuple{"concretesql", goName}
 
 	// Create PageStore & LockManager
-	ps := store.NewPageStore(*globalDB, prefix)
-	lm := store.NewLockManager(*globalDB, prefix)
+	ps := store.NewPageStore(*globalDB, prefix, store.DefaultConfig())
+	lm := store.NewLockManager(*globalDB, prefix, store.DefaultConfig())
 
 	// PageSize?
 	// We can parse generic URI logic if we want, or rely on PRAGMA (preferred).
