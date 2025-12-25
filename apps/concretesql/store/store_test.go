@@ -8,6 +8,7 @@ import (
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
 	"github.com/apple/foundationdb/bindings/go/src/fdb/subspace"
 	"github.com/apple/foundationdb/bindings/go/src/fdb/tuple"
+	"github.com/google/uuid"
 	_ "github.com/mattn/go-sqlite3" // Ensure sqlite3 symbols are linked
 	"github.com/psanford/sqlite3vfs"
 	"github.com/stretchr/testify/assert"
@@ -50,7 +51,7 @@ func TestPageStore_ReadWrite(t *testing.T) {
 	err = ps.WritePages(ctx, 1, pages)
 	require.NoError(t, err)
 
-	err = ps.SetVersionAndSize(ctx, 1, 8192)
+	err = ps.SetVersionAndSize(ctx, 1, 8192, "", 0)
 	require.NoError(t, err)
 
 	// Read Back
@@ -74,7 +75,7 @@ func TestPageStore_ReadWrite(t *testing.T) {
 	}
 	err = ps.WritePages(ctx, 2, pagesV2)
 	require.NoError(t, err)
-	err = ps.SetVersionAndSize(ctx, 2, 8192)
+	err = ps.SetVersionAndSize(ctx, 2, 8192, "", 1)
 	require.NoError(t, err)
 
 	// Read at Version 1 (Snapshot)
@@ -160,7 +161,7 @@ func TestVacuum(t *testing.T) {
 	// Setup:
 	// Version 1: Page 0
 	ps.WritePages(ctx, 1, map[int][]byte{0: []byte("v1")})
-	ps.SetVersionAndSize(ctx, 1, 4096)
+	ps.SetVersionAndSize(ctx, 1, 4096, "", 0)
 
 	// Version 2: Page 0 (Leaked Future)
 	ps.WritePages(ctx, 2, map[int][]byte{0: []byte("v2_leaked")})
@@ -193,7 +194,7 @@ func TestVacuum(t *testing.T) {
 
 func TestVacuum_Shadowing(t *testing.T) {
 	db := NewTestDB(t)
-	prefix := tuple.Tuple{"test", "vacuum_shadow"}
+	prefix := tuple.Tuple{"test", "vacuum_shadow_" + uuid.New().String()}
 
 	ps := NewPageStore(db, prefix)
 	ctx := context.Background()
@@ -207,7 +208,7 @@ func TestVacuum_Shadowing(t *testing.T) {
 	require.NoError(t, err)
 
 	// Set Version to 2
-	err = ps.SetVersionAndSize(ctx, 2, 8192)
+	err = ps.SetVersionAndSize(ctx, 2, 8192, "", 0)
 	require.NoError(t, err)
 
 	// 3. Run Vacuum

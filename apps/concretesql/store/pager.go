@@ -3,6 +3,8 @@ package store
 import (
 	"context"
 	"encoding/binary"
+	"errors"
+	"time"
 
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
 	"github.com/apple/foundationdb/bindings/go/src/fdb/subspace"
@@ -62,15 +64,86 @@ func (ps *PageStore) CurrentVersion(ctx context.Context) (DBState, error) {
 }
 
 // SetVersionAndSize updates both the version and the file size atomically.
-func (ps *PageStore) SetVersionAndSize(ctx context.Context, version int64, size int64) error {
+// It also handles Idempotency if requestID is provided.
+func (ps *PageStore) SetVersionAndSize(ctx context.Context, version int64, size int64, requestID string, baseVersion int64) error {
 	_, err := ps.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
+		// 1. Idempotency Check
+		if requestID != "" {
+			// Key: ("tx_map", requestID)
+			ik := ps.subspace.Pack(tuple.Tuple{"tx_map", requestID})
+			val := tr.Get(ik).MustGet()
+			if len(val) > 0 {
+				// Already committed!
+				// We should ideally return the version we wrote, but returning nil error is enough for "Success".
+				return nil, nil
+			}
+		}
+
+		// 2. Optimistic Concurrency Check (ABA Protection)
+		// Read current version
+		vk := ps.subspace.Pack(tuple.Tuple{"meta", "version"})
+		curVal := tr.Get(vk).MustGet()
+		var currentVersion int64
+		if len(curVal) > 0 {
+			currentVersion = int64(binary.BigEndian.Uint64(curVal))
+		}
+
+		// If baseVersion check is requested (baseVersion >= 0 or similar convention? logic implies strict check)
+		// Assuming baseVersion is what the potential writer *saw* when they started.
+		if currentVersion != baseVersion {
+			return nil, errors.New("conflict: database version changed")
+		}
+
+		// 3. Write New State
 		buf := make([]byte, 8)
 		binary.BigEndian.PutUint64(buf, uint64(version))
-		tr.Set(ps.subspace.Pack(tuple.Tuple{"meta", "version"}), buf)
+		tr.Set(vk, buf)
 
 		bufSize := make([]byte, 8)
 		binary.BigEndian.PutUint64(bufSize, uint64(size))
 		tr.Set(ps.subspace.Pack(tuple.Tuple{"meta", "size"}), bufSize)
+
+		// 4. Store Idempotency Key
+		if requestID != "" {
+			ik := ps.subspace.Pack(tuple.Tuple{"tx_map", requestID})
+			// Store expiry or just timestamp? Plan said "CommitVersion" or "LeaseExpiry".
+			// Let's store timestamp for GC.
+			// Expiry = Now + 1 Hour
+			expiry := time.Now().Add(1 * time.Hour).UnixNano()
+			exBuf := make([]byte, 8)
+			binary.BigEndian.PutUint64(exBuf, uint64(expiry))
+			tr.Set(ik, exBuf)
+		}
+
+		return nil, nil
+	})
+	return err
+}
+
+// GarbageCollectTxMap cleans up old idempotency keys
+func (ps *PageStore) GarbageCollectTxMap(ctx context.Context) error {
+	_, err := ps.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
+		// Scan all tx_map
+
+		r := ps.subspace.Sub("tx_map")
+		// GetRange
+		rr := tr.GetRange(r, fdb.RangeOptions{})
+		iter := rr.Iterator()
+
+		now := time.Now().UnixNano()
+
+		for iter.Advance() {
+			kv, err := iter.Get()
+			if err != nil {
+				return nil, err
+			}
+			if len(kv.Value) == 8 {
+				expiry := int64(binary.BigEndian.Uint64(kv.Value))
+				if now > expiry {
+					tr.Clear(kv.Key)
+				}
+			}
+		}
 		return nil, nil
 	})
 	return err

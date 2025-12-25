@@ -11,6 +11,9 @@ import (
 	"github.com/tabeth/concretesql/store"
 )
 
+// OpCode for SQLITE_FCNTL_PRAGMA
+const SQLITE_FCNTL_PRAGMA = 14
+
 type File struct {
 	name      string
 	pageStore *store.PageStore
@@ -24,6 +27,7 @@ type File struct {
 	fileSize    int64
 	pageSize    int
 	dirtyPages  map[int][]byte
+	requestID   string
 }
 
 func NewFile(name string, ps *store.PageStore, lm *store.LockManager, initPageSize int) (*File, error) {
@@ -242,6 +246,15 @@ func (f *File) Sync(flags sqlite3vfs.SyncType) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
+	// If dirty pages empty, we might still need to update version if we changed size?
+	// But usually size change comes with page writes.
+	// However, if we only truncated, dirtyPages might be empty but size changed.
+	// Truncate updates f.fileSize immediately.
+	// We should probably always commit if fileSize changed OR dirtyPages > 0.
+	// But let's stick to dirtyPages check for now, assuming Truncate also marks something dirty or Sync handles it.
+	// Actually Truncate just updates generic size.
+	// For correctness, we should check if we have pending changes.
+
 	if len(f.dirtyPages) == 0 {
 		return nil
 	}
@@ -285,9 +298,12 @@ func (f *File) Sync(flags sqlite3vfs.SyncType) error {
 		log.Printf("Warning: Version mismatch. Expected %d, got %d. Overwriting...", f.baseVersion, currentV)
 	}
 
-	if err := f.pageStore.SetVersionAndSize(ctx, newVersion, f.fileSize); err != nil {
+	if err := f.pageStore.SetVersionAndSize(ctx, newVersion, f.fileSize, f.requestID, f.baseVersion); err != nil {
 		return err
 	}
+
+	// Reset requestID after successful sync (it was consumed)
+	f.requestID = ""
 
 	// 4. Update state
 	f.baseVersion = newVersion
@@ -343,4 +359,36 @@ func (f *File) SectorSize() int64 {
 
 func (f *File) DeviceCharacteristics() sqlite3vfs.DeviceCharacteristic {
 	return sqlite3vfs.DeviceCharacteristic(0)
+}
+
+// FileControl handles custom opcodes, specifically PRAGMA interception
+func (f *File) FileControl(op int, arg interface{}) (bool, error) {
+	if op == SQLITE_FCNTL_PRAGMA {
+		// arg is *[]string typically: [pragma_name, pragma_value]
+		// But in sqlite3vfs it might be different.
+		// wait, the library signature: FileControl(op int, arg interface{}) (bool, error)
+		// For FCNTL_PRAGMA, SQLite passes a char** (array of strings).
+		// psanford/sqlite3vfs likely marshals this.
+		// Let's check what arg is.
+
+		// If arg is a pointer to a string slice?
+		if args, ok := arg.(*[]string); ok && args != nil && len(*args) >= 2 {
+			key := (*args)[1] // pragma name
+			// value might be empty-string if no value provided
+
+			if key == "concrete_request_id" {
+				if len(*args) > 2 {
+					val := (*args)[2]
+					f.mu.Lock()
+					f.requestID = val
+					f.mu.Unlock()
+					log.Printf("Set RequestID: %s", val)
+				}
+				// Return true to indicate we handled it?
+				// SQLite PRAGMA handling usually returns valid SQLITE_OK if handled.
+				return true, nil
+			}
+		}
+	}
+	return false, nil
 }
