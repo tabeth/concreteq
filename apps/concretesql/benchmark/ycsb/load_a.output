@@ -1,0 +1,3 @@
+Using request distribution 'zipfian' a keyrange of [0 1000]
+Total execution time: 6.904954761s
+operation,timestamp_us,latency_us

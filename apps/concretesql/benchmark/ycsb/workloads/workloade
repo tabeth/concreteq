@@ -1,0 +1,14 @@
+recordcount=1000
+operationcount=1000
+workload=core
+
+readallfields=true
+
+readproportion=0
+updateproportion=0
+scanproportion=0.95
+insertproportion=0.05
+
+requestdistribution=zipfian
+maxscanlength=100
+scanlengthdistribution=uniform

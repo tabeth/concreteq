@@ -6,4 +6,7 @@ use (
 	./apps/concretesql
 	./libs/fdb
 	./libs/kms
+	./apps/concretesql/benchmark/ycsb
 )
+
+replace github.com/pingcap/go-ycsb => ./libs/go-ycsb
