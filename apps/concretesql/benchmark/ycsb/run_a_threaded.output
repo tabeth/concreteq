@@ -874,3 +874,21 @@ Acquired Lock 1. Ver: 1766683139023657907 Size: 1486848
 Acquired Lock 1. Ver: 1766683139023657907 Size: 1486848
 NewFile: /tmp/bench_optimized.db-journal
 Acquired Lock 1. Ver: 1766683139023657907 Size: 1486848
+LockManager failed: context deadline exceeded
+LockManager failed: context deadline exceeded
+LockManager failed: context deadline exceeded
+LockManager failed: context deadline exceeded
+Acquired Lock 1. Ver: 1766683139023657907 Size: 1486848
+Acquired Lock 1. Ver: 1766683139023657907 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
+Acquired Lock 1. Ver: 1766683139023657907 Size: 1486848
+Acquired Lock 1. Ver: 1766683139023657907 Size: 1486848
+LockManager failed: context deadline exceeded
+LockManager failed: context deadline exceeded
+LockManager failed: context deadline exceeded
+LockManager failed: context deadline exceeded
+Acquired Lock 1. Ver: 1766683139023657907 Size: 1486848
+Acquired Lock 1. Ver: 1766683139023657907 Size: 1486848
+Acquired Lock 1. Ver: 1766683139023657907 Size: 1486848
+Acquired Lock 1. Ver: 1766683139023657907 Size: 1486848
+NewFile: /tmp/bench_optimized.db-journal
