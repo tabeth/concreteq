@@ -16,7 +16,12 @@ type TableServicer interface {
 	DeleteTable(ctx context.Context, tableName string) (*models.Table, error)
 	ListTables(ctx context.Context, limit int, exclusiveStartTableName string) ([]string, string, error)
 	GetTable(ctx context.Context, tableName string) (*models.Table, error)
-	UpdateTable(ctx context.Context, tableName string, streamSpec *models.StreamSpecification) (*models.Table, error)
+	UpdateTable(ctx context.Context, req *models.UpdateTableRequest) (*models.Table, error)
+
+	CreateGlobalTable(ctx context.Context, req *models.CreateGlobalTableRequest) (*models.CreateGlobalTableResponse, error)
+	UpdateGlobalTable(ctx context.Context, req *models.UpdateGlobalTableRequest) (*models.UpdateGlobalTableResponse, error)
+	DescribeGlobalTable(ctx context.Context, globalTableName string) (*models.DescribeGlobalTableResponse, error)
+	ListGlobalTables(ctx context.Context, req *models.ListGlobalTablesRequest) (*models.ListGlobalTablesResponse, error)
 
 	// Item Operations
 	PutItem(ctx context.Context, request *models.PutItemRequest) (*models.PutItemResponse, error)
@@ -109,16 +114,16 @@ func (s *TableService) ListTables(ctx context.Context, limit int, exclusiveStart
 	return tableNames, lastEvaluatedTableName, nil
 }
 
-// UpdateTable updates a table's metadata (e.g. enabling streams).
-func (s *TableService) UpdateTable(ctx context.Context, tableName string, streamSpec *models.StreamSpecification) (*models.Table, error) {
-	if tableName == "" {
+// UpdateTable updates a table's metadata.
+func (s *TableService) UpdateTable(ctx context.Context, req *models.UpdateTableRequest) (*models.Table, error) {
+	if req.TableName == "" {
 		return nil, models.New("ValidationException", "TableName cannot be empty")
 	}
 
-	table, err := s.store.UpdateTable(ctx, tableName, streamSpec)
+	table, err := s.store.UpdateTable(ctx, req)
 	if err != nil {
 		if errors.Is(err, store.ErrTableNotFound) {
-			return nil, models.New("ResourceNotFoundException", fmt.Sprintf("Table not found: %s", tableName))
+			return nil, models.New("ResourceNotFoundException", fmt.Sprintf("Table not found: %s", req.TableName))
 		}
 		return nil, models.New("InternalFailure", fmt.Sprintf("failed to update table: %v", err))
 	}
@@ -625,4 +630,75 @@ func (s *TableService) GetRecords(ctx context.Context, input *models.GetRecordsR
 		Records:           records,
 		NextShardIterator: nextIter,
 	}, nil
+}
+
+// Global Table Operations
+
+func (s *TableService) CreateGlobalTable(ctx context.Context, req *models.CreateGlobalTableRequest) (*models.CreateGlobalTableResponse, error) {
+	if req.GlobalTableName == "" {
+		return nil, models.New("ValidationException", "GlobalTableName cannot be empty")
+	}
+	if len(req.ReplicationGroup) == 0 {
+		return nil, models.New("ValidationException", "ReplicationGroup cannot be empty")
+	}
+
+	desc, err := s.store.CreateGlobalTable(ctx, req)
+	if err != nil {
+		if errors.Is(err, store.ErrTableExists) {
+			return nil, models.New("ResourceInUseException", fmt.Sprintf("Global Table already exists: %s", req.GlobalTableName))
+		}
+		return nil, mapStoreError(err, "failed to create global table")
+	}
+	return &models.CreateGlobalTableResponse{GlobalTableDescription: *desc}, nil
+}
+
+func (s *TableService) UpdateGlobalTable(ctx context.Context, req *models.UpdateGlobalTableRequest) (*models.UpdateGlobalTableResponse, error) {
+	if req.GlobalTableName == "" {
+		return nil, models.New("ValidationException", "GlobalTableName cannot be empty")
+	}
+
+	desc, err := s.store.UpdateGlobalTable(ctx, req)
+	if err != nil {
+		if errors.Is(err, store.ErrTableNotFound) {
+			return nil, models.New("ResourceNotFoundException", fmt.Sprintf("Global Table not found: %s", req.GlobalTableName))
+		}
+		return nil, mapStoreError(err, "failed to update global table")
+	}
+	return &models.UpdateGlobalTableResponse{GlobalTableDescription: *desc}, nil
+}
+
+func (s *TableService) DescribeGlobalTable(ctx context.Context, globalTableName string) (*models.DescribeGlobalTableResponse, error) {
+	if globalTableName == "" {
+		return nil, models.New("ValidationException", "GlobalTableName cannot be empty")
+	}
+
+	desc, err := s.store.DescribeGlobalTable(ctx, globalTableName)
+	if err != nil {
+		if errors.Is(err, store.ErrTableNotFound) {
+			return nil, models.New("ResourceNotFoundException", fmt.Sprintf("Global Table not found: %s", globalTableName))
+		}
+		return nil, mapStoreError(err, "failed to describe global table")
+	}
+	return &models.DescribeGlobalTableResponse{GlobalTableDescription: *desc}, nil
+}
+
+func (s *TableService) ListGlobalTables(ctx context.Context, req *models.ListGlobalTablesRequest) (*models.ListGlobalTablesResponse, error) {
+	tables, last, err := s.store.ListGlobalTables(ctx, req.Limit, req.ExclusiveStartGlobalTableName)
+	if err != nil {
+		return nil, mapStoreError(err, "failed to list global tables")
+	}
+	return &models.ListGlobalTablesResponse{
+		GlobalTables:                 tables,
+		LastEvaluatedGlobalTableName: last,
+	}, nil
+}
+
+func mapStoreError(err error, msg string) error {
+	if errors.Is(err, store.ErrTableNotFound) {
+		return models.New("ResourceNotFoundException", msg+": not found")
+	}
+	if errors.Is(err, store.ErrTableExists) {
+		return models.New("ResourceInUseException", msg+": already exists")
+	}
+	return models.New("InternalFailure", fmt.Sprintf("%s: %v", msg, err))
 }

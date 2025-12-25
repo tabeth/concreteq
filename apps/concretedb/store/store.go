@@ -29,8 +29,8 @@ type Store interface {
 	// It supports pagination via limit and exclusiveStartTableName.
 	ListTables(ctx context.Context, limit int, exclusiveStartTableName string) ([]string, string, error)
 
-	// UpdateTable updates a table's metadata (e.g. enabling streams).
-	UpdateTable(ctx context.Context, tableName string, streamSpec *models.StreamSpecification) (*models.Table, error)
+	// UpdateTable updates a table's metadata (e.g. enabling streams, GSI, throughput).
+	UpdateTable(ctx context.Context, request *models.UpdateTableRequest) (*models.Table, error)
 
 	// PutItem writes an item to the table. It replaces any existing item with the same key.
 	PutItem(ctx context.Context, tableName string, item map[string]models.AttributeValue, conditionExpression string, exprAttrNames map[string]string, exprAttrValues map[string]models.AttributeValue, returnValues string) (map[string]models.AttributeValue, error)
@@ -77,4 +77,11 @@ type Store interface {
 
 	// GetRecords retrieves records from a shard using an iterator.
 	GetRecords(ctx context.Context, shardIterator string, limit int) ([]models.Record, string, error)
+
+	// Global Table Methods
+
+	CreateGlobalTable(ctx context.Context, request *models.CreateGlobalTableRequest) (*models.GlobalTableDescription, error)
+	UpdateGlobalTable(ctx context.Context, request *models.UpdateGlobalTableRequest) (*models.GlobalTableDescription, error)
+	DescribeGlobalTable(ctx context.Context, globalTableName string) (*models.GlobalTableDescription, error)
+	ListGlobalTables(ctx context.Context, limit int, exclusiveStartGlobalTableName string) ([]models.GlobalTable, string, error)
 }

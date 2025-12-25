@@ -20,7 +20,7 @@ type mockTableService struct {
 	DeleteTableFunc        func(ctx context.Context, tableName string) (*models.Table, error)
 	ListTablesFunc         func(ctx context.Context, limit int, exclusiveStartTableName string) ([]string, string, error)
 	GetTableFunc           func(ctx context.Context, tableName string) (*models.Table, error)
-	UpdateTableFunc        func(ctx context.Context, tableName string, streamSpec *models.StreamSpecification) (*models.Table, error)
+	UpdateTableFunc        func(ctx context.Context, req *models.UpdateTableRequest) (*models.Table, error)
 	PutItemFunc            func(ctx context.Context, request *models.PutItemRequest) (*models.PutItemResponse, error)
 	GetItemFunc            func(ctx context.Context, request *models.GetItemRequest) (*models.GetItemResponse, error)
 	DeleteItemFunc         func(ctx context.Context, request *models.DeleteItemRequest) (*models.DeleteItemResponse, error)
@@ -35,6 +35,11 @@ type mockTableService struct {
 	DescribeStreamFunc     func(ctx context.Context, request *models.DescribeStreamRequest) (*models.DescribeStreamResponse, error)
 	GetShardIteratorFunc   func(ctx context.Context, request *models.GetShardIteratorRequest) (*models.GetShardIteratorResponse, error)
 	GetRecordsFunc         func(ctx context.Context, request *models.GetRecordsRequest) (*models.GetRecordsResponse, error)
+	// Global Tables
+	CreateGlobalTableFunc   func(ctx context.Context, req *models.CreateGlobalTableRequest) (*models.CreateGlobalTableResponse, error)
+	UpdateGlobalTableFunc   func(ctx context.Context, req *models.UpdateGlobalTableRequest) (*models.UpdateGlobalTableResponse, error)
+	DescribeGlobalTableFunc func(ctx context.Context, globalTableName string) (*models.DescribeGlobalTableResponse, error)
+	ListGlobalTablesFunc    func(ctx context.Context, req *models.ListGlobalTablesRequest) (*models.ListGlobalTablesResponse, error)
 }
 
 // CreateTable is the method required to satisfy the interface.
@@ -50,8 +55,8 @@ func (m *mockTableService) GetTable(ctx context.Context, tableName string) (*mod
 	return m.GetTableFunc(ctx, tableName)
 }
 
-func (m *mockTableService) UpdateTable(ctx context.Context, tableName string, streamSpec *models.StreamSpecification) (*models.Table, error) {
-	return m.UpdateTableFunc(ctx, tableName, streamSpec)
+func (m *mockTableService) UpdateTable(ctx context.Context, req *models.UpdateTableRequest) (*models.Table, error) {
+	return m.UpdateTableFunc(ctx, req)
 }
 
 func (m *mockTableService) PutItem(ctx context.Context, request *models.PutItemRequest) (*models.PutItemResponse, error) {
@@ -112,6 +117,22 @@ func (m *mockTableService) GetRecords(ctx context.Context, request *models.GetRe
 
 func (m *mockTableService) DeleteTable(ctx context.Context, tableName string) (*models.Table, error) {
 	return m.DeleteTableFunc(ctx, tableName)
+}
+
+func (m *mockTableService) CreateGlobalTable(ctx context.Context, req *models.CreateGlobalTableRequest) (*models.CreateGlobalTableResponse, error) {
+	return m.CreateGlobalTableFunc(ctx, req)
+}
+
+func (m *mockTableService) UpdateGlobalTable(ctx context.Context, req *models.UpdateGlobalTableRequest) (*models.UpdateGlobalTableResponse, error) {
+	return m.UpdateGlobalTableFunc(ctx, req)
+}
+
+func (m *mockTableService) DescribeGlobalTable(ctx context.Context, globalTableName string) (*models.DescribeGlobalTableResponse, error) {
+	return m.DescribeGlobalTableFunc(ctx, globalTableName)
+}
+
+func (m *mockTableService) ListGlobalTables(ctx context.Context, req *models.ListGlobalTablesRequest) (*models.ListGlobalTablesResponse, error) {
+	return m.ListGlobalTablesFunc(ctx, req)
 }
 
 func TestCreateTableHandler_Success(t *testing.T) {

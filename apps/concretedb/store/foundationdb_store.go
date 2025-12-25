@@ -15,13 +15,14 @@ import (
 	"github.com/google/uuid"
 	"github.com/tabeth/concretedb/expression"
 	"github.com/tabeth/concretedb/models"
+	"github.com/tabeth/concretedb/store/internal/fdbadapter"
 	"github.com/tabeth/kiroku-core/libs/fdb/directory"
 )
 
 // FoundationDBStore implements the Store interface using FoundationDB.
 type FoundationDBStore struct {
-	db        fdb.Database
-	dir       directory.Directory
+	db        fdbadapter.FDBDatabase
+	dir       fdbadapter.DirectoryProvider
 	evaluator *expression.Evaluator
 }
 
@@ -29,13 +30,11 @@ type FoundationDBStore struct {
 func NewFoundationDBStore(db fdb.Database) *FoundationDBStore {
 	fmt.Println("Creating FDB store.")
 	return &FoundationDBStore{
-		db:        db,
-		dir:       directory.NewDirectoryLayer(subspace.Sub(tuple.Tuple{"concretedb"}), subspace.Sub(tuple.Tuple{"content"}), true),
+		db:        fdbadapter.NewRealFDBDatabase(db),
+		dir:       fdbadapter.NewRealDirectoryProvider(directory.NewDirectoryLayer(subspace.Sub(tuple.Tuple{"concretedb"}), subspace.Sub(tuple.Tuple{"content"}), true)),
 		evaluator: expression.NewEvaluator(),
 	}
 }
-
-// ... (retain other methods) ...
 
 // Scan scans the table.
 func (s *FoundationDBStore) Scan(ctx context.Context, tableName string, filterExpression string, projectionExpression string, expressionAttributeNames map[string]string, expressionAttributeValues map[string]models.AttributeValue, limit int32, exclusiveStartKey map[string]models.AttributeValue, consistentRead bool) ([]map[string]models.AttributeValue, map[string]models.AttributeValue, error) {
@@ -48,7 +47,7 @@ func (s *FoundationDBStore) Scan(ctx context.Context, tableName string, filterEx
 		return nil, nil, ErrTableNotFound
 	}
 
-	res, err := s.db.ReadTransact(func(rtr fdb.ReadTransaction) (interface{}, error) {
+	res, err := s.db.ReadTransact(func(rtr fdbadapter.FDBReadTransaction) (interface{}, error) {
 		// Open the directory for this table
 		tableDir, err := s.dir.Open(rtr, []string{"tables", tableName}, nil)
 		if err != nil {
@@ -100,9 +99,8 @@ func (s *FoundationDBStore) Scan(ctx context.Context, tableName string, filterEx
 			// Deserialize value
 			var item map[string]models.AttributeValue
 			if len(kv.Value) > 0 {
-				err = json.Unmarshal(kv.Value, &item)
-				if err != nil {
-					return nil, fmt.Errorf("failed to unmarshal item: %v", err)
+				if err := json.Unmarshal(kv.Value, &item); err != nil {
+					return nil, err
 				}
 
 				lastProcessedItem = item
@@ -114,17 +112,14 @@ func (s *FoundationDBStore) Scan(ctx context.Context, tableName string, filterEx
 					return nil, err
 				}
 				if match {
+					// Apply Projection
 					item = s.evaluator.ProjectItem(item, projectionExpression, expressionAttributeNames)
 					items = append(items, item)
 				}
 			}
 		}
 
-		// Determine LastEvaluatedKey
-		// If we read 'limit' items, we return LastEvaluatedKey of the last read item.
-		// Note: FDB GetRange honors limit. So if iterator exhausted, we likely didn't hit limit unless exact match.
-		// Wait, FDB GetRange stops AT limit.
-		// So if itemsRead == limit, we have a LEK.
+		// Handle pagination
 		var lastEvaluatedKey map[string]models.AttributeValue
 		if limit > 0 && itemsRead == int(limit) && lastProcessedItem != nil {
 			lastEvaluatedKey = make(map[string]models.AttributeValue)
@@ -313,26 +308,15 @@ func (s *FoundationDBStore) Query(ctx context.Context, tableName string, indexNa
 		return nil, nil, fmt.Errorf("could not resolve Partition Key value")
 	}
 
-	res, err := s.db.ReadTransact(func(rtr fdb.ReadTransaction) (interface{}, error) {
-		var subspace subspace.Subspace
+	res, err := s.db.ReadTransact(func(rtr fdbadapter.FDBReadTransaction) (interface{}, error) {
+		var subspace fdbadapter.FDBDirectorySubspace
 		var err error
 		if indexName != "" {
 			// Index Query: Key is (indexPK, ..., indexSK, ...)
 			subspace, err = s.dir.Open(rtr, []string{"tables", tableName, "index", indexName}, nil)
 		} else {
 			// Base Table Query: Key is ("data", pk, sk)
-			// We access the table directory directly, not a subspace via Sub("data"), to align with PutItem logic
-			var td directory.DirectorySubspace
-			td, err = s.dir.Open(rtr, []string{"tables", tableName}, nil)
-			if err != nil {
-				return nil, err
-			}
-			// Simulate subspace behavior by manually pre-pending "data" to query logic below
-			// The original code used td.Sub("data"). Since Sub returns a subspace, and Pack appends, it should have worked.
-			// However, to be absolutely safe and consistent with PutItem which uses tableDir.Pack(append(tuple.Tuple{"data"}, ...)),
-			// we will use the tableDir directly if possible, or verify subspace.
-			// Actually, let's stick to the current structure but verify the tuple composition.
-			subspace = td
+			subspace, err = s.dir.Open(rtr, []string{"tables", tableName}, nil)
 		}
 		if err != nil {
 			return nil, err
@@ -377,7 +361,6 @@ func (s *FoundationDBStore) Query(ctx context.Context, tableName string, indexNa
 				r.End = fdb.FirstGreaterOrEqual(pr.End)
 			case "<":
 				k, _ := getSKKey(skVals[0])
-				// All items with index_sk < target. Since keys have suffixes, pack(target) is before any k+suffix.
 				r.End = fdb.FirstGreaterOrEqual(k)
 			case "<=":
 				k, _ := getSKKey(skVals[0])
@@ -386,7 +369,6 @@ func (s *FoundationDBStore) Query(ctx context.Context, tableName string, indexNa
 			case ">":
 				k, _ := getSKKey(skVals[0])
 				pr, _ := fdb.PrefixRange(k)
-				// All items with index_sk > target. Start after all items with target prefix.
 				r.Begin = fdb.FirstGreaterOrEqual(pr.End)
 			case ">=":
 				k, _ := getSKKey(skVals[0])
@@ -427,7 +409,6 @@ func (s *FoundationDBStore) Query(ctx context.Context, tableName string, indexNa
 			var keyTuple []tuple.TupleElement
 			var err error
 			if indexName != "" {
-				// Use helper from foundationdb_store_indexes.go
 				kt, err := s.buildIndexKeyTuple(table, targetKeySchema, exclusiveStartKey)
 				if err != nil {
 					return nil, err
@@ -467,11 +448,9 @@ func (s *FoundationDBStore) Query(ctx context.Context, tableName string, indexNa
 			var item map[string]models.AttributeValue
 			if len(kv.Value) > 0 {
 				_ = json.Unmarshal(kv.Value, &item)
-
 				lastProcessedItem = item
 				itemsRead++
 
-				// Evaluate Filter
 				match, err := s.evaluator.EvaluateFilter(item, filterExpression, expressionAttributeNames, expressionAttributeValues)
 				if err != nil {
 					return nil, err
@@ -514,7 +493,7 @@ func (s *FoundationDBStore) CreateTable(ctx context.Context, table *models.Table
 		return models.New("ValidationException", "TableName cannot be empty")
 	}
 	fmt.Println("Creating table :", table.TableName)
-	_, err := s.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
+	_, err := s.db.Transact(func(tr fdbadapter.FDBTransaction) (interface{}, error) {
 		// Simulating instant provisioning for ConcreteDB
 		table.Status = models.StatusActive
 
@@ -579,7 +558,7 @@ func (s *FoundationDBStore) CreateTable(ctx context.Context, table *models.Table
 
 // GetTable retrieves a table's metadata by name.
 func (s *FoundationDBStore) GetTable(ctx context.Context, tableName string) (*models.Table, error) {
-	val, err := s.db.ReadTransact(func(rtr fdb.ReadTransaction) (interface{}, error) {
+	val, err := s.db.ReadTransact(func(rtr fdbadapter.FDBReadTransaction) (interface{}, error) {
 		// Check if directory exists first
 		exists, err := s.dir.Exists(rtr, []string{"tables", tableName})
 		if err != nil {
@@ -615,10 +594,10 @@ func (s *FoundationDBStore) GetTable(ctx context.Context, tableName string) (*mo
 }
 
 // UpdateTable updates a table's metadata (e.g. enabling streams).
-func (s *FoundationDBStore) UpdateTable(ctx context.Context, tableName string, streamSpec *models.StreamSpecification) (*models.Table, error) {
-	val, err := s.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
+func (s *FoundationDBStore) UpdateTable(ctx context.Context, request *models.UpdateTableRequest) (*models.Table, error) {
+	val, err := s.db.Transact(func(tr fdbadapter.FDBTransaction) (interface{}, error) {
 		// 1. Get Table Metadata
-		table, err := s.getTableInternal(tr, tableName)
+		table, err := s.getTableInternal(tr, request.TableName)
 		if err != nil {
 			return nil, err
 		}
@@ -626,23 +605,30 @@ func (s *FoundationDBStore) UpdateTable(ctx context.Context, tableName string, s
 			return nil, ErrTableNotFound
 		}
 
-		// 2. Update Stream Spec if provided
-		if streamSpec != nil {
-			table.StreamSpecification = streamSpec
-			if streamSpec.StreamEnabled {
-				now := time.Now().UTC()
-				label := now.Format("2006-01-02T15:04:05.000")
-				table.LatestStreamLabel = label
-				table.LatestStreamArn = fmt.Sprintf("arn:aws:dynamodb:local:000000000000:table/%s/stream/%s", table.TableName, label)
+		// 2. Process Stream Updates
+		if request.StreamSpecification != nil {
+			if request.StreamSpecification.StreamEnabled {
+				if table.StreamSpecification == nil || !table.StreamSpecification.StreamEnabled {
+					// Enabling stream
+					now := time.Now().UTC()
+					label := now.Format("2006-01-02T15:04:05.000")
+					table.LatestStreamLabel = label
+					table.LatestStreamArn = fmt.Sprintf("arn:aws:dynamodb:local:000000000000:table/%s/stream/%s", table.TableName, label)
+				}
+				table.StreamSpecification = request.StreamSpecification
+			} else {
+				// Disabling stream
+				table.StreamSpecification = &models.StreamSpecification{StreamEnabled: false}
 			}
 		}
 
-		// 3. Save Metadata
+		// 3. Save updated metadata
 		tableBytes, err := json.Marshal(table)
 		if err != nil {
 			return nil, err
 		}
-		tableDir, err := s.dir.Open(tr, []string{"tables", tableName}, nil)
+
+		tableDir, err := s.dir.Open(tr, []string{"tables", table.TableName}, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -650,6 +636,7 @@ func (s *FoundationDBStore) UpdateTable(ctx context.Context, tableName string, s
 
 		return table, nil
 	})
+
 	if err != nil {
 		return nil, err
 	}
@@ -657,7 +644,7 @@ func (s *FoundationDBStore) UpdateTable(ctx context.Context, tableName string, s
 }
 
 func (s *FoundationDBStore) DeleteTable(ctx context.Context, tableName string) (*models.Table, error) {
-	val, err := s.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
+	val, err := s.db.Transact(func(tr fdbadapter.FDBTransaction) (interface{}, error) {
 		// Check existence
 		exists, err := s.dir.Exists(tr, []string{"tables", tableName})
 		if err != nil {
@@ -706,10 +693,6 @@ func (s *FoundationDBStore) DeleteTable(ctx context.Context, tableName string) (
 }
 
 func (s *FoundationDBStore) ListTables(ctx context.Context, limit int, exclusiveStartTableName string) ([]string, string, error) {
-	// We fetch one more than the limit to determine if there are more tables.
-	// If limit is 0 (unspecified), we can pick a default, or just pass 0 if fdb supports it (usually means all).
-	// DynamoDB default is usually larger, but let's stick to user request.
-	// If the user didn't specify a limit, we might want to default to 100 or something.
 	fetchLimit := limit
 	if fetchLimit > 0 {
 		fetchLimit++
@@ -717,7 +700,7 @@ func (s *FoundationDBStore) ListTables(ctx context.Context, limit int, exclusive
 		fetchLimit = 101 // Default fetch size if none provided
 	}
 
-	res, err := s.db.ReadTransact(func(rtr fdb.ReadTransaction) (interface{}, error) {
+	res, err := s.db.ReadTransact(func(rtr fdbadapter.FDBReadTransaction) (interface{}, error) {
 		options := directory.ListOptions{
 			Limit: fetchLimit,
 			After: exclusiveStartTableName,
@@ -736,9 +719,6 @@ func (s *FoundationDBStore) ListTables(ctx context.Context, limit int, exclusive
 		lastEvaluatedTableName = tableNames[limit-1]
 		tableNames = tableNames[:limit]
 	} else if len(tableNames) > 0 {
-		// If we didn't hit the limit (or no limit was set but we fetched default),
-		// we check if we need pagination.
-		// If fetchLimit was set to 101 (default) and we got 101, then we have a LEK.
 		if limit == 0 && len(tableNames) == 101 {
 			lastEvaluatedTableName = tableNames[100-1] // The 100th item is the last one we return
 			tableNames = tableNames[:100]
@@ -750,7 +730,7 @@ func (s *FoundationDBStore) ListTables(ctx context.Context, limit int, exclusive
 
 // PutItem writes an item to the table.
 func (s *FoundationDBStore) PutItem(ctx context.Context, tableName string, item map[string]models.AttributeValue, conditionExpression string, exprAttrNames map[string]string, exprAttrValues map[string]models.AttributeValue, returnValues string) (map[string]models.AttributeValue, error) {
-	val, err := s.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
+	val, err := s.db.Transact(func(tr fdbadapter.FDBTransaction) (interface{}, error) {
 		// 1. Get Table Metadata
 		table, err := s.getTableInternal(tr, tableName)
 		if err != nil {
@@ -771,7 +751,7 @@ func (s *FoundationDBStore) PutItem(ctx context.Context, tableName string, item 
 	return val.(map[string]models.AttributeValue), nil
 }
 
-func (s *FoundationDBStore) putItemInternal(tr fdb.Transaction, table *models.Table, item map[string]models.AttributeValue, conditionExpression string, exprAttrNames map[string]string, exprAttrValues map[string]models.AttributeValue, returnValues string) (map[string]models.AttributeValue, error) {
+func (s *FoundationDBStore) putItemInternal(tr fdbadapter.FDBTransaction, table *models.Table, item map[string]models.AttributeValue, conditionExpression string, exprAttrNames map[string]string, exprAttrValues map[string]models.AttributeValue, returnValues string) (map[string]models.AttributeValue, error) {
 	// 1. Extract Key Fields
 	keyTuple, err := s.buildKeyTuple(table, item)
 	if err != nil {
@@ -821,7 +801,7 @@ func (s *FoundationDBStore) putItemInternal(tr fdb.Transaction, table *models.Ta
 
 	// 7. Stream Record
 	eventName := "MODIFY"
-	if len(oldItem) == 0 {
+	if oldItem == nil {
 		eventName = "INSERT" // Or INSERT if oldItem was nil/empty
 	}
 	if err := s.writeStreamRecord(tr, table, eventName, oldItem, item); err != nil {
@@ -836,14 +816,14 @@ func (s *FoundationDBStore) putItemInternal(tr fdb.Transaction, table *models.Ta
 
 // GetItem retrieves an item by key.
 func (s *FoundationDBStore) GetItem(ctx context.Context, tableName string, key map[string]models.AttributeValue, projectionExpression string, expressionAttributeNames map[string]string, consistentRead bool) (map[string]models.AttributeValue, error) {
-	val, err := s.db.ReadTransact(func(rtr fdb.ReadTransaction) (interface{}, error) {
+	val, err := s.db.ReadTransact(func(rtr fdbadapter.FDBReadTransaction) (interface{}, error) {
 		// 1. Get Table Metadata
 		table, err := s.getTableInternal(rtr, tableName)
 		if err != nil {
 			return nil, err
 		}
 		if table == nil {
-			return nil, ErrTableNotFound
+			return nil, nil // Table not found implies item not found
 		}
 
 		// 2. Extract Key Fields from the *request key map*
@@ -853,29 +833,21 @@ func (s *FoundationDBStore) GetItem(ctx context.Context, tableName string, key m
 		}
 
 		// 3. Fetch
-		tableDir, err := s.dir.Open(rtr, []string{"tables", tableName}, nil)
+		item, err := s.getItemInternal(rtr, table, keyTuple)
 		if err != nil {
 			return nil, err
 		}
-		itemKey := tableDir.Pack(append(tuple.Tuple{"data"}, keyTuple...))
-		return rtr.Get(itemKey).Get()
+		return item, nil
 	})
 	if err != nil {
 		return nil, err
 	}
-
-	valBytes, ok := val.([]byte)
-	if !ok || len(valBytes) == 0 {
+	if val == nil {
 		return nil, nil
 	}
+	item := val.(map[string]models.AttributeValue)
 
-	// 4. Deserialize
-	var item map[string]models.AttributeValue
-	if err := json.Unmarshal(valBytes, &item); err != nil {
-		return nil, err
-	}
-
-	// 5. Apply Projection
+	// 4. Apply Projection
 	if projectionExpression != "" {
 		item = s.evaluator.ProjectItem(item, projectionExpression, expressionAttributeNames)
 	}
@@ -885,7 +857,7 @@ func (s *FoundationDBStore) GetItem(ctx context.Context, tableName string, key m
 
 // DeleteItem deletes an item by key.
 func (s *FoundationDBStore) DeleteItem(ctx context.Context, tableName string, key map[string]models.AttributeValue, conditionExpression string, exprAttrNames map[string]string, exprAttrValues map[string]models.AttributeValue, returnValues string) (map[string]models.AttributeValue, error) {
-	val, err := s.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
+	val, err := s.db.Transact(func(tr fdbadapter.FDBTransaction) (interface{}, error) {
 		// 1. Get Table Metadata
 		table, err := s.getTableInternal(tr, tableName)
 		if err != nil {
@@ -906,7 +878,7 @@ func (s *FoundationDBStore) DeleteItem(ctx context.Context, tableName string, ke
 	return val.(map[string]models.AttributeValue), nil
 }
 
-func (s *FoundationDBStore) deleteItemInternal(tr fdb.Transaction, table *models.Table, key map[string]models.AttributeValue, conditionExpression string, exprAttrNames map[string]string, exprAttrValues map[string]models.AttributeValue, returnValues string) (map[string]models.AttributeValue, error) {
+func (s *FoundationDBStore) deleteItemInternal(tr fdbadapter.FDBTransaction, table *models.Table, key map[string]models.AttributeValue, conditionExpression string, exprAttrNames map[string]string, exprAttrValues map[string]models.AttributeValue, returnValues string) (map[string]models.AttributeValue, error) {
 	// 1. Extract Key Fields
 	keyTuple, err := s.buildKeyTuple(table, key)
 	if err != nil {
@@ -962,7 +934,7 @@ func (s *FoundationDBStore) deleteItemInternal(tr fdb.Transaction, table *models
 
 // Helpers
 
-func (s *FoundationDBStore) getTableInternal(rtr fdb.ReadTransaction, tableName string) (*models.Table, error) {
+func (s *FoundationDBStore) getTableInternal(rtr fdbadapter.FDBReadTransaction, tableName string) (*models.Table, error) {
 	exists, err := s.dir.Exists(rtr, []string{"tables", tableName})
 	if err != nil {
 		return nil, err
@@ -988,7 +960,7 @@ func (s *FoundationDBStore) getTableInternal(rtr fdb.ReadTransaction, tableName 
 	return &table, nil
 }
 
-func (s *FoundationDBStore) getItemInternal(rt fdb.ReadTransaction, table *models.Table, keyTuple []tuple.TupleElement) (map[string]models.AttributeValue, error) {
+func (s *FoundationDBStore) getItemInternal(rt fdbadapter.FDBReadTransaction, table *models.Table, keyTuple []tuple.TupleElement) (map[string]models.AttributeValue, error) {
 	tableDir, err := s.dir.Open(rt, []string{"tables", table.TableName}, nil)
 	if err != nil {
 		return nil, err
@@ -1077,9 +1049,9 @@ func toTupleElement(av models.AttributeValue) (tuple.TupleElement, error) {
 	return nil, fmt.Errorf("unsupported key type or null")
 }
 
-// UpdateItem updates an item.
+// UpdateItem updates an existing item.
 func (s *FoundationDBStore) UpdateItem(ctx context.Context, tableName string, key map[string]models.AttributeValue, updateExpression string, conditionExpression string, exprAttrNames map[string]string, exprAttrValues map[string]models.AttributeValue, returnValues string) (map[string]models.AttributeValue, error) {
-	val, err := s.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
+	val, err := s.db.Transact(func(tr fdbadapter.FDBTransaction) (interface{}, error) {
 		table, err := s.getTableInternal(tr, tableName)
 		if err != nil {
 			return nil, err
@@ -1099,7 +1071,7 @@ func (s *FoundationDBStore) UpdateItem(ctx context.Context, tableName string, ke
 	return nil, nil
 }
 
-func (s *FoundationDBStore) updateItemInternal(tr fdb.Transaction, table *models.Table, key map[string]models.AttributeValue, updateExpression string, conditionExpression string, exprAttrNames map[string]string, exprAttrValues map[string]models.AttributeValue, returnValues string) (map[string]models.AttributeValue, error) {
+func (s *FoundationDBStore) updateItemInternal(tr fdbadapter.FDBTransaction, table *models.Table, key map[string]models.AttributeValue, updateExpression string, conditionExpression string, exprAttrNames map[string]string, exprAttrValues map[string]models.AttributeValue, returnValues string) (map[string]models.AttributeValue, error) {
 	// 1. Extract Key Fields
 	keyTuple, err := s.buildKeyTuple(table, key)
 	if err != nil {
@@ -1222,7 +1194,7 @@ func (s *FoundationDBStore) updateItemInternal(tr fdb.Transaction, table *models
 	return nil, nil // NONE
 }
 
-func (s *FoundationDBStore) conditionCheckInternal(tr fdb.Transaction, table *models.Table, key map[string]models.AttributeValue, conditionExpression string, exprAttrNames map[string]string, exprAttrValues map[string]models.AttributeValue) error {
+func (s *FoundationDBStore) conditionCheckInternal(tr fdbadapter.FDBTransaction, table *models.Table, key map[string]models.AttributeValue, conditionExpression string, exprAttrNames map[string]string, exprAttrValues map[string]models.AttributeValue) error {
 	keyTuple, err := s.buildKeyTuple(table, key)
 	if err != nil {
 		return err
@@ -1266,7 +1238,7 @@ func (s *FoundationDBStore) TransactGetItems(ctx context.Context, transactItems 
 		return nil, models.New("ValidationException", "Too many items in transaction")
 	}
 
-	res, err := s.db.ReadTransact(func(rtr fdb.ReadTransaction) (interface{}, error) {
+	res, err := s.db.ReadTransact(func(rtr fdbadapter.FDBReadTransaction) (interface{}, error) {
 		responses := make([]models.ItemResponse, len(transactItems))
 
 		for i, req := range transactItems {
@@ -1310,7 +1282,7 @@ func (s *FoundationDBStore) TransactWriteItems(ctx context.Context, transactItem
 		return models.New("ValidationException", "Too many items in transaction")
 	}
 
-	_, err := s.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
+	_, err := s.db.Transact(func(tr fdbadapter.FDBTransaction) (interface{}, error) {
 		for _, item := range transactItems {
 			// Determine action
 			var tableName string
@@ -1473,10 +1445,10 @@ func (s *FoundationDBStore) BatchGetItem(ctx context.Context, requestItems map[s
 	unprocessed := make(map[string]models.KeysAndAttributes)
 
 	// Real implementation with Futures
-	res, err := s.db.ReadTransact(func(rtr fdb.ReadTransaction) (interface{}, error) {
+	res, err := s.db.ReadTransact(func(rtr fdbadapter.FDBReadTransaction) (interface{}, error) {
 		type futureItem struct {
 			tableName string
-			future    fdb.FutureByteSlice
+			future    fdbadapter.FDBFutureByteSlice
 		}
 		var futures []futureItem
 
@@ -1507,25 +1479,24 @@ func (s *FoundationDBStore) BatchGetItem(ctx context.Context, requestItems map[s
 			}
 		}
 
-		// 2. Await results
-		output := make(map[string][]map[string]models.AttributeValue)
+		// 2. Collect results
+		finalResponses := make(map[string][]map[string]models.AttributeValue)
 		for _, f := range futures {
 			valBytes, err := f.future.Get()
 			if err != nil {
 				return nil, err
 			}
-			if len(valBytes) > 0 {
-				var item map[string]models.AttributeValue
-				if err := json.Unmarshal(valBytes, &item); err != nil {
-					return nil, err
-				}
-				if ka, ok := requestItems[f.tableName]; ok && ka.ProjectionExpression != "" {
-					item = s.evaluator.ProjectItem(item, ka.ProjectionExpression, ka.ExpressionAttributeNames)
-				}
-				output[f.tableName] = append(output[f.tableName], item)
+			if len(valBytes) == 0 {
+				continue
 			}
+
+			var item map[string]models.AttributeValue
+			if err := json.Unmarshal(valBytes, &item); err != nil {
+				return nil, err
+			}
+			finalResponses[f.tableName] = append(finalResponses[f.tableName], item)
 		}
-		return output, nil
+		return finalResponses, nil
 	})
 
 	if err != nil {
@@ -1535,11 +1506,11 @@ func (s *FoundationDBStore) BatchGetItem(ctx context.Context, requestItems map[s
 	return responses, unprocessed, nil // UnprocessedKeys unused in happy path MVP
 }
 
-// BatchWriteItem puts or deletes multiple items in multiple tables.
+// BatchWriteItem writes or deletes multiple items.
 func (s *FoundationDBStore) BatchWriteItem(ctx context.Context, requestItems map[string][]models.WriteRequest) (map[string][]models.WriteRequest, error) {
 	unprocessed := make(map[string][]models.WriteRequest)
 
-	_, err := s.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
+	_, err := s.db.Transact(func(tr fdbadapter.FDBTransaction) (interface{}, error) {
 		for tableName, requests := range requestItems {
 			table, err := s.getTableInternal(tr, tableName)
 			if err != nil {
@@ -1571,7 +1542,7 @@ func (s *FoundationDBStore) BatchWriteItem(ctx context.Context, requestItems map
 }
 
 // writeStreamRecord writes a Stream record to the FDB if streaming is enabled.
-func (s *FoundationDBStore) writeStreamRecord(tr fdb.Transaction, table *models.Table, eventName string, oldImage, newImage map[string]models.AttributeValue) error {
+func (s *FoundationDBStore) writeStreamRecord(tr fdbadapter.FDBTransaction, table *models.Table, eventName string, oldImage, newImage map[string]models.AttributeValue) error {
 	if table.StreamSpecification == nil || !table.StreamSpecification.StreamEnabled {
 		return nil
 	}
@@ -1883,86 +1854,15 @@ func (s *FoundationDBStore) GetRecords(ctx context.Context, shardIterator string
 	var nextSeqNum string
 
 	// Read from FDB
-	_, err = s.db.ReadTransact(func(rtr fdb.ReadTransaction) (interface{}, error) {
-		_, err := s.dir.Open(rtr, []string{"tables", tableName, "stream", data.ShardId}, nil)
-		if err != nil {
-			// Shard usually exists if iterator valid. If not, maybe expired.
-			return nil, err
-		}
-
-		// var startKey fdb.Key
-		// var endKey fdb.Key
-
-		// Range logic
-		// r := streamDir // Subspace
-
-		// Logic based on IteratorType
-		if data.IteratorType == "TRIM_HORIZON" || (data.IteratorType == "AFTER_SEQUENCE_NUMBER" && data.SequenceNum == "00000000000000000000") {
-			// Start from beginning
-			// startKey = r.FDBKey()
-		} else if data.IteratorType == "LATEST" {
-			// Start from end? LATEST means just after the last record.
-			// Effectively returns empty and next iterator is future?
-			// For MVP, LATEST logic is complex without a persistent "Last Sequence".
-			// We'll treat LATEST as "End of Range".
-			// startKey = r.FDBRangeKeys().End // No records
-		} else if data.IteratorType == "AFTER_SEQUENCE_NUMBER" {
-			// Decode SequenceNum (hex) -> Versionstamp -> Key
-			// SequenceNum is just the Transaction version part or full stamp?
-			// Models say SequenceNumber is string.
-			// Internal: We stored Versionstamp in Key.
-			// Key layout: [Subspace_Prefix, Versionstamp(12 bytes approx?)]
-			// Versionstamp struct is 10 bytes TransactionVersion + 2 bytes UserVersion?
-			// FDB Key has 10 bytes versionstamp at end if SetVersionstampedKey used correctly?
-			// Actually FDB Versionstamp is 10 bytes. The tuple packs it.
-			// tuple.Versionstamp struct has [10]byte TransactionVersion and uint16 UserVersion.
-
-			// If we provided a hex string, decode it.
-			// Assuming SequenceNum is the hex of the 10-byte TransactionVersion + 2-byte UserVersion?
-			// Or just checking lexicographical order?
-
-			// MVP: If SequenceNum is provided, we try to create a selector just after it.
-			// But since we don't return SequenceNum in Record (it said "PENDING"), we have a problem.
-			// We MUST return SequenceNum in the GetRecords response for each record!
-			// So we need to populate SequenceNum when reading.
-			// SequenceNum = hex(Key's Versionstamp component).
-
-			// For AFTER_SEQUENCE_NUMBER with "seq":
-			// We construct a key selector > "seq".
-			// How to pass "seq" back to Key?
-			// We need to construct the key tuple with that versionstamp.
-
-			// Let's assume SequenceNumber is hex string of the *whole* packed versionstamp or just the 12 bytes?
-			// The tuple packing adds overhead.
-			// Correct approach: SequenceNumber = Hex(TransactionVersion|UserVersion).
-
-			// ... Implementation details for AFTER_SEQUENCE_NUMBER ...
-			// If we can't parse, default to start?
-			// startKey = r.FDBKey() // Fallback
-		}
-
-		// Actually execute Range
-		// We'll just read from startKey
-
-		// To properly support AFTER_SEQUENCE_NUMBER, we need real parsing.
-		// Let's implement refined loop below.
-		return nil, nil
-	})
-
-	// Refined Read Block outside ReadTransact to avoid complexity inside? No, must be inside.
-
-	// Let's rewrite the ReadTransact block to be more robust.
-	res, err := s.db.ReadTransact(func(rtr fdb.ReadTransaction) (interface{}, error) {
+	res, err := s.db.ReadTransact(func(rtr fdbadapter.FDBReadTransaction) (interface{}, error) {
 		streamDir, err := s.dir.Open(rtr, []string{"tables", tableName, "stream", data.ShardId}, nil)
 		if err != nil {
 			return nil, err
 		}
 
-		r := streamDir
-
 		// Construct Range
 		var beginSel fdb.Selectable
-		beginSel = fdb.FirstGreaterOrEqual(fdb.Key(r.Bytes())) // Default start
+		beginSel = fdb.FirstGreaterOrEqual(fdb.Key(streamDir.Bytes())) // Default start
 
 		if data.IteratorType == "AFTER_SEQUENCE_NUMBER" && data.SequenceNum != "" {
 			// Parse Hex
@@ -1981,19 +1881,14 @@ func (s *FoundationDBStore) GetRecords(ctx context.Context, shardIterator string
 		}
 
 		// Use RangeOptions
-		_, end := r.FDBRangeKeys()
+		_, end := streamDir.FDBRangeKeys()
 		iter := rtr.GetRange(fdb.SelectorRange{Begin: beginSel.FDBKeySelector(), End: fdb.FirstGreaterOrEqual(end)}, fdb.RangeOptions{Limit: limit, Mode: fdb.StreamingModeWantAll})
 
-		// If LATEST, we might want last key?
-		// DynamoDB LATEST means "records written after this iterator is created".
-		// So we return empty records and an iterator that points to "now".
 		if data.IteratorType == "LATEST" {
-			// For MVP, just return empty list + iterator pointing to "end"?
-			// We need the key of the last item.
-			lastKv, _ := rtr.GetRange(r, fdb.RangeOptions{Limit: 1, Reverse: true}).GetSliceWithError()
+			// For MVP, just return empty list and next points to current end
+			lastKv, _ := rtr.GetRange(streamDir, fdb.RangeOptions{Limit: 1, Reverse: true}).GetSliceWithError()
 			if len(lastKv) > 0 {
-				// Iterator -> AFTER_SEQUENCE_NUMBER of last item
-				// But we need to extract versionstamp.
+				// We'll set nextSeqNum from this in the caller or handle here
 			}
 			return []models.Record{}, nil
 		}
@@ -2003,7 +1898,7 @@ func (s *FoundationDBStore) GetRecords(ctx context.Context, shardIterator string
 			return nil, err
 		}
 
-		params := []models.Record{}
+		records := []models.Record{}
 		for _, row := range rows {
 			var rec models.Record
 			if err := json.Unmarshal(row.Value, &rec); err != nil {
@@ -2011,16 +1906,10 @@ func (s *FoundationDBStore) GetRecords(ctx context.Context, shardIterator string
 			}
 
 			// Extract Versionstamp from Key to set SequenceNumber
-			// Key: [Prefix, Versionstamp]
-			// Unpack key
 			t, err := streamDir.Unpack(row.Key)
 			if err == nil && len(t) > 0 {
 				if vs, ok := t[0].(tuple.Versionstamp); ok {
-					// Encode to Hex
-					// TransactionVersion (10 bytes) + UserVersion (2 bytes)
-					// BigEndian UserVersion
 					uv := vs.UserVersion
-					// Manually pack 12 bytes
 					seqBytes := make([]byte, 12)
 					copy(seqBytes[0:10], vs.TransactionVersion[:])
 					seqBytes[10] = byte(uv >> 8)
@@ -2030,9 +1919,9 @@ func (s *FoundationDBStore) GetRecords(ctx context.Context, shardIterator string
 				}
 			}
 
-			params = append(params, rec)
+			records = append(records, rec)
 		}
-		return params, nil
+		return records, nil
 	})
 
 	if err != nil {
@@ -2058,4 +1947,275 @@ func (s *FoundationDBStore) GetRecords(ctx context.Context, shardIterator string
 	// DynamoDB returns next iterator to poll again.
 	// If we are at end, we return same/updated iterator.
 	return records, shardIterator, nil
+}
+
+// CreateGlobalTable creates a global table.
+func (s *FoundationDBStore) CreateGlobalTable(ctx context.Context, request *models.CreateGlobalTableRequest) (*models.GlobalTableDescription, error) {
+	if request.GlobalTableName == "" {
+		return nil, models.New("ValidationException", "GlobalTableName cannot be empty")
+	}
+	desc, err := s.db.Transact(func(tr fdbadapter.FDBTransaction) (interface{}, error) {
+		// Store global table metadata in a specific directory
+		globalDir, err := s.dir.CreateOrOpen(tr, []string{"global_tables", request.GlobalTableName}, nil)
+		if err != nil {
+			return nil, err
+		}
+
+		// Check if it already exists
+		metaKey := globalDir.Pack(tuple.Tuple{"metadata"})
+		existing, err := tr.Get(metaKey).Get()
+		if err != nil {
+			return nil, err
+		}
+		if existing != nil {
+			return nil, models.New("GlobalTableAlreadyExistsException", "Global table already exists: "+request.GlobalTableName)
+		}
+
+		now := float64(time.Now().Unix())
+		description := models.GlobalTableDescription{
+			GlobalTableName:   request.GlobalTableName,
+			GlobalTableStatus: "ACTIVE",
+			CreationDateTime:  now,
+			GlobalTableArn:    fmt.Sprintf("arn:aws:dynamodb:local:000000000000:global-table/%s", request.GlobalTableName),
+			ReplicationGroup:  make([]models.ReplicaDescription, 0),
+		}
+
+		for _, r := range request.ReplicationGroup {
+			description.ReplicationGroup = append(description.ReplicationGroup, models.ReplicaDescription{
+				RegionName:    r.RegionName,
+				ReplicaStatus: "ACTIVE",
+			})
+		}
+
+		data, err := json.Marshal(description)
+		if err != nil {
+			return nil, err
+		}
+
+		tr.Set(metaKey, data)
+		return &description, nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+	return desc.(*models.GlobalTableDescription), nil
+}
+
+// UpdateGlobalTable updates a global table.
+func (s *FoundationDBStore) UpdateGlobalTable(ctx context.Context, request *models.UpdateGlobalTableRequest) (*models.GlobalTableDescription, error) {
+	desc, err := s.db.Transact(func(tr fdbadapter.FDBTransaction) (interface{}, error) {
+		globalDir, err := s.dir.Open(tr, []string{"global_tables", request.GlobalTableName}, nil)
+		if err != nil {
+			return nil, err
+		}
+
+		metaKey := globalDir.Pack(tuple.Tuple{"metadata"})
+		existing, err := tr.Get(metaKey).Get()
+		if err != nil {
+			return nil, err
+		}
+		if existing == nil {
+			return nil, models.New("GlobalTableNotFoundException", "Global table not found: "+request.GlobalTableName)
+		}
+
+		var description models.GlobalTableDescription
+		if err := json.Unmarshal(existing, &description); err != nil {
+			return nil, err
+		}
+
+		// Process updates
+		for _, update := range request.ReplicaUpdates {
+			if update.Create != nil {
+				found := false
+				for _, r := range description.ReplicationGroup {
+					if r.RegionName == update.Create.RegionName {
+						found = true
+						break
+					}
+				}
+				if !found {
+					description.ReplicationGroup = append(description.ReplicationGroup, models.ReplicaDescription{
+						RegionName:    update.Create.RegionName,
+						ReplicaStatus: "ACTIVE",
+					})
+				}
+			} else if update.Delete != nil {
+				newGroup := make([]models.ReplicaDescription, 0)
+				for _, r := range description.ReplicationGroup {
+					if r.RegionName != update.Delete.RegionName {
+						newGroup = append(newGroup, r)
+					}
+				}
+				description.ReplicationGroup = newGroup
+			}
+		}
+
+		data, err := json.Marshal(description)
+		if err != nil {
+			return nil, err
+		}
+
+		tr.Set(metaKey, data)
+		return &description, nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+	return desc.(*models.GlobalTableDescription), nil
+}
+
+// DescribeGlobalTable describes a global table.
+func (s *FoundationDBStore) DescribeGlobalTable(ctx context.Context, globalTableName string) (*models.GlobalTableDescription, error) {
+	desc, err := s.db.ReadTransact(func(rtr fdbadapter.FDBReadTransaction) (interface{}, error) {
+		exists, err := s.dir.Exists(rtr, []string{"global_tables", globalTableName})
+		if err != nil {
+			return nil, err
+		}
+		if !exists {
+			return nil, models.New("GlobalTableNotFoundException", "Global table not found: "+globalTableName)
+		}
+
+		globalDir, err := s.dir.Open(rtr, []string{"global_tables", globalTableName}, nil)
+		if err != nil {
+			return nil, err
+		}
+
+		metaKey := globalDir.Pack(tuple.Tuple{"metadata"})
+		data, err := rtr.Get(metaKey).Get()
+		if err != nil {
+			return nil, err
+		}
+		if data == nil {
+			return nil, models.New("GlobalTableNotFoundException", "Global table not found: "+globalTableName)
+		}
+
+		var description models.GlobalTableDescription
+		if err := json.Unmarshal(data, &description); err != nil {
+			return nil, err
+		}
+
+		return &description, nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+	return desc.(*models.GlobalTableDescription), nil
+}
+
+// ListGlobalTables lists global tables.
+func (s *FoundationDBStore) ListGlobalTables(ctx context.Context, limit int, exclusiveStartGlobalTableName string) ([]models.GlobalTable, string, error) {
+	res, err := s.db.ReadTransact(func(rtr fdbadapter.FDBReadTransaction) (interface{}, error) {
+		// We can use s.dir.List if it was available, but we need to list subdirectories of "global_tables".
+		// For now, let's assume we can list them.
+		tableNames, err := s.dir.List(rtr, []string{"global_tables"}, directory.ListOptions{})
+		if err != nil {
+			return nil, err
+		}
+
+		globalTables := make([]models.GlobalTable, 0)
+		for _, name := range tableNames {
+			if exclusiveStartGlobalTableName != "" && name <= exclusiveStartGlobalTableName {
+				continue
+			}
+			if limit > 0 && len(globalTables) >= limit {
+				break
+			}
+
+			// For each table, we might need a shallow description.
+			// DynamoDB ListGlobalTables returns GlobalTableName and ReplicationGroup.
+			// We'll fetch the full metadata to get the group, though this is less efficient.
+			globalDir, err := s.dir.Open(rtr, []string{"global_tables", name}, nil)
+			if err != nil {
+				continue
+			}
+			metaKey := globalDir.Pack(tuple.Tuple{"metadata"})
+			data, err := rtr.Get(metaKey).Get()
+			if err != nil || data == nil {
+				continue
+			}
+			var desc models.GlobalTableDescription
+			if err := json.Unmarshal(data, &desc); err == nil {
+				replicas := make([]models.Replica, 0)
+				for _, r := range desc.ReplicationGroup {
+					replicas = append(replicas, models.Replica{RegionName: r.RegionName})
+				}
+				globalTables = append(globalTables, models.GlobalTable{
+					GlobalTableName:  name,
+					ReplicationGroup: replicas,
+				})
+			}
+		}
+
+		return globalTables, nil
+	})
+
+	if err != nil {
+		return nil, "", err
+	}
+
+	return res.([]models.GlobalTable), "", nil
+}
+
+// cloneItem creates a deep copy of an item map.
+func cloneItem(item map[string]models.AttributeValue) map[string]models.AttributeValue {
+	if item == nil {
+		return nil
+	}
+	clone := make(map[string]models.AttributeValue, len(item))
+	for k, v := range item {
+		clone[k] = cloneAttributeValue(v)
+	}
+	return clone
+}
+
+func cloneAttributeValue(v models.AttributeValue) models.AttributeValue {
+	clone := models.AttributeValue{}
+	if v.S != nil {
+		s := *v.S
+		clone.S = &s
+	}
+	if v.N != nil {
+		n := *v.N
+		clone.N = &n
+	}
+	if v.B != nil {
+		b := *v.B
+		clone.B = &b
+	}
+	if v.BOOL != nil {
+		b := *v.BOOL
+		clone.BOOL = &b
+	}
+	if v.NULL != nil {
+		n := *v.NULL
+		clone.NULL = &n
+	}
+	if v.SS != nil {
+		clone.SS = make([]string, len(v.SS))
+		copy(clone.SS, v.SS)
+	}
+	if v.NS != nil {
+		clone.NS = make([]string, len(v.NS))
+		copy(clone.NS, v.NS)
+	}
+	if v.BS != nil {
+		clone.BS = make([]string, len(v.BS))
+		copy(clone.BS, v.BS)
+	}
+	if v.L != nil {
+		clone.L = make([]models.AttributeValue, len(v.L))
+		for i, lv := range v.L {
+			clone.L[i] = cloneAttributeValue(lv)
+		}
+	}
+	if v.M != nil {
+		clone.M = make(map[string]models.AttributeValue, len(v.M))
+		for mk, mv := range v.M {
+			clone.M[mk] = cloneAttributeValue(mv)
+		}
+	}
+	return clone
 }

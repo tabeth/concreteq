@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/tabeth/concreteq/models"
 	"github.com/tabeth/concreteq/store"
+	"github.com/tabeth/kiroku-core/libs/fdb/fdbtest"
 )
 
 // --- MOCK STORE FOR HANDLER VERIFICATION ---
@@ -46,6 +47,7 @@ import (
 
 func setupHandlerTest(t *testing.T) (*App, *store.FDBStore) {
 	// Use a real isolated FDB store for robust verification
+	fdbtest.SkipIfFDBUnavailable(t)
 	s, err := store.NewFDBStoreAtPath("handler_verification_" + randomString(10))
 	if err != nil {
 		t.Skip("FDB not available")

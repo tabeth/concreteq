@@ -5,3 +5,8 @@ package store
 func stringPtr(s string) *string {
 	return &s
 }
+
+// boolPtr returns a pointer to the bool b.
+func boolPtr(b bool) *bool {
+	return &b
+}

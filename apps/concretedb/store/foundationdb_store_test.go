@@ -6,15 +6,19 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
 	"github.com/apple/foundationdb/bindings/go/src/fdb/tuple"
 	"github.com/stretchr/testify/assert"
 	"github.com/tabeth/concretedb/models"
-	"reflect"
-	"strings"
-	"testing"
-"sync"
-	"time"
+	sharedfdb "github.com/tabeth/kiroku-core/libs/fdb"
+	"github.com/tabeth/kiroku-core/libs/fdb/fdbtest"
+"github.com/tabeth/concretedb/store/internal/fdbadapter"
 )
 
 func TestFoundationDBStore_BatchWriteItem(t *testing.T) {
@@ -397,7 +401,7 @@ func TestFoundationDBStore_Query_Comprehensive(t *testing.T) {
 	}
 
 	// 5. Query Error: No HASH key in table (manual corruption)
-	_, err = store.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
+	_, err = store.db.Transact(func(tr fdbadapter.FDBTransaction) (interface{}, error) {
 		tableDir, _ := store.dir.Open(tr, []string{"tables", tableName}, nil)
 		metaKey := tableDir.Pack(tuple.Tuple{"metadata"})
 		badMeta := &models.Table{TableName: tableName, KeySchema: []models.KeySchemaElement{}} // No HASH key
@@ -432,7 +436,7 @@ func TestFoundationDBStore_ListTables_Comprehensive(t *testing.T) {
 	ctx := context.Background()
 
 	// Clear all tables for total isolation
-	_, err := store.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
+	_, err := store.db.Transact(func(tr fdbadapter.FDBTransaction) (interface{}, error) {
 		_, err := store.dir.Remove(tr, []string{"tables"})
 		return nil, err
 	})
@@ -538,7 +542,7 @@ func TestFoundationDBStore_CorruptedData_Comprehenisve(t *testing.T) {
 	key := map[string]models.AttributeValue{"pk": {S: &pk}}
 
 	// 2. Write corrupted item data
-	_, err := store.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
+	_, err := store.db.Transact(func(tr fdbadapter.FDBTransaction) (interface{}, error) {
 		tableDir, _ := store.dir.Open(tr, []string{"tables", tableName}, nil)
 		itemKey := tableDir.Pack(tuple.Tuple{"data", pk})
 		tr.Set(itemKey, []byte("{invalid-json"))
@@ -573,7 +577,7 @@ func TestFoundationDBStore_CorruptedData_Comprehenisve(t *testing.T) {
 	}
 
 	// 7. Corrupt Table Metadata (covers getTableInternal unmarshal error)
-	_, err = store.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
+	_, err = store.db.Transact(func(tr fdbadapter.FDBTransaction) (interface{}, error) {
 		tableDir, _ := store.dir.Open(tr, []string{"tables", tableName}, nil)
 		metaKey := tableDir.Pack(tuple.Tuple{"metadata"})
 		tr.Set(metaKey, []byte("{invalid-json"))
@@ -613,7 +617,7 @@ func TestFoundationDBStore_DeleteTable_ExistingMetadata_Missing(t *testing.T) {
 	}
 
 	// 2. Manually delete metadata but leave directory
-	_, err := store.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
+	_, err := store.db.Transact(func(tr fdbadapter.FDBTransaction) (interface{}, error) {
 		tableDir, _ := store.dir.Open(tr, []string{"tables", tableName}, nil)
 		metaKey := tableDir.Pack(tuple.Tuple{"metadata"})
 		tr.Clear(metaKey)
@@ -823,7 +827,6 @@ func TestFoundationDBStore_Query_ResolvedPK_Fail(t *testing.T) {
 	}
 }
 
-func boolPtr(b bool) *bool { return &b }
 func TestFoundationDBStore_Internal_EdgeCases(t *testing.T) {
 	ctx := context.Background()
 	tableName := "test-internal-edges"
@@ -834,7 +837,7 @@ func TestFoundationDBStore_Internal_EdgeCases(t *testing.T) {
 	})
 
 	// 1. Directory exists but metadata is nil (hits getTableInternal line 753)
-	store.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
+	store.db.Transact(func(tr fdbadapter.FDBTransaction) (interface{}, error) {
 		tableDir, _ := store.dir.Open(tr, []string{"tables", tableName}, nil)
 		tr.Clear(tableDir.Pack(tuple.Tuple{"metadata"}))
 		return nil, nil
@@ -852,7 +855,7 @@ func TestFoundationDBStore_Internal_EdgeCases(t *testing.T) {
 		TableName: tableName,
 		KeySchema: []models.KeySchemaElement{{AttributeName: "pk", KeyType: "HASH"}},
 	})
-	store.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
+	store.db.Transact(func(tr fdbadapter.FDBTransaction) (interface{}, error) {
 		tableDir, _ := store.dir.Open(tr, []string{"tables", tableName}, nil)
 		itemKey := tableDir.Pack(tuple.Tuple{"data", "item_empty"})
 		tr.Set(itemKey, []byte{}) // empty value
@@ -957,7 +960,7 @@ func TestFoundationDBStore_CorruptedMetadata_Extra(t *testing.T) {
 	})
 
 	// Corrupt metadata by writing invalid JSON
-	store.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
+	store.db.Transact(func(tr fdbadapter.FDBTransaction) (interface{}, error) {
 		tableDir, _ := store.dir.Open(tr, []string{"tables", tableName}, nil)
 		tr.Set(tableDir.Pack(tuple.Tuple{"metadata"}), []byte("{invalid-json"))
 		return nil, nil
@@ -979,7 +982,7 @@ func TestFoundationDBStore_CorruptedItem_Extra(t *testing.T) {
 	})
 
 	// Corrupt item by writing invalid JSON
-	store.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
+	store.db.Transact(func(tr fdbadapter.FDBTransaction) (interface{}, error) {
 		tableDir, _ := store.dir.Open(tr, []string{"tables", tableName}, nil)
 		// HASH key "123" maps to a simple tuple
 		itemKey := tableDir.Pack(tuple.Tuple{"data", "123"})
@@ -1196,7 +1199,7 @@ func TestFoundationDBStore_CorruptedItem_Operations(t *testing.T) {
 	})
 
 	// Corrupt item
-	store.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
+	store.db.Transact(func(tr fdbadapter.FDBTransaction) (interface{}, error) {
 		tableDir, _ := store.dir.Open(tr, []string{"tables", tableName}, nil)
 		itemKey := tableDir.Pack(tuple.Tuple{"data", "1"})
 		tr.Set(itemKey, []byte("{invalid-json"))
@@ -1493,10 +1496,10 @@ func TestFoundationDBStore_Misc_Coverage(t *testing.T) {
 	assert.Contains(t, err.Error(), "ConditionalCheckFailedException")
 
 	// 4. UpdateTable Success/Error
-	_, err = s.UpdateTable(ctx, tableName, &models.StreamSpecification{StreamEnabled: true, StreamViewType: "NEW_IMAGE"})
+	_, err = s.UpdateTable(ctx, &models.UpdateTableRequest{TableName: tableName, StreamSpecification: &models.StreamSpecification{StreamEnabled: true, StreamViewType: "NEW_IMAGE"}})
 	assert.NoError(t, err)
 
-	_, err = s.UpdateTable(ctx, "NotFound", nil)
+	_, err = s.UpdateTable(ctx, &models.UpdateTableRequest{TableName: "NotFound"})
 	assert.Error(t, err)
 
 	// 5. DeleteTable Error
@@ -1717,7 +1720,7 @@ func TestFoundationDBStore_Coverage_V5_EdgeCases(t *testing.T) {
 	assert.Contains(t, err.Error(), "already exists")
 
 	// 4. UpdateTable - Disable Stream
-	_, err = s.UpdateTable(ctx, tableName, &models.StreamSpecification{StreamEnabled: false})
+	_, err = s.UpdateTable(ctx, &models.UpdateTableRequest{TableName: tableName, StreamSpecification: &models.StreamSpecification{StreamEnabled: false}})
 	assert.NoError(t, err)
 
 	// 5. DeleteTable - TableNotFound
@@ -3353,7 +3356,7 @@ func TestFoundationDBStore_UpdateTable(t *testing.T) {
 		StreamEnabled:  true,
 		StreamViewType: "NEW_IMAGE",
 	}
-	updated, err := s.UpdateTable(ctx, tableName, streamSpec)
+	updated, err := s.UpdateTable(ctx, &models.UpdateTableRequest{TableName: tableName, StreamSpecification: streamSpec})
 	assert.NoError(t, err)
 	assert.NotNil(t, updated.StreamSpecification)
 	assert.True(t, updated.StreamSpecification.StreamEnabled)
@@ -3363,7 +3366,7 @@ func TestFoundationDBStore_UpdateTable(t *testing.T) {
 	streamSpecDisabled := &models.StreamSpecification{
 		StreamEnabled: false,
 	}
-	updated2, err := s.UpdateTable(ctx, tableName, streamSpecDisabled)
+	updated2, err := s.UpdateTable(ctx, &models.UpdateTableRequest{TableName: tableName, StreamSpecification: streamSpecDisabled})
 	assert.NoError(t, err)
 	if updated2.StreamSpecification != nil {
 		assert.False(t, updated2.StreamSpecification.StreamEnabled)
@@ -3602,15 +3605,22 @@ func TestFoundationDBStore_UpdateExpressions(t *testing.T) {
 }
 
 var (
-	fdbDB fdb.Database
+	fdbDB       fdb.Database
 	fdbInitOnce sync.Once
 )
 
 func setupTestStore(t *testing.T, tableName string) *FoundationDBStore {
+	fdbtest.SkipIfFDBUnavailable(t)
+
+	var err error
 	fdbInitOnce.Do(func() {
-		fdb.MustAPIVersion(620)
-		fdbDB = fdb.MustOpenDefault()
+		// Use sharedfdb to ensure consistent API version (checking availability uses 710)
+		fdbDB, err = sharedfdb.OpenDB(710)
 	})
+	if err != nil {
+		t.Fatalf("Failed to open FDB: %v", err)
+	}
+
 	store := NewFoundationDBStore(fdbDB)
 	store.DeleteTable(context.Background(), tableName)
 	return store

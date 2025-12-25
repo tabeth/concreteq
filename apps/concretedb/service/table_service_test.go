@@ -4,7 +4,8 @@ import (
 	"context"
 	"errors"
 	"testing"
-"github.com/stretchr/testify/assert"
+
+	"github.com/stretchr/testify/assert"
 
 	"github.com/tabeth/concretedb/models"
 	st "github.com/tabeth/concretedb/store"
@@ -16,7 +17,7 @@ type mockStore struct {
 	GetTableFunc    func(ctx context.Context, tableName string) (*models.Table, error)
 	DeleteTableFunc func(ctx context.Context, tableName string) (*models.Table, error) // <-- ADD THIS
 	ListTablesFunc  func(ctx context.Context, limit int, exclusiveStartTableName string) ([]string, string, error)
-	UpdateTableFunc func(ctx context.Context, tableName string, streamSpec *models.StreamSpecification) (*models.Table, error)
+	UpdateTableFunc func(ctx context.Context, req *models.UpdateTableRequest) (*models.Table, error)
 	// Item Operations
 	PutItemFunc            func(ctx context.Context, tableName string, item map[string]models.AttributeValue, conditionExpression string, exprAttrNames map[string]string, exprAttrValues map[string]models.AttributeValue, returnValues string) (map[string]models.AttributeValue, error)
 	GetItemFunc            func(ctx context.Context, tableName string, key map[string]models.AttributeValue, projectionExpression string, exprAttrNames map[string]string, consistentRead bool) (map[string]models.AttributeValue, error)
@@ -32,6 +33,11 @@ type mockStore struct {
 	DescribeStreamFunc     func(ctx context.Context, streamArn string, limit int, exclusiveStartShardId string) (*models.StreamDescription, error)
 	GetShardIteratorFunc   func(ctx context.Context, streamArn string, shardId string, iteratorType string, sequenceNumber string) (string, error)
 	GetRecordsFunc         func(ctx context.Context, shardIterator string, limit int) ([]models.Record, string, error)
+	// Global Tables
+	CreateGlobalTableFunc   func(ctx context.Context, req *models.CreateGlobalTableRequest) (*models.GlobalTableDescription, error)
+	UpdateGlobalTableFunc   func(ctx context.Context, req *models.UpdateGlobalTableRequest) (*models.GlobalTableDescription, error)
+	DescribeGlobalTableFunc func(ctx context.Context, globalTableName string) (*models.GlobalTableDescription, error)
+	ListGlobalTablesFunc    func(ctx context.Context, limit int, exclusiveStartGlobalTableName string) ([]models.GlobalTable, string, error)
 }
 
 func (m *mockStore) CreateTable(ctx context.Context, table *models.Table) error {
@@ -51,8 +57,8 @@ func (m *mockStore) ListTables(ctx context.Context, limit int, exclusiveStartTab
 	return m.ListTablesFunc(ctx, limit, exclusiveStartTableName)
 }
 
-func (m *mockStore) UpdateTable(ctx context.Context, tableName string, streamSpec *models.StreamSpecification) (*models.Table, error) {
-	return m.UpdateTableFunc(ctx, tableName, streamSpec)
+func (m *mockStore) UpdateTable(ctx context.Context, req *models.UpdateTableRequest) (*models.Table, error) {
+	return m.UpdateTableFunc(ctx, req)
 }
 
 func (m *mockStore) PutItem(ctx context.Context, tableName string, item map[string]models.AttributeValue, conditionExpression string, exprAttrNames map[string]string, exprAttrValues map[string]models.AttributeValue, returnValues string) (map[string]models.AttributeValue, error) {
@@ -97,6 +103,22 @@ func (m *mockStore) TransactWriteItems(ctx context.Context, transactItems []mode
 
 func (m *mockStore) ListStreams(ctx context.Context, tableName string, limit int, exclusiveStartStreamArn string) ([]models.StreamSummary, string, error) {
 	return m.ListStreamsFunc(ctx, tableName, limit, exclusiveStartStreamArn)
+}
+
+func (m *mockStore) CreateGlobalTable(ctx context.Context, req *models.CreateGlobalTableRequest) (*models.GlobalTableDescription, error) {
+	return m.CreateGlobalTableFunc(ctx, req)
+}
+
+func (m *mockStore) UpdateGlobalTable(ctx context.Context, req *models.UpdateGlobalTableRequest) (*models.GlobalTableDescription, error) {
+	return m.UpdateGlobalTableFunc(ctx, req)
+}
+
+func (m *mockStore) DescribeGlobalTable(ctx context.Context, globalTableName string) (*models.GlobalTableDescription, error) {
+	return m.DescribeGlobalTableFunc(ctx, globalTableName)
+}
+
+func (m *mockStore) ListGlobalTables(ctx context.Context, limit int, exclusiveStartGlobalTableName string) ([]models.GlobalTable, string, error) {
+	return m.ListGlobalTablesFunc(ctx, limit, exclusiveStartGlobalTableName)
 }
 
 func (m *mockStore) DescribeStream(ctx context.Context, streamArn string, limit int, exclusiveStartShardId string) (*models.StreamDescription, error) {
@@ -1210,34 +1232,37 @@ func TestTableService_StreamErrors(t *testing.T) {
 
 func TestTableService_UpdateTable(t *testing.T) {
 	mock := &mockStore{
-		UpdateTableFunc: func(ctx context.Context, tableName string, spec *models.StreamSpecification) (*models.Table, error) {
-			return &models.Table{TableName: tableName, StreamSpecification: spec}, nil
+		UpdateTableFunc: func(ctx context.Context, req *models.UpdateTableRequest) (*models.Table, error) {
+			return &models.Table{TableName: req.TableName, StreamSpecification: req.StreamSpecification}, nil
 		},
 	}
 	service := NewTableService(mock)
 
 	// Success
-	up, err := service.UpdateTable(context.Background(), "table", &models.StreamSpecification{StreamEnabled: true})
+	up, err := service.UpdateTable(context.Background(), &models.UpdateTableRequest{
+		TableName:           "table",
+		StreamSpecification: &models.StreamSpecification{StreamEnabled: true},
+	})
 	assert.NoError(t, err)
 	assert.NotNil(t, up.StreamSpecification)
 	assert.True(t, up.StreamSpecification.StreamEnabled)
 
 	// Validation - Empty Name
-	_, err = service.UpdateTable(context.Background(), "", &models.StreamSpecification{})
+	_, err = service.UpdateTable(context.Background(), &models.UpdateTableRequest{TableName: "", StreamSpecification: &models.StreamSpecification{}})
 	assert.Error(t, err)
 
 	// Store Error
-	mock.UpdateTableFunc = func(ctx context.Context, tableName string, spec *models.StreamSpecification) (*models.Table, error) {
+	mock.UpdateTableFunc = func(ctx context.Context, req *models.UpdateTableRequest) (*models.Table, error) {
 		return nil, errors.New("store error")
 	}
-	_, err = service.UpdateTable(context.Background(), "table", &models.StreamSpecification{})
+	_, err = service.UpdateTable(context.Background(), &models.UpdateTableRequest{TableName: "table", StreamSpecification: &models.StreamSpecification{}})
 	assert.Error(t, err)
 
 	// Not Found Error
-	mock.UpdateTableFunc = func(ctx context.Context, tableName string, spec *models.StreamSpecification) (*models.Table, error) {
+	mock.UpdateTableFunc = func(ctx context.Context, req *models.UpdateTableRequest) (*models.Table, error) {
 		return nil, st.ErrTableNotFound
 	}
-	_, err = service.UpdateTable(context.Background(), "table", nil)
+	_, err = service.UpdateTable(context.Background(), &models.UpdateTableRequest{TableName: "table"})
 	assert.Error(t, err)
 }
 
@@ -1316,4 +1341,99 @@ func TestTableService_TransactErrors(t *testing.T) {
 	}
 	_, err = service.TransactGetItems(context.Background(), &models.TransactGetItemsRequest{TransactItems: []models.TransactGetItem{{}}})
 	assert.Error(t, err)
+}
+
+func TestTableService_GlobalTables(t *testing.T) {
+	mockStore := &mockStore{
+		CreateGlobalTableFunc: func(ctx context.Context, req *models.CreateGlobalTableRequest) (*models.GlobalTableDescription, error) {
+			if req.GlobalTableName == "ExistingGT" {
+				return nil, st.ErrTableExists
+			}
+			return &models.GlobalTableDescription{
+				GlobalTableName:   req.GlobalTableName,
+				GlobalTableStatus: "CREATING",
+				ReplicationGroup: []models.ReplicaDescription{
+					{RegionName: "us-east-1"},
+				},
+			}, nil
+		},
+		UpdateGlobalTableFunc: func(ctx context.Context, req *models.UpdateGlobalTableRequest) (*models.GlobalTableDescription, error) {
+			if req.GlobalTableName == "MissingGT" {
+				return nil, st.ErrTableNotFound
+			}
+			return &models.GlobalTableDescription{
+				GlobalTableName:   req.GlobalTableName,
+				GlobalTableStatus: "UPDATING",
+			}, nil
+		},
+		DescribeGlobalTableFunc: func(ctx context.Context, globalTableName string) (*models.GlobalTableDescription, error) {
+			if globalTableName == "MissingGT" {
+				return nil, st.ErrTableNotFound
+			}
+			return &models.GlobalTableDescription{
+				GlobalTableName:   globalTableName,
+				GlobalTableStatus: "ACTIVE",
+			}, nil
+		},
+		ListGlobalTablesFunc: func(ctx context.Context, limit int, exclusiveStartGlobalTableName string) ([]models.GlobalTable, string, error) {
+			return []models.GlobalTable{
+				{GlobalTableName: "GT1"},
+			}, "GT1", nil
+		},
+	}
+	svc := NewTableService(mockStore)
+	ctx := context.Background()
+
+	// 1. CreateGlobalTable
+	// Success
+	createResp, err := svc.CreateGlobalTable(ctx, &models.CreateGlobalTableRequest{
+		GlobalTableName:  "NewGT",
+		ReplicationGroup: []models.Replica{{RegionName: "us-east-1"}},
+	})
+	assert.NoError(t, err)
+	assert.Equal(t, "NewGT", createResp.GlobalTableDescription.GlobalTableName)
+
+	// Validation Error
+	_, err = svc.CreateGlobalTable(ctx, &models.CreateGlobalTableRequest{GlobalTableName: ""})
+	assert.Error(t, err)
+
+	// ResourceInUse
+	_, err = svc.CreateGlobalTable(ctx, &models.CreateGlobalTableRequest{GlobalTableName: "ExistingGT", ReplicationGroup: []models.Replica{{RegionName: "us"}}})
+	assert.Error(t, err)
+	assert.IsType(t, &models.APIError{}, err)
+	assert.Equal(t, "ResourceInUseException", err.(*models.APIError).Type)
+
+	// 2. UpdateGlobalTable
+	// Success
+	updateResp, err := svc.UpdateGlobalTable(ctx, &models.UpdateGlobalTableRequest{GlobalTableName: "GT1"})
+	assert.NoError(t, err)
+	assert.Equal(t, "UPDATING", updateResp.GlobalTableDescription.GlobalTableStatus)
+
+	// Validation
+	_, err = svc.UpdateGlobalTable(ctx, &models.UpdateGlobalTableRequest{GlobalTableName: ""})
+	assert.Error(t, err)
+
+	// ResourceNotFound
+	_, err = svc.UpdateGlobalTable(ctx, &models.UpdateGlobalTableRequest{GlobalTableName: "MissingGT"})
+	assert.Error(t, err)
+	assert.Equal(t, "ResourceNotFoundException", err.(*models.APIError).Type)
+
+	// 3. DescribeGlobalTable
+	// Success
+	descResp, err := svc.DescribeGlobalTable(ctx, "GT1")
+	assert.NoError(t, err)
+	assert.Equal(t, "ACTIVE", descResp.GlobalTableDescription.GlobalTableStatus)
+
+	// Validation
+	_, err = svc.DescribeGlobalTable(ctx, "")
+	assert.Error(t, err)
+
+	// ResourceNotFound
+	_, err = svc.DescribeGlobalTable(ctx, "MissingGT")
+	assert.Error(t, err)
+
+	// 4. ListGlobalTables
+	listResp, err := svc.ListGlobalTables(ctx, &models.ListGlobalTablesRequest{Limit: 10})
+	assert.NoError(t, err)
+	assert.Len(t, listResp.GlobalTables, 1)
 }

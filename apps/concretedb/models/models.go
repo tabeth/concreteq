@@ -44,6 +44,26 @@ type Table struct {
 	CreationDateTime       time.Time
 	LatestStreamLabel      string
 	LatestStreamArn        string
+	Replicas               []ReplicaDescription
+}
+
+type ReplicaDescription struct {
+	RegionName                    string                                   `json:"RegionName"`
+	ReplicaStatus                 string                                   `json:"ReplicaStatus"` // CREATING, ACTIVE, UPDATING, DELETING, CREATION_FAILED, UPDATING_FAILED, DELETING_FAILED
+	ReplicaStatusDescription      string                                   `json:"ReplicaStatusDescription,omitempty"`
+	ReplicaStatusPercentProgress  string                                   `json:"ReplicaStatusPercentProgress,omitempty"`
+	KMSMasterKeyId                string                                   `json:"KMSMasterKeyId,omitempty"`
+	ProvisionedThroughputOverride *ProvisionedThroughputOverride           `json:"ProvisionedThroughputOverride,omitempty"`
+	GlobalSecondaryIndexes        []ReplicaGlobalSecondaryIndexDescription `json:"GlobalSecondaryIndexes,omitempty"`
+}
+
+type ReplicaGlobalSecondaryIndexDescription struct {
+	IndexName                     string                         `json:"IndexName"`
+	ProvisionedThroughputOverride *ProvisionedThroughputOverride `json:"ProvisionedThroughputOverride,omitempty"`
+}
+
+type ProvisionedThroughputOverride struct {
+	ReadCapacityUnits int64 `json:"ReadCapacityUnits,omitempty"`
 }
 
 // Projection represents attributes that are copied (projected) from the table into an index.
@@ -138,6 +158,54 @@ type DeleteTableRequest struct {
 // DeleteTableResponse mirrors the JSON response for a successful DeleteTable action.
 type DeleteTableResponse struct {
 	TableDescription TableDescription `json:"TableDescription"`
+}
+
+type UpdateTableRequest struct {
+	TableName                   string                       `json:"TableName"`
+	AttributeDefinitions        []AttributeDefinition        `json:"AttributeDefinitions,omitempty"`
+	GlobalSecondaryIndexUpdates []GlobalSecondaryIndexUpdate `json:"GlobalSecondaryIndexUpdates,omitempty"`
+	ProvisionedThroughput       *ProvisionedThroughput       `json:"ProvisionedThroughput,omitempty"`
+	StreamSpecification         *StreamSpecification         `json:"StreamSpecification,omitempty"`
+	ReplicaUpdates              []ReplicaUpdate              `json:"ReplicaUpdates,omitempty"`
+}
+
+type UpdateTableResponse struct {
+	TableDescription TableDescription `json:"TableDescription"`
+}
+
+type GlobalSecondaryIndexUpdate struct {
+	Update *UpdateGlobalSecondaryIndexAction `json:"Update,omitempty"`
+	Create *CreateGlobalSecondaryIndexAction `json:"Create,omitempty"`
+	Delete *DeleteGlobalSecondaryIndexAction `json:"Delete,omitempty"`
+}
+
+type UpdateGlobalSecondaryIndexAction struct {
+	IndexName             string                `json:"IndexName"`
+	ProvisionedThroughput ProvisionedThroughput `json:"ProvisionedThroughput"`
+}
+
+type CreateGlobalSecondaryIndexAction struct {
+	IndexName             string                `json:"IndexName"`
+	KeySchema             []KeySchemaElement    `json:"KeySchema"`
+	Projection            Projection            `json:"Projection"`
+	ProvisionedThroughput ProvisionedThroughput `json:"ProvisionedThroughput"`
+}
+
+type DeleteGlobalSecondaryIndexAction struct {
+	IndexName string `json:"IndexName"`
+}
+
+type ReplicaUpdate struct {
+	Create *CreateReplicaAction `json:"Create,omitempty"`
+	Delete *DeleteReplicaAction `json:"Delete,omitempty"`
+}
+
+type CreateReplicaAction struct {
+	RegionName string `json:"RegionName"`
+}
+
+type DeleteReplicaAction struct {
+	RegionName string `json:"RegionName"`
 }
 
 // ListTablesRequest mirrors the JSON request body for the ListTables action.
@@ -446,4 +514,60 @@ type TransactWriteItemsRequest struct {
 type TransactWriteItemsResponse struct {
 	ConsumedCapacity      []ConsumedCapacity                 `json:"ConsumedCapacity,omitempty"`
 	ItemCollectionMetrics map[string][]ItemCollectionMetrics `json:"ItemCollectionMetrics,omitempty"`
+}
+
+// Global Tables
+
+type CreateGlobalTableRequest struct {
+	GlobalTableName  string    `json:"GlobalTableName"`
+	ReplicationGroup []Replica `json:"ReplicationGroup"`
+}
+
+type Replica struct {
+	RegionName string `json:"RegionName"`
+}
+
+type CreateGlobalTableResponse struct {
+	GlobalTableDescription GlobalTableDescription `json:"GlobalTableDescription"`
+}
+
+type GlobalTableDescription struct {
+	ReplicationGroup  []ReplicaDescription `json:"ReplicationGroup"`
+	GlobalTableArn    string               `json:"GlobalTableArn"`
+	CreationDateTime  float64              `json:"CreationDateTime"`
+	GlobalTableStatus string               `json:"GlobalTableStatus"`
+	GlobalTableName   string               `json:"GlobalTableName"`
+}
+
+type UpdateGlobalTableRequest struct {
+	GlobalTableName string          `json:"GlobalTableName"`
+	ReplicaUpdates  []ReplicaUpdate `json:"ReplicaUpdates"`
+}
+
+type UpdateGlobalTableResponse struct {
+	GlobalTableDescription GlobalTableDescription `json:"GlobalTableDescription"`
+}
+
+type DescribeGlobalTableRequest struct {
+	GlobalTableName string `json:"GlobalTableName"`
+}
+
+type DescribeGlobalTableResponse struct {
+	GlobalTableDescription GlobalTableDescription `json:"GlobalTableDescription"`
+}
+
+type ListGlobalTablesRequest struct {
+	ExclusiveStartGlobalTableName string `json:"ExclusiveStartGlobalTableName,omitempty"`
+	Limit                         int    `json:"Limit,omitempty"`
+	RegionName                    string `json:"RegionName,omitempty"`
+}
+
+type ListGlobalTablesResponse struct {
+	GlobalTables                 []GlobalTable `json:"GlobalTables"`
+	LastEvaluatedGlobalTableName string        `json:"LastEvaluatedGlobalTableName,omitempty"`
+}
+
+type GlobalTable struct {
+	GlobalTableName  string    `json:"GlobalTableName"`
+	ReplicationGroup []Replica `json:"ReplicationGroup"`
 }

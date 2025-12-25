@@ -4,13 +4,13 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/apple/foundationdb/bindings/go/src/fdb"
 	"github.com/apple/foundationdb/bindings/go/src/fdb/tuple"
 	"github.com/tabeth/concretedb/models"
+	"github.com/tabeth/concretedb/store/internal/fdbadapter"
 )
 
 // updateIndexes maintains GSI and LSI entries when an item is created, updated, or deleted.
-func (s *FoundationDBStore) updateIndexes(tr fdb.Transaction, table *models.Table, oldItem map[string]models.AttributeValue, newItem map[string]models.AttributeValue) error {
+func (s *FoundationDBStore) updateIndexes(tr fdbadapter.FDBTransaction, table *models.Table, oldItem map[string]models.AttributeValue, newItem map[string]models.AttributeValue) error {
 	// 1. Delete old index entries
 	if len(oldItem) > 0 {
 		if err := s.deleteIndexEntries(tr, table, oldItem); err != nil {
@@ -28,7 +28,7 @@ func (s *FoundationDBStore) updateIndexes(tr fdb.Transaction, table *models.Tabl
 	return nil
 }
 
-func (s *FoundationDBStore) deleteIndexEntries(tr fdb.Transaction, table *models.Table, item map[string]models.AttributeValue) error {
+func (s *FoundationDBStore) deleteIndexEntries(tr fdbadapter.FDBTransaction, table *models.Table, item map[string]models.AttributeValue) error {
 	// GSI
 	for _, gsi := range table.GlobalSecondaryIndexes {
 		if err := s.deleteIndexEntry(tr, table, gsi.IndexName, gsi.KeySchema, item); err != nil {
@@ -44,7 +44,7 @@ func (s *FoundationDBStore) deleteIndexEntries(tr fdb.Transaction, table *models
 	return nil
 }
 
-func (s *FoundationDBStore) putIndexEntries(tr fdb.Transaction, table *models.Table, item map[string]models.AttributeValue) error {
+func (s *FoundationDBStore) putIndexEntries(tr fdbadapter.FDBTransaction, table *models.Table, item map[string]models.AttributeValue) error {
 	// GSI
 	for _, gsi := range table.GlobalSecondaryIndexes {
 		if err := s.putIndexEntry(tr, table, gsi.IndexName, gsi.KeySchema, gsi.Projection, item); err != nil {
@@ -60,13 +60,13 @@ func (s *FoundationDBStore) putIndexEntries(tr fdb.Transaction, table *models.Ta
 	return nil
 }
 
-func (s *FoundationDBStore) deleteIndexEntry(tr fdb.Transaction, table *models.Table, indexName string, keySchema []models.KeySchemaElement, item map[string]models.AttributeValue) error {
+func (s *FoundationDBStore) deleteIndexEntry(tr fdbadapter.FDBTransaction, table *models.Table, indexName string, keySchema []models.KeySchemaElement, item map[string]models.AttributeValue) error {
 	indexKey, err := s.buildIndexKeyTuple(table, keySchema, item)
 	if err != nil {
-		// If key attributes are missing, index entry wouldn't exist (sparse index logic usually, but here we enforce strictness or ignore?)
-		// DynamoDB only indexes items that have the index key attributes.
-		// So if error is "missing key", we skip deletion.
-		return nil
+		if err == ErrSkipIndex {
+			return nil
+		}
+		return err
 	}
 
 	indexDir, err := s.dir.Open(tr, []string{"tables", table.TableName, "index", indexName}, nil)
@@ -74,28 +74,18 @@ func (s *FoundationDBStore) deleteIndexEntry(tr fdb.Transaction, table *models.T
 		return err
 	}
 
-	// Index Key Structure:
-	// GSI: [IndexPK, IndexSK, TablePK, TableSK] (or subset)
-	// LSI: [TablePK, IndexSK, TableSK]
-	// Using buildIndexKeyTuple to construct the full distinct tuple.
-
-	// Wait, we need to know if it's GSI or LSI to form the tuple correctly?
-	// Actually, `buildIndexKeyTuple` should handle the composition.
-	// But `buildIndexKeyTuple` inside `deleteIndexEntry` needs context.
-	// Let's refactor to helper that handles both key extraction and tuple formation.
-
-	// Helper usage:
-	// key := pack(IndexKeyParts + TableKeyParts)
-
 	tr.Clear(indexDir.Pack(indexKey))
 	return nil
 }
 
-func (s *FoundationDBStore) putIndexEntry(tr fdb.Transaction, table *models.Table, indexName string, keySchema []models.KeySchemaElement, projection models.Projection, item map[string]models.AttributeValue) error {
+func (s *FoundationDBStore) putIndexEntry(tr fdbadapter.FDBTransaction, table *models.Table, indexName string, keySchema []models.KeySchemaElement, projection models.Projection, item map[string]models.AttributeValue) error {
 	indexKey, err := s.buildIndexKeyTuple(table, keySchema, item)
 	if err != nil {
-		// Skip indexing if attributes missing
-		return nil
+		if err == ErrSkipIndex {
+			return nil // Skip indexing if attributes missing
+		}
+		// Propagate other errors (e.g. invalid type)
+		return err
 	}
 
 	indexDir, err := s.dir.Open(tr, []string{"tables", table.TableName, "index", indexName}, nil)
@@ -110,12 +100,6 @@ func (s *FoundationDBStore) putIndexEntry(tr fdb.Transaction, table *models.Tabl
 	} else {
 		// Project attributes
 		projected := make(map[string]models.AttributeValue)
-		// ... logic to project ...
-		// Simplified for now: include ALL for simplicity or implement projection logic
-		// If ALL, just Marshal(item)
-		// If INCLUDE, filter.
-		// For MVP, if it's not keys_only, let's just store specific logic or ALL for now to save time if tests don't check projection content rigidly?
-		// Plan says "Value: JSON of projected attributes".
 
 		if projection.ProjectionType == "ALL" {
 			projected = item
@@ -131,10 +115,6 @@ func (s *FoundationDBStore) putIndexEntry(tr fdb.Transaction, table *models.Tabl
 					projected[n] = v
 				}
 			}
-		} else {
-			// KEYS_ONLY (already handled or default)
-			// But for KEYS_ONLY we store empty JSON or just nil?
-			// Keys are in the KEY tuple. Value can be empty.
 		}
 
 		if len(projected) > 0 {
@@ -150,24 +130,18 @@ func (s *FoundationDBStore) putIndexEntry(tr fdb.Transaction, table *models.Tabl
 	return nil
 }
 
+var ErrSkipIndex = fmt.Errorf("skip index")
+
+// buildIndexKeyTuple constructs the tuple key for an index entry.
 func (s *FoundationDBStore) buildIndexKeyTuple(table *models.Table, indexKeySchema []models.KeySchemaElement, item map[string]models.AttributeValue) (tuple.Tuple, error) {
 	// Tuple: (IndexPK, [IndexSK], TablePK, [TableSK])
-	// But wait, LSI is (TablePK, IndexSK, TableSK).
-	// We need to distinguish or genericize.
-	// Actually, for LSI, the "IndexPK" IS the "TablePK".
-	// If indexKeySchema[0] is PK, we handle it.
-
-	// Let's look at the schema.
-	// GSI: Has its own HASH and RANGE.
-	// LSI: Has HASH (same as table) and RANGE.
-
 	var parts tuple.Tuple
 
 	// 1. Index Keys
 	for _, ke := range indexKeySchema {
 		val, ok := item[ke.AttributeName]
 		if !ok {
-			return nil, fmt.Errorf("missing index key attribute")
+			return nil, ErrSkipIndex
 		}
 		// Convert val to comparable
 		v, err := toFDBElement(val)
@@ -229,7 +203,7 @@ func toFDBElement(v models.AttributeValue) (tuple.TupleElement, error) {
 		return *v.N, nil
 	}
 	if v.B != nil {
-		return v.B, nil
+		return []byte(*v.B), nil
 	}
 	return nil, fmt.Errorf("unsupported index key type")
 }

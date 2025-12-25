@@ -36,6 +36,16 @@ func (h *DynamoDBHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.listTablesHandler(w, r)
 	case "DynamoDB_20120810.DescribeTable":
 		h.describeTableHandler(w, r)
+	case "DynamoDB_20120810.UpdateTable":
+		h.updateTableHandler(w, r)
+	case "DynamoDB_20120810.CreateGlobalTable":
+		h.createGlobalTableHandler(w, r)
+	case "DynamoDB_20120810.UpdateGlobalTable":
+		h.updateGlobalTableHandler(w, r)
+	case "DynamoDB_20120810.DescribeGlobalTable":
+		h.describeGlobalTableHandler(w, r)
+	case "DynamoDB_20120810.ListGlobalTables":
+		h.listGlobalTablesHandler(w, r)
 	case "DynamoDB_20120810.PutItem":
 		h.putItemHandler(w, r)
 	case "DynamoDB_20120810.GetItem":

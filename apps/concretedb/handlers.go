@@ -51,6 +51,82 @@ func (h *DynamoDBHandler) deleteTableHandler(w http.ResponseWriter, r *http.Requ
 	writeSuccess(w, resp, http.StatusOK)
 }
 
+// updateTableHandler handles the API logic for the UpdateTable action.
+func (h *DynamoDBHandler) updateTableHandler(w http.ResponseWriter, r *http.Request) {
+	var req models.UpdateTableRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, "SerializationException", "Could not decode request body.", http.StatusBadRequest)
+		return
+	}
+
+	table, err := h.tableService.UpdateTable(r.Context(), &req)
+	if err != nil {
+		writeAPIError(w, err, http.StatusBadRequest)
+		return
+	}
+
+	resp := models.UpdateTableResponse{TableDescription: mapDBTableToAPIDescription(table)}
+	writeSuccess(w, resp, http.StatusOK)
+}
+
+// Global Table Handlers
+
+func (h *DynamoDBHandler) createGlobalTableHandler(w http.ResponseWriter, r *http.Request) {
+	var req models.CreateGlobalTableRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, "SerializationException", "Could not decode request body.", http.StatusBadRequest)
+		return
+	}
+	resp, err := h.tableService.CreateGlobalTable(r.Context(), &req)
+	if err != nil {
+		writeAPIError(w, err, http.StatusBadRequest)
+		return
+	}
+	writeSuccess(w, resp, http.StatusOK)
+}
+
+func (h *DynamoDBHandler) updateGlobalTableHandler(w http.ResponseWriter, r *http.Request) {
+	var req models.UpdateGlobalTableRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, "SerializationException", "Could not decode request body.", http.StatusBadRequest)
+		return
+	}
+	resp, err := h.tableService.UpdateGlobalTable(r.Context(), &req)
+	if err != nil {
+		writeAPIError(w, err, http.StatusBadRequest)
+		return
+	}
+	writeSuccess(w, resp, http.StatusOK)
+}
+
+func (h *DynamoDBHandler) describeGlobalTableHandler(w http.ResponseWriter, r *http.Request) {
+	var req models.DescribeGlobalTableRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, "SerializationException", "Could not decode request body.", http.StatusBadRequest)
+		return
+	}
+	resp, err := h.tableService.DescribeGlobalTable(r.Context(), req.GlobalTableName)
+	if err != nil {
+		writeAPIError(w, err, http.StatusBadRequest)
+		return
+	}
+	writeSuccess(w, resp, http.StatusOK)
+}
+
+func (h *DynamoDBHandler) listGlobalTablesHandler(w http.ResponseWriter, r *http.Request) {
+	var req models.ListGlobalTablesRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, "SerializationException", "Could not decode request body.", http.StatusBadRequest)
+		return
+	}
+	resp, err := h.tableService.ListGlobalTables(r.Context(), &req)
+	if err != nil {
+		writeAPIError(w, err, http.StatusBadRequest)
+		return
+	}
+	writeSuccess(w, resp, http.StatusOK)
+}
+
 // mapDBTableToDeleteResponse converts the internal DB model to the API response for DeleteTable.
 // This is very similar to the CreateTable mapping.
 func mapDBTableToDeleteResponse(table *models.Table) *models.DeleteTableResponse {
