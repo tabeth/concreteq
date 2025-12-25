@@ -2,6 +2,7 @@ package vfs
 
 import (
 	"context"
+	"encoding/binary"
 	"log"
 	"sync"
 	"time"
@@ -21,25 +22,48 @@ type File struct {
 
 	baseVersion int64
 	fileSize    int64
+	pageSize    int
 	dirtyPages  map[int][]byte
 }
 
-func NewFile(name string, ps *store.PageStore, lm *store.LockManager) (*File, error) {
+func NewFile(name string, ps *store.PageStore, lm *store.LockManager, initPageSize int) (*File, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	// Fetch current version on open
-	v, size, err := ps.CurrentVersion(ctx)
+	state, err := ps.CurrentVersion(ctx)
 	if err != nil {
 		return nil, err
+	}
+
+	pageSize := state.PageSize
+	// If existing DB has no page size (or default), logic handles it.
+	// state.PageSize defaults to DefaultPageSize inside CurrentVersion if missing in meta.
+	// But if it's a NEW DB (Version 0, Size 0), maybe we want to set it?
+
+	if state.Version == 0 && state.Size == 0 {
+		// New Database
+		if initPageSize > 0 {
+			pageSize = initPageSize
+			// Set it immediately
+			if err := ps.SetPageSize(ctx, pageSize); err != nil {
+				return nil, err
+			}
+		}
+	} else {
+		// Existing Database
+		if initPageSize > 0 && initPageSize != pageSize {
+			log.Printf("Warning: Configured pageSize %d ignores existing DB pageSize %d", initPageSize, pageSize)
+		}
 	}
 
 	return &File{
 		name:        name,
 		pageStore:   ps,
 		lockManager: lm,
-		baseVersion: v,
-		fileSize:    size,
+		baseVersion: state.Version,
+		fileSize:    state.Size,
+		pageSize:    pageSize,
 		dirtyPages:  make(map[int][]byte),
 	}, nil
 }
@@ -57,8 +81,8 @@ func (f *File) ReadAt(p []byte, off int64) (n int, err error) {
 	// Warning: ReadAt might cross page boundaries (unlikely in SQLite main db file, but possible).
 
 	// For PoC robustness, we handle arbitrary reads by reading all affected pages.
-	pageID := int(off / store.PageSize)
-	pageOffset := int(off % store.PageSize)
+	pageID := int(off / int64(f.pageSize))
+	pageOffset := int(off % int64(f.pageSize))
 
 	// Assuming read fits in one page for now?
 	// standard SQLite reads are exactly PageSize usually, except header.
@@ -83,7 +107,7 @@ func (f *File) ReadAt(p []byte, off int64) (n int, err error) {
 
 		if data == nil {
 			// Zero filled if page doesn't exist
-			data = make([]byte, store.PageSize)
+			data = make([]byte, f.pageSize)
 		}
 
 		// Copy relevant part
@@ -109,8 +133,44 @@ func (f *File) WriteAt(p []byte, off int64) (n int, err error) {
 	// Same logic as ReadAt, but we update dirtyPages.
 	// Note: We might need to Read-Before-Write if we are doing partial page writes.
 
-	pageID := int(off / store.PageSize)
-	pageOffset := int(off % store.PageSize)
+	pageID := int(off / int64(f.pageSize))
+	pageOffset := int(off % int64(f.pageSize))
+
+	// Intercept SQLite Header Write (Page 0, Offset 0-100)
+	// SQLite writes 100 bytes header. Page Size is at offset 16 (2 bytes, big-endian).
+	// If we are writing to Page 0, we should check if pageSize changed.
+	if pageID == 0 {
+		// Snoop the data to find pageSize
+		// data being written to file is `p`.
+		headerOff := int64(16)
+		if off <= headerOff && off+int64(len(p)) >= headerOff+2 {
+			// Extract bytes
+			rel := headerOff - off
+			b1 := p[rel]
+			b2 := p[rel+1]
+			val := binary.BigEndian.Uint16([]byte{b1, b2})
+
+			newPageSize := int(val)
+			if val == 1 {
+				newPageSize = 65536
+			}
+
+			// Validate power of two and range
+			isValid := newPageSize >= 512 && newPageSize <= 65536 && (newPageSize&(newPageSize-1)) == 0
+
+			if isValid && newPageSize != f.pageSize {
+				log.Printf("Detected PageSize change from %d to %d", f.pageSize, newPageSize)
+				// Persist it!
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				if err := f.pageStore.SetPageSize(ctx, newPageSize); err != nil {
+					cancel()
+					return 0, err
+				}
+				cancel()
+				f.pageSize = newPageSize
+			}
+		}
+	}
 
 	totalWritten := 0
 	for totalWritten < len(p) {
@@ -119,7 +179,7 @@ func (f *File) WriteAt(p []byte, off int64) (n int, err error) {
 		// We ALWAYS need the existing page data if we are doing partial write.
 		// unless we are writing a FULL page.
 
-		isFullPageWrite := (pageOffset == 0 && remaining >= store.PageSize)
+		isFullPageWrite := (pageOffset == 0 && remaining >= f.pageSize)
 
 		var data []byte
 		var ok bool
@@ -136,13 +196,13 @@ func (f *File) WriteAt(p []byte, off int64) (n int, err error) {
 					return totalWritten, errRead
 				}
 				if data == nil {
-					data = make([]byte, store.PageSize)
+					data = make([]byte, f.pageSize)
 				}
 				// Store in buffer immediately so we modify it
 				// Important: COPY it if it came from store, though ReadPage likely returns fresh slice.
 			}
 		} else {
-			data = make([]byte, store.PageSize)
+			data = make([]byte, f.pageSize)
 		}
 
 		// Write to data
@@ -213,10 +273,11 @@ func (f *File) Sync(flags sqlite3vfs.SyncType) error {
 	// If we hold Exclusive Lock, nobody else should have changed it?
 	// In distributed FDB land, we should probably check.
 
-	currentV, _, err := f.pageStore.CurrentVersion(ctx)
+	state, err := f.pageStore.CurrentVersion(ctx)
 	if err != nil {
 		return err
 	}
+	currentV := state.Version
 	if currentV != f.baseVersion {
 		// Optimistic Locking Failure!
 		// Someone else committed?
@@ -277,7 +338,7 @@ func (f *File) CheckReservedLock() (bool, error) {
 }
 
 func (f *File) SectorSize() int64 {
-	return store.PageSize
+	return int64(f.pageSize)
 }
 
 func (f *File) DeviceCharacteristics() sqlite3vfs.DeviceCharacteristic {

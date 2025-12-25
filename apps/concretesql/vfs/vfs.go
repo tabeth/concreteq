@@ -28,7 +28,11 @@ func (v *FDBVFS) Open(name string, flags sqlite3vfs.OpenFlag) (sqlite3vfs.File, 
 	ps := store.NewPageStore(v.db, prefix)
 	lm := store.NewLockManager(v.db, prefix)
 
-	f, err := NewFile(name, ps, lm)
+	// PageSize is handled dynamically via PRAGMA page_size (header detection)
+	// or default.
+	pageSize := 0
+
+	f, err := NewFile(name, ps, lm, pageSize)
 	if err != nil {
 		// Map FDB errors to SQLite/OS errors if possible?
 		// simple error return

@@ -10,8 +10,8 @@ import (
 )
 
 const (
-	PageSize   = 4096
-	MaxTxBytes = 9 * 1024 * 1024 // 9MB safety limit
+	DefaultPageSize = 4096
+	MaxTxBytes      = 9 * 1024 * 1024 // 9MB safety limit
 )
 
 type PageStore struct {
@@ -28,15 +28,17 @@ func NewPageStore(db fdb.Database, prefix tuple.Tuple) *PageStore {
 }
 
 type DBState struct {
-	Version int64
-	Size    int64
+	Version  int64
+	Size     int64
+	PageSize int
 }
 
-// CurrentVersion reads the current active version ID and file size of the database.
-func (ps *PageStore) CurrentVersion(ctx context.Context) (int64, int64, error) {
+// CurrentVersion reads the current active version ID, file size, and page size of the database.
+func (ps *PageStore) CurrentVersion(ctx context.Context) (DBState, error) {
 	res, err := ps.db.ReadTransact(func(r fdb.ReadTransaction) (interface{}, error) {
 		val := r.Get(ps.subspace.Pack(tuple.Tuple{"meta", "version"})).MustGet()
 		sizeBytes := r.Get(ps.subspace.Pack(tuple.Tuple{"meta", "size"})).MustGet()
+		pageSizeBytes := r.Get(ps.subspace.Pack(tuple.Tuple{"meta", "pagesize"})).MustGet()
 
 		var s DBState
 		if len(val) > 0 {
@@ -45,13 +47,18 @@ func (ps *PageStore) CurrentVersion(ctx context.Context) (int64, int64, error) {
 		if len(sizeBytes) > 0 {
 			s.Size = int64(binary.BigEndian.Uint64(sizeBytes))
 		}
+		if len(pageSizeBytes) > 0 {
+			s.PageSize = int(binary.BigEndian.Uint64(pageSizeBytes))
+		} else {
+			s.PageSize = DefaultPageSize // Fallback for existing DBs
+		}
 		return s, nil
 	})
 	if err != nil {
-		return 0, 0, err
+		return DBState{}, err
 	}
 	s := res.(DBState)
-	return s.Version, s.Size, nil
+	return s, nil
 }
 
 // SetVersionAndSize updates both the version and the file size atomically.
@@ -164,87 +171,137 @@ func (ps *PageStore) WritePages(ctx context.Context, targetVersion int64, pages 
 // V2 is valid for snapshots between V2 and V3.
 // If minActiveVersion > V2, then V2 is also obsolete? No, V2 is needed for current state.
 // We only delete V1 if we are sure nobody reads V < V2.
+// Vacuum cleans up pages that are no longer reachable.
+// Vacuum cleans up pages that are no longer reachable.
+// It performs a chunked scan to avoid transaction timeouts.
 func (ps *PageStore) Vacuum(ctx context.Context) error {
-	currentVersion, _, err := ps.CurrentVersion(ctx)
+	state, err := ps.CurrentVersion(ctx)
 	if err != nil {
 		return err
 	}
+	currentVersion := state.Version
 
-	// We scan ALL data keys. This is expensive but necessary for full vacuum.
-	// Optimization: Store "WrittenPages" index per version.
-	// For PoC: Scan ("data") range.
+	// Manual range construction
+	begin := ps.subspace.Sub("data").FDBKey()
+	// end is prefix + 0xFF
+	end := make([]byte, len(begin)+1)
+	copy(end, begin)
+	end[len(begin)] = 0xFF
 
-	// Range scan of ("data", ...)
-	// Keys: ("data", PageID, VersionID)
+	// State carried across chunks
+	var lastKeptKey fdb.Key
+	var lastKeptPageID int = -1
 
-	// 1. Identify valid latest version for each page <= currentVersion
-	// 2. Delete anything > currentVersion
-	// 3. Delete anything shadowed?
+	// Iterator key
+	currentKeySelector := fdb.FirstGreaterOrEqual(begin)
 
-	// To do this efficiently without loading everything:
-	// We can iterate page by page? No, PageIDs are sparse.
+	for {
+		// Run chunk
+		// We need to return: nextSelector, done, newLastKeptKey, newLastKeptPageID, error
+		// But we can update variables in loop if we use a closure?
+		// No, FDB transaction retries. We must not mutate external state until success.
 
-	// Simply Iterate all keys.
-	// Keep track of which PageID we are seeing.
-
-	// Strategy:
-	// Iterate keys.
-	// keys for PageID P will be sorted by VersionID (because tuple packing?).
-	// tuple packing of (int, int) -> (PageID, VersionID).
-	// Yes, sorted by PageID, then VersionID.
-
-	// So for each PageID, we will see P/V1, P/V2, P/V3...
-
-	// But wait! We need to delete FUTURE versions too.
-
-	// Let's iterate.
-
-	begin := ps.subspace.Pack(tuple.Tuple{"data"})
-	end := ps.subspace.Pack(tuple.Tuple{"data"}).FDBKey() // Exclusive end?
-	// Usually append 0xFF to get prefix range.
-	end = append(begin, 0xFF)
-
-	// We need to do this in chunks/transactionally.
-	// FDB 5s limit applies to Vacuum too!
-
-	// We'll use a cursor-based approach if needed, but for PoC we try one huge scan or batch it.
-
-	// Simplified Vacuum for PoC: Just delete Future Versions (> CurrentVersion).
-	// This fixes the specific "Crash Recovery" risk mentioned by user.
-	// Shadow pruning is optimization.
-
-	_, err = ps.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
-		// Naive scan for Future Versions
-		// Optimize: Do we have a separate index for "Dirty Versions"?
-		// No.
-
-		// Full scan
-		rr := tr.GetRange(fdb.KeyRange{Begin: begin, End: end}, fdb.RangeOptions{})
-		iter := rr.Iterator()
-		for iter.Advance() {
-			kv, err := iter.Get()
-			if err != nil {
-				return nil, err
-			}
-
-			// Unpack
-			t, err := ps.subspace.Unpack(kv.Key)
-			if err != nil {
-				continue
-			}
-			// t: ("data", PageID, VersionID)
-			if len(t) != 3 {
-				continue
-			}
-
-			ver := t[2].(int64)
-
-			if ver > currentVersion {
-				tr.Clear(kv.Key)
-			}
+		type chunkResult struct {
+			nextSel    fdb.KeySelector
+			done       bool
+			keptKey    fdb.Key
+			keptPageID int
 		}
+
+		res, err := ps.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
+			// Read limited number of keys
+			// Use SelectorRange
+			r := fdb.SelectorRange{
+				Begin: currentKeySelector,
+				End:   fdb.FirstGreaterOrEqual(fdb.Key(end)),
+			}
+			iter := tr.GetRange(r, fdb.RangeOptions{Limit: 1000}).Iterator()
+
+			// Local state for this transaction
+			lKeptKey := lastKeptKey
+			lKeptPageID := lastKeptPageID
+
+			count := 0
+			var lastSeenKey fdb.Key
+
+			for iter.Advance() {
+				count++
+				kv, err := iter.Get()
+				if err != nil {
+					return nil, err
+				}
+				lastSeenKey = kv.Key
+
+				// Parse Key
+				t, err := ps.subspace.Unpack(kv.Key)
+				if err != nil {
+					continue
+				} // Should not happen in "data" subspace
+				if len(t) != 3 {
+					continue
+				}
+
+				// t: ("data", PageID, VersionID)
+				pageID := int(t[1].(int64))
+				ver := t[2].(int64)
+
+				if pageID != lKeptPageID {
+					// New Page detected.
+					// Previous page's last kept key is effectively the "Tail" (latest valid).
+					// We don't delete it.
+					// Reset state for new page
+					lKeptPageID = pageID
+					lKeptKey = nil
+				}
+
+				if ver > currentVersion {
+					// Future version -> Garbage
+					tr.Clear(kv.Key)
+				} else {
+					// Valid version candidate
+					// If we have a previously kept version for THIS page, it is now shadowed by `ver`.
+					if lKeptKey != nil {
+						tr.Clear(lKeptKey)
+					}
+					// This version becomes the kept one
+					lKeptKey = kv.Key
+					lKeptPageID = pageID
+				}
+			}
+
+			done := count < 1000
+			var nextSel fdb.KeySelector
+			if !done {
+				nextSel = fdb.FirstGreaterThan(lastSeenKey)
+			}
+
+			return chunkResult{nextSel: nextSel, done: done, keptKey: lKeptKey, keptPageID: lKeptPageID}, nil
+		})
+
+		if err != nil {
+			return err
+		}
+
+		cRes := res.(chunkResult)
+		lastKeptKey = cRes.keptKey
+		lastKeptPageID = cRes.keptPageID
+		currentKeySelector = cRes.nextSel
+
+		if cRes.done {
+			break
+		}
+	}
+
+	return nil
+}
+
+// SetPageSize stores the page size in metadata. Should be called only once on creation.
+func (ps *PageStore) SetPageSize(ctx context.Context, pageSize int) error {
+	_, err := ps.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
+		buf := make([]byte, 8)
+		binary.BigEndian.PutUint64(buf, uint64(pageSize))
+		tr.Set(ps.subspace.Pack(tuple.Tuple{"meta", "pagesize"}), buf)
 		return nil, nil
 	})
-
 	return err
 }

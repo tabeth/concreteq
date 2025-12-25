@@ -37,10 +37,10 @@ func TestPageStore_ReadWrite(t *testing.T) {
 	ctx := context.Background()
 
 	// Initial State
-	v, size, err := ps.CurrentVersion(ctx)
+	state, err := ps.CurrentVersion(ctx)
 	require.NoError(t, err)
-	assert.Equal(t, int64(0), v)
-	assert.Equal(t, int64(0), size)
+	assert.Equal(t, int64(0), state.Version)
+	assert.Equal(t, int64(0), state.Size)
 
 	// Write Pages
 	pages := map[int][]byte{
@@ -189,4 +189,40 @@ func TestVacuum(t *testing.T) {
 	// Actually if val is empty, good.
 	// In FDB bindings, Get returns FutureByteSlice. MustGet returns []byte.
 	// If not exists, it returns nil? FDB returns nil for non-existent key.
+}
+
+func TestVacuum_Shadowing(t *testing.T) {
+	db := NewTestDB(t)
+	prefix := tuple.Tuple{"test", "vacuum_shadow"}
+
+	ps := NewPageStore(db, prefix)
+	ctx := context.Background()
+
+	// 1. Write V1 (Page 0)
+	err := ps.WritePages(ctx, 1, map[int][]byte{0: []byte("v1_shadowed")})
+	require.NoError(t, err)
+
+	// 2. Write V2 (Page 0) -> Shadows V1
+	err = ps.WritePages(ctx, 2, map[int][]byte{0: []byte("v2_current")})
+	require.NoError(t, err)
+
+	// Set Version to 2
+	err = ps.SetVersionAndSize(ctx, 2, 8192)
+	require.NoError(t, err)
+
+	// 3. Run Vacuum
+	err = ps.Vacuum(ctx)
+	require.NoError(t, err)
+
+	// 4. Verify V1 is gone (accessed via snapshot V1)
+	// Note: ReadPage searches for latest version <= snapshot.
+	// If V1 is deleted, ReadPage(V1) will return nil!
+	data, err := ps.ReadPage(ctx, 1, 0)
+	require.NoError(t, err)
+	assert.Nil(t, data, "Shadowed version 1 should be deleted")
+
+	// 5. Verify V2 persists
+	data, err = ps.ReadPage(ctx, 2, 0)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("v2_current"), data)
 }
