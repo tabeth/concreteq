@@ -39,7 +39,58 @@ ConcreteSQL is a Go module.
 go get github.com/tabeth/concretesql
 ```
 
-## Usage
+## Standalone Usage (CLI)
+
+ConcreteSQL provides a standalone binary that works like the standard `sqlite3` shell but talks directly to FoundationDB without needing `LD_PRELOAD`.
+
+### Building the CLI
+
+```bash
+cd cmd/concretesql
+go build -o concretesql
+```
+
+### Running the Shell
+
+```bash
+./concretesql my_database.db
+```
+
+Sample session:
+```sql
+concretesql> CREATE TABLE foo (id INT, val TEXT);
+concretesql> INSERT INTO foo VALUES (1, 'hello FDB');
+concretesql> SELECT * FROM foo;
+id  val
+1   hello FDB
+concretesql> .tables
+foo
+concretesql> .quit
+```
+
+### Loadable Extension (C-Shared)
+
+ConcreteSQL can also be compiled as a standard SQLite extension (`.so` / `.dll`), allowing you to use it with standard tools like **SQLiteStudio**, **Python**, or the official `sqlite3` CLI.
+
+**Prerequisite**: Ensure you have `sqlite3` installed (`sudo apt install sqlite3` or `brew install sqlite`).
+
+1. **Build the Extension**:
+    ```bash
+    cd cmd/concretesql-extension
+    go build -buildmode=c-shared -o concretesql.so
+    ```
+
+2. **Load into SQLite**:
+    ```bash
+    sqlite3
+    .load ./concretesql.so
+    .open test.db?vfs=concretesql
+    CREATE TABLE ext_chk(a);
+    INSERT INTO ext_chk VALUES ('extension_works');
+    SELECT * FROM ext_chk;
+    ```
+
+## Usage (Go Library)
 
 ConcreteSQL registers itself as a `database/sql` driver named `concretesql`.
 
