@@ -1,9 +1,11 @@
 package store
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 
+	"github.com/apple/foundationdb/bindings/go/src/fdb"
 	"github.com/apple/foundationdb/bindings/go/src/fdb/tuple"
 	"github.com/tabeth/concretedb/models"
 	"github.com/tabeth/concretedb/store/internal/fdbadapter"
@@ -210,4 +212,174 @@ func toFDBElement(v models.AttributeValue) (tuple.TupleElement, error) {
 		return []byte(*v.B), nil
 	}
 	return nil, fmt.Errorf("unsupported index key type")
+}
+
+// backfillIndex scans the table and adds entries for the new index.
+// This runs in a background goroutine.
+func (s *FoundationDBStore) backfillIndex(ctx context.Context, tableName string, indexName string) {
+	// 1. Get Table Schema (for projection/key schema)
+	// We need to do this in a transaction.
+	var table *models.Table
+	val, err := s.db.ReadTransact(func(tr fdbadapter.FDBReadTransaction) (interface{}, error) {
+		res, err := s.getTableInternal(tr, tableName)
+		return res, err
+	})
+	if err != nil {
+		fmt.Printf("Failed to get table for backfill: %v\n", err)
+		return
+	}
+	if val != nil {
+		table = val.(*models.Table)
+	}
+	if table == nil {
+		// Table not found or deleted
+		return
+	}
+
+	// Find the target index definition
+	var targetGSI *models.GlobalSecondaryIndex
+	for _, gsi := range table.GlobalSecondaryIndexes {
+		if gsi.IndexName == indexName {
+			targetGSI = &gsi
+			break
+		}
+	}
+
+	if targetGSI == nil {
+		fmt.Printf("Index %s not found in metadata for backfill\n", indexName)
+		return
+	}
+
+	// 2. Scan All Items
+	// Similar logic to Scan, but simple full table iteration.
+	// We use the "data" subspace.
+
+	startKey := []byte{} // Start from beginning
+	batchSize := 100
+
+	for {
+		// Check context cancellation
+		select {
+		case <-ctx.Done():
+			fmt.Printf("Backfill for %s cancelled\n", indexName)
+			return
+		default:
+		}
+
+		// Transaction for batch
+		lastRead, err := s.db.Transact(func(tr fdbadapter.FDBTransaction) (interface{}, error) {
+			count := 0
+			var lastKey []byte
+
+			tableDir, err := s.dir.Open(tr, []string{"tables", tableName}, nil)
+			if err != nil {
+				return nil, err
+			}
+			dataDir := tableDir.Sub(tuple.Tuple{"data"})
+
+			// Construct range
+			var r fdb.Range
+			if len(startKey) == 0 {
+				r = dataDir
+			} else {
+				_, end := dataDir.FDBRangeKeys()
+				r = fdb.SelectorRange{
+					Begin: fdb.FirstGreaterThan(fdb.Key(startKey)),
+					End:   fdb.FirstGreaterOrEqual(end),
+				}
+			}
+
+			iter := tr.GetRange(r, fdb.RangeOptions{Limit: batchSize}).Iterator()
+
+			for iter.Advance() {
+				kv, err := iter.Get()
+				if err != nil {
+					return nil, err
+				}
+
+				// Ensure key is within dataSubspace
+				if !dataDir.Contains(kv.Key) {
+					break
+				}
+
+				var item map[string]models.AttributeValue
+				if err := json.Unmarshal(kv.Value, &item); err != nil {
+					fmt.Printf("Backfill: Unmarshal error for key %v: %v\n", kv.Key, err)
+					continue
+				}
+
+				if err := s.putIndexEntry(tr, table, targetGSI.IndexName, targetGSI.KeySchema, targetGSI.Projection, item); err != nil {
+					if err != ErrSkipIndex {
+						fmt.Printf("Backfill: putIndexEntry error: %v\n", err)
+					}
+				}
+
+				lastKey = kv.Key
+				count++
+			}
+			return lastKey, nil
+		})
+
+		if err != nil {
+			fmt.Printf("Backfill error: %v\n", err)
+			return // Retry? simplified for now.
+		}
+
+		if lastRead == nil {
+			break // Done
+		}
+
+		lk := lastRead.([]byte)
+		if len(lk) == 0 {
+			break
+		}
+		startKey = lk
+	}
+
+	// 4. Update Status to ACTIVE
+	_, err = s.db.Transact(func(tr fdbadapter.FDBTransaction) (interface{}, error) {
+		// Refresh table metadata to avoid overwriting other updates
+		t, err := s.getTableInternal(tr, tableName)
+		if err != nil {
+			return nil, err
+		}
+		if t == nil {
+			return nil, ErrTableNotFound
+		}
+
+		// Update status
+		found := false
+		for i, gsi := range t.GlobalSecondaryIndexes {
+			if gsi.IndexName == indexName {
+				t.GlobalSecondaryIndexes[i].IndexStatus = "ACTIVE"
+				found = true
+				break
+			}
+		}
+
+		if found {
+			return s.saveTableInternal(tr, t)
+		}
+		return nil, nil
+	})
+
+	if err != nil {
+		fmt.Printf("Failed to set index ACTIVE: %v\n", err)
+	} else {
+		// fmt.Printf("Backfill complete for %s\n", indexName)
+	}
+}
+
+// saveTableInternal helper (if not exists, we use existing logic or inline it)
+func (s *FoundationDBStore) saveTableInternal(tr fdbadapter.FDBTransaction, table *models.Table) (interface{}, error) {
+	tableBytes, err := json.Marshal(table)
+	if err != nil {
+		return nil, err
+	}
+	tableDir, err := s.dir.Open(tr, []string{"tables", table.TableName}, nil)
+	if err != nil {
+		return nil, err
+	}
+	tr.Set(tableDir.Pack(tuple.Tuple{"metadata"}), tableBytes)
+	return nil, nil
 }

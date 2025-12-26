@@ -2816,6 +2816,77 @@ func TestFoundationDBStore_buildKeyTuple(t *testing.T) {
 	}
 }
 
+func TestUpdateTable_Backfill(t *testing.T) {
+	store := setupTestStore(t, "backfill-test")
+	tableName := "test-backfill-" + time.Now().Format("20060102150405")
+	ctx := context.Background()
+
+	// 1. Create Table (No GSI)
+	err := store.CreateTable(ctx, &models.Table{
+		TableName: tableName,
+		KeySchema: []models.KeySchemaElement{{AttributeName: "pk", KeyType: "HASH"}, {AttributeName: "sk", KeyType: "RANGE"}},
+		AttributeDefinitions: []models.AttributeDefinition{
+			{AttributeName: "pk", AttributeType: "S"},
+			{AttributeName: "sk", AttributeType: "S"},
+		},
+		ProvisionedThroughput: models.ProvisionedThroughput{ReadCapacityUnits: 1, WriteCapacityUnits: 1},
+	})
+	assert.NoError(t, err)
+
+	// 2. Populate Data (10 items)
+	for i := 1; i <= 10; i++ {
+		pk := "P1"
+		sk := fmt.Sprintf("S%d", i)
+		gsiVal := "G1" // same GSI PK
+		_, err := store.PutItem(ctx, tableName, map[string]models.AttributeValue{
+			"pk":     {S: &pk},
+			"sk":     {S: &sk},
+			"gsi-pk": {S: &gsiVal},
+		}, "", nil, nil, "NONE")
+		assert.NoError(t, err)
+	}
+
+	// 3. Add GSI via UpdateTable
+	gsiName := "gsi-backfill"
+	_, err = store.UpdateTable(ctx, &models.UpdateTableRequest{
+		TableName: tableName,
+		AttributeDefinitions: []models.AttributeDefinition{
+			{AttributeName: "gsi-pk", AttributeType: "S"},
+		},
+		GlobalSecondaryIndexUpdates: []models.GlobalSecondaryIndexUpdate{
+			{
+				Create: &models.CreateGlobalSecondaryIndexAction{
+					IndexName:             gsiName,
+					KeySchema:             []models.KeySchemaElement{{AttributeName: "gsi-pk", KeyType: "HASH"}},
+					Projection:            models.Projection{ProjectionType: "KEYS_ONLY"},
+					ProvisionedThroughput: models.ProvisionedThroughput{ReadCapacityUnits: 1, WriteCapacityUnits: 1},
+				},
+			},
+		},
+	})
+	assert.NoError(t, err)
+
+	// 4. Poll for ACTIVE status
+	assert.Eventually(t, func() bool {
+		table, err := store.GetTable(ctx, tableName)
+		if err != nil || table == nil {
+			return false
+		}
+		for _, gsi := range table.GlobalSecondaryIndexes {
+			if gsi.IndexName == gsiName {
+				return gsi.IndexStatus == "ACTIVE"
+			}
+		}
+		return false
+	}, 10*time.Second, 100*time.Millisecond, "GSI should become ACTIVE")
+
+	// 5. Query GSI
+	gsiVal := "G1"
+	qRes, _, err := store.Query(ctx, tableName, gsiName, "gsi-pk = :v", "", "", nil, map[string]models.AttributeValue{":v": {S: &gsiVal}}, 0, nil, false)
+	assert.NoError(t, err)
+	assert.Len(t, qRes, 10)
+}
+
 func TestFoundationDBStore_Pagination(t *testing.T) {
 	store := setupTestStore(t, "test-pagination")
 	tableName := "test-pagination-" + time.Now().Format("20060102150405")

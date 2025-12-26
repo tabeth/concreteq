@@ -620,6 +620,7 @@ func (s *FoundationDBStore) GetTable(ctx context.Context, tableName string) (*mo
 
 // UpdateTable updates a table's metadata (e.g. enabling streams).
 func (s *FoundationDBStore) UpdateTable(ctx context.Context, request *models.UpdateTableRequest) (*models.Table, error) {
+	var indexesToBackfill []string
 	val, err := s.db.Transact(func(tr fdbadapter.FDBTransaction) (interface{}, error) {
 		// 1. Get Table Metadata
 		table, err := s.getTableInternal(tr, request.TableName)
@@ -656,9 +657,18 @@ func (s *FoundationDBStore) UpdateTable(ctx context.Context, request *models.Upd
 						KeySchema:             update.Create.KeySchema,
 						Projection:            update.Create.Projection,
 						ProvisionedThroughput: update.Create.ProvisionedThroughput,
-						IndexStatus:           "ACTIVE",
+						IndexStatus:           "CREATING",
 					}
+
+					// Create GSI Directory
+					_, err := s.dir.CreateOrOpen(tr, []string{"tables", table.TableName, "index", gsi.IndexName}, nil)
+					if err != nil {
+						return nil, err
+					}
+
 					table.GlobalSecondaryIndexes = append(table.GlobalSecondaryIndexes, gsi)
+					// Queue backfill
+					indexesToBackfill = append(indexesToBackfill, gsi.IndexName)
 				}
 				// Handle Delete/Update as needed for completeness
 				if update.Delete != nil {
@@ -708,6 +718,16 @@ func (s *FoundationDBStore) UpdateTable(ctx context.Context, request *models.Upd
 	if err != nil {
 		return nil, err
 	}
+
+	// Trigger backfills
+	for _, idxName := range indexesToBackfill {
+		s.workerWg.Add(1)
+		go func(name string) {
+			defer s.workerWg.Done()
+			s.backfillIndex(context.Background(), request.TableName, name)
+		}(idxName)
+	}
+
 	return val.(*models.Table), nil
 }
 
@@ -1045,24 +1065,30 @@ func (s *FoundationDBStore) deleteItemInternal(tr fdbadapter.FDBTransaction, tab
 func (s *FoundationDBStore) getTableInternal(rtr fdbadapter.FDBReadTransaction, tableName string) (*models.Table, error) {
 	exists, err := s.dir.Exists(rtr, []string{"tables", tableName})
 	if err != nil {
+		fmt.Printf("getTableInternal: Exists error: %v\n", err)
 		return nil, err
 	}
 	if !exists {
+		fmt.Printf("getTableInternal: Directory tables/%s does not exist\n", tableName)
 		return nil, nil
 	}
 	tableDir, err := s.dir.Open(rtr, []string{"tables", tableName}, nil)
 	if err != nil {
+		fmt.Printf("getTableInternal: Open error: %v\n", err)
 		return nil, err
 	}
 	val, err := rtr.Get(tableDir.Pack(tuple.Tuple{"metadata"})).Get()
 	if err != nil {
+		fmt.Printf("getTableInternal: Get metadata error: %v\n", err)
 		return nil, err
 	}
 	if val == nil {
+		fmt.Printf("getTableInternal: Metadata key is NIL for tables/%s\n", tableName)
 		return nil, nil
 	}
 	var table models.Table
 	if err := json.Unmarshal(val, &table); err != nil {
+		fmt.Printf("getTableInternal: Unmarshal error: %v\n", err)
 		return nil, err
 	}
 	return &table, nil
