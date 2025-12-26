@@ -110,6 +110,24 @@ curl -X POST http://localhost:3000/delete/async \
   -d '{ "id": "doc2" }'
 ```
 
+### 4. Health Check (`GET /health`)
+Checks the health of the application and its connection to FoundationDB.
+
+```bash
+curl http://localhost:3000/health
+```
+
+**Response (Healthy):**
+```json
+{
+  "status": "ok",
+  "dependencies": {
+    "foundationdb": "ok"
+  }
+}
+```
+
+**Response (Unhealthy):** Returns `503 Service Unavailable` if FDB is unreachable.
 ### 3. Search (`POST /search`)
 Queries the index. Uses Lucene-like query syntax (provided by Tantivy).
 

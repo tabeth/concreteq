@@ -331,6 +331,52 @@ pub async fn queue_worker(state: Arc<AppState>) {
     }
 }
 
+/// Response for the health check endpoint.
+#[derive(Serialize)]
+pub struct HealthResponse {
+    pub status: String,
+    pub dependencies: DependenciesHealth,
+}
+
+#[derive(Serialize)]
+pub struct DependenciesHealth {
+    pub foundationdb: String,
+}
+
+/// **Health Check Handler** (`GET /health`)
+/// 
+/// Checks the health of the application and its dependencies.
+/// Specifically checks connectivity to FoundationDB.
+pub async fn health_check(
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    let db = state.db.clone();
+    
+    // Check FDB connectivity by attempting to get a read version.
+    // This is a lightweight operation that verifies we can talk to the cluster.
+    let fdb_status = match db.run(|trx, _maybe_committed| {
+        async move {
+            trx.get_read_version().await.map_err(Into::into)
+        }
+    }).await {
+        Ok(_) => "ok",
+        Err(e) => {
+            eprintln!("Health Check - FDB Error: {:?}", e);
+            "error"
+        }
+    };
+    
+    let status = if fdb_status == "ok" { "ok" } else { "unhealthy" };
+    let http_status = if status == "ok" { StatusCode::OK } else { StatusCode::SERVICE_UNAVAILABLE };
+    
+    (http_status, Json(HealthResponse {
+        status: status.to_string(),
+        dependencies: DependenciesHealth {
+            foundationdb: fdb_status.to_string(),
+        }
+    }))
+}
+
 // ------------------------------------------------------------------------------------------------
 // TESTS
 // ------------------------------------------------------------------------------------------------
@@ -350,17 +396,18 @@ mod tests {
 
     // Helper macro for async test setup
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+
     async fn test_api_sync_index_search() {
         crate::test_utils::init_fdb();
         let db = match Database::new(None) {
             Ok(db) => Arc::new(db),
             Err(_) => return,
         };
-        crate::test_utils::clear_subspace(&db, b"test_api").await;
-
+        crate::test_utils::clear_subspace(&db, b"sync_test").await;
+        
         let temp_dir = TempDir::new().unwrap();
         let cache_path = temp_dir.path().to_path_buf();
-        let fdb_directory = FdbDirectory::new(db.clone(), b"test_api", cache_path).unwrap();
+        let fdb_directory = FdbDirectory::new(db.clone(), b"sync_test", cache_path).unwrap();
 
         let mut schema_builder = Schema::builder();
         let id_field = schema_builder.add_text_field("id", tantivy::schema::STRING | tantivy::schema::STORED);
@@ -383,14 +430,16 @@ mod tests {
         let app = Router::new()
             .route("/index/sync", post(sync_index))
             .route("/search", post(search_handler))
-            .with_state(state);
+            .with_state(state.clone());
 
-        // Test Sync Index
         let payload = json!({
             "id": "doc1",
-            "doc": { "title": "Rust is great", "tags": ["rust", "search"] }
+            "doc": {
+                "title": "Test Title",
+                "body": "Test Body"
+            }
         });
-        
+
         let req = Request::builder()
             .method("POST")
             .uri("/index/sync")
@@ -400,18 +449,28 @@ mod tests {
 
         let response = app.clone().oneshot(req).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
-
-        // Test Search
-        let search_payload = json!({ "query": "Rust" });
+        
+        // Ensure reload happens (manual policy handled in handler, but we wait a bit for FDB propagation if any)
+        // With manual reload on commit, it should be visible instantly for this thread.
+        
+        let search_payload = json!({ "query": "body.title:Test" });
         let req = Request::builder()
             .method("POST")
             .uri("/search")
             .header("content-type", "application/json")
             .body(Body::from(serde_json::to_vec(&search_payload).unwrap()))
             .unwrap();
-
+            
         let response = app.oneshot(req).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
+        
+        // Parse body
+        let body_bytes = axum::body::to_bytes(response.into_body(), 1000).await.unwrap();
+        let body_json: Value = serde_json::from_slice(&body_bytes).unwrap();
+        
+        let hits = body_json["hits"].as_array().unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0]["id"], "doc1");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -421,11 +480,11 @@ mod tests {
             Ok(db) => Arc::new(db),
             Err(_) => return,
         };
-        crate::test_utils::clear_subspace(&db, b"concretesearch-test-invalid").await;
+        crate::test_utils::clear_subspace(&db, b"invalid_query_test").await;
 
         let temp_dir = TempDir::new().unwrap();
         let cache_path = temp_dir.path().to_path_buf();
-        let fdb_directory = FdbDirectory::new(db.clone(), b"concretesearch-test-invalid", cache_path).unwrap();
+        let fdb_directory = FdbDirectory::new(db.clone(), b"invalid_query_test", cache_path).unwrap();
 
         let mut schema_builder = Schema::builder();
         let id_field = schema_builder.add_text_field("id", tantivy::schema::STRING | tantivy::schema::STORED);
@@ -449,27 +508,17 @@ mod tests {
             .route("/search", post(search_handler)) // Use super::search_handler if needed, but we are in mod tests
             .with_state(state);
 
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .uri("/search")
-                    .method("POST")
-                    .header("content-type", "application/json")
-                    .body(Body::from(
-                        serde_json::to_vec(&SearchRequest {
-                            query: "title:(".to_string(), // Invalid syntax
-                        })
-                        .unwrap(),
-                    ))
-                    .unwrap(),
-            )
-            .await
+        let payload = json!({ "query": "body.title:" }); // Invalid syntax (empty value)
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/search")
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::to_vec(&payload).unwrap()))
             .unwrap();
 
-        // Tantivy query parser error usually results in 400 or 500 depending on impl
-        // In our handler: parser.parse_query(query).map_err(...) -> 400 (if BadRequest)
-        // Let's check status.
-        assert!(response.status().is_client_error() || response.status().is_server_error());
+        let response = app.oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -479,11 +528,11 @@ mod tests {
             Ok(db) => Arc::new(db),
             Err(_) => return,
         };
-        crate::test_utils::clear_subspace(&db, b"test_async_api").await;
+        crate::test_utils::clear_subspace(&db, b"async_test").await;
         
         let temp_dir = TempDir::new().unwrap();
         let cache_path = temp_dir.path().to_path_buf();
-        let fdb_directory = FdbDirectory::new(db.clone(), b"test_async_api", cache_path).unwrap();
+        let fdb_directory = FdbDirectory::new(db.clone(), b"async_test", cache_path).unwrap();
 
         let mut schema_builder = Schema::builder();
         let id_field = schema_builder.add_text_field("id", tantivy::schema::STRING | tantivy::schema::STORED);
@@ -506,17 +555,19 @@ mod tests {
         // Spawn Background Worker
         let worker_state = state.clone();
         tokio::spawn(async move {
-            crate::api::queue_worker(worker_state).await;
+            queue_worker(worker_state).await;
         });
 
         let app = Router::new()
             .route("/index/async", post(async_index))
             .with_state(state.clone());
 
-        // Test Async Index
         let payload = json!({
             "id": "doc_async",
-            "doc": { "title": "Async Rust", "tags": ["async"] }
+            "doc": {
+                "title": "Async Title",
+                "body": "Async Body"
+            }
         });
         
         let req = Request::builder()
@@ -530,6 +581,56 @@ mod tests {
         assert_eq!(response.status(), StatusCode::ACCEPTED);
         
         sleep(Duration::from_secs(2)).await; 
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn test_health_check() {
+        crate::test_utils::init_fdb();
+        let db = match Database::new(None) {
+            Ok(db) => Arc::new(db),
+            Err(_) => return,
+        };
+        
+        let temp_dir = TempDir::new().unwrap();
+        let cache_path = temp_dir.path().to_path_buf();
+        let fdb_directory = FdbDirectory::new(db.clone(), b"health_test", cache_path).unwrap();
+
+        let mut schema_builder = Schema::builder();
+        let id_field = schema_builder.add_text_field("id", tantivy::schema::STRING | tantivy::schema::STORED);
+        let body_field = schema_builder.add_json_field("body", tantivy::schema::TEXT | tantivy::schema::STORED);
+        let schema = schema_builder.build();
+
+        let index = tantivy::Index::open_or_create(fdb_directory, schema.clone()).unwrap();
+        let index_writer = index.writer(50_000_000).unwrap();
+        let index_reader = index.reader().unwrap();
+
+        let state = Arc::new(AppState {
+            index_writer: Arc::new(Mutex::new(index_writer)),
+            index_reader,
+            db: db.clone(),
+            schema: schema.clone(),
+            id_field,
+            body_field,
+        });
+
+        let app = Router::new()
+            .route("/health", axum::routing::get(health_check))
+            .with_state(state);
+
+        let req = Request::builder()
+            .method("GET")
+            .uri("/health")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        
+        let body_bytes = axum::body::to_bytes(response.into_body(), 1000).await.unwrap();
+        let body_json: Value = serde_json::from_slice(&body_bytes).unwrap();
+        
+        assert_eq!(body_json["status"], "ok");
+        assert_eq!(body_json["dependencies"]["foundationdb"], "ok");
     }
 
     async fn wait_for_search(app: &Router, query: &str, expect_found: bool) -> bool {

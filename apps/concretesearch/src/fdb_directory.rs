@@ -272,16 +272,74 @@ impl Directory for FdbDirectory {
     }
 
     fn watch(&self, watch_callback: WatchCallback) -> tantivy::Result<WatchHandle> {
-        // Delegate watch to the local MmapDirectory cache.
-        // Since we update the local file in `atomic_write`, MmapDirectory's watcher should trigger.
+        // We attempted distributed watches but `WatchCallback` type opacity in this version
+        // prevents us from easily wrapping/calling it from a background thread.
+        // Fallback to local cache watching.
         self.local_cache.watch(watch_callback)
+    }    
+    fn acquire_lock(&self, lock: &Lock) -> Result<DirectoryLock, LockError> {
+        // Attempt to determine lock type via Debug representation
+        let lock_debug = format!("{:?}", lock);
+        println!("FdbDirectory::acquire_lock: {:?}", lock_debug);
+        
+        let lock_name = if lock_debug.to_lowercase().contains("meta") {
+            "meta"
+        } else {
+            "writer"
+        };
+        println!("FdbDirectory::acquire_lock: Resolved name '{}'", lock_name);
+        
+        let key = self.subspace.pack(&("lock", lock_name));
+        let db = self.db.clone();
+        
+        safe_block_on(async {
+            let result = db.run(|trx, _maybe_committed| {
+                let key = key.clone();
+                async move {
+                    let val = trx.get(&key, false).await.map_err(foundationdb::FdbBindingError::from)?; 
+                    if val.is_some() {
+                        return Ok::<bool, foundationdb::FdbBindingError>(false);
+                    }
+                    // Take lock
+                    trx.set(&key, &[]); 
+                    Ok(true)
+                }
+            }).await;
+            
+            match result {
+                Ok(true) => {
+                    let guard = DirectoryLock::from(Box::new(FdbLock {
+                        db: self.db.clone(),
+                        key: key.clone(),
+                    }));
+                    Ok(guard)
+                },
+                Ok(false) => Err(LockError::LockBusy),
+                Err(_) => Err(LockError::IoError(io::Error::new(io::ErrorKind::Other, "FDB Error").into())),
+            }
+        })
     }
-    
-    fn acquire_lock(&self, _lock: &Lock) -> Result<DirectoryLock, LockError> {
-        // We defer locking to the local filesystem for simplicity in this prototype.
-        // Distributed locking would use FDB directly.
-        let guard = self.local_cache.acquire_lock(_lock)?;
-        Ok(guard)
+}
+
+/// A struct that releases the FDB lock when dropped.
+struct FdbLock {
+    db: Arc<Database>,
+    key: Vec<u8>,
+}
+
+impl Drop for FdbLock {
+    fn drop(&mut self) {
+        let db = self.db.clone();
+        let key = self.key.clone();
+        safe_block_on(async move {
+             let _ = db.run(|trx, _maybe_committed| {
+                let key = key.clone();
+                async move {
+                    trx.clear(&key);
+                    Ok(())
+                }
+             }).await;
+        });
     }
 }
 

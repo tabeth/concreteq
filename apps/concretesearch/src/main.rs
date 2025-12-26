@@ -1,5 +1,5 @@
 use axum::{
-    routing::post,
+    routing::{get, post},
     Router,
 };
 use foundationdb::Database;
@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tantivy::{
     doc,
-    schema::{Schema, TEXT, STORED, STRING},
+    schema::Schema,
     Index,
 };
 use tokio::net::TcpListener;
@@ -18,7 +18,7 @@ mod fdb_directory;
 pub mod test_utils;
 
 // Import handlers and state from the API module
-use api::{AppState, sync_index, async_index, sync_delete, async_delete, search_handler, queue_worker};
+use api::{AppState, queue_worker};
 use fdb_directory::FdbDirectory;
 
 /// The main entry point of the asynchronous application.
@@ -38,13 +38,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // ---------------------------------------------------------
     // Define the Search Schema
     // ---------------------------------------------------------
-    // Tantivy requires a strict schema definition for the index.
-    let mut schema_builder = Schema::builder();
-    
-    // ID should be untokenized (STRING) for exact lookups and deletions.
-    let id_field = schema_builder.add_text_field("id", STRING | STORED);
-    let body_field = schema_builder.add_json_field("body", TEXT | STORED);
-    let schema = schema_builder.build();
+    // We load the schema from FDB if it exists, otherwise we create it and save it.
+    let schema = load_or_create_schema(&db).await?;
+    let id_field = schema.get_field("id").unwrap();
+    let body_field = schema.get_field("body").unwrap();
 
     // ---------------------------------------------------------
     // Setup Directory (Storage Layer)
@@ -103,11 +100,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Define the routes and attach the handlers.
     // `.with_state(app_state)` injects our shared state into every handler.
     let app = Router::new()
-        .route("/index/sync", post(sync_index))     // POST /index/sync
-        .route("/index/async", post(async_index))   // POST /index/async
-        .route("/delete/sync", post(sync_delete))   // POST /delete/sync
-        .route("/delete/async", post(async_delete)) // POST /delete/async
-        .route("/search", post(search_handler))     // POST /search
+        .route("/index/sync", post(api::sync_index))     // POST /index/sync
+        .route("/index/async", post(api::async_index))   // POST /index/async
+        .route("/delete/sync", post(api::sync_delete))   // POST /delete/sync
+        .route("/delete/async", post(api::async_delete)) // POST /delete/async
+        .route("/search", post(api::search_handler))     // POST /search
+        .route("/health", get(api::health_check))
         .with_state(app_state);
 
     // Bind the server to all interfaces (0.0.0.0) on port 3000.
@@ -120,4 +118,47 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Drop the network guard when the server stops (mostly for clean shutdown logic).
     drop(network);
     Ok(())
+}
+
+/// Loads the schema from FDB or creates/saves default if missing.
+async fn load_or_create_schema(db: &Database) -> Result<Schema, Box<dyn std::error::Error>> {
+    use foundationdb::tuple::Subspace;
+    use tantivy::schema::{TEXT, STORED, STRING};
+
+    let subspace = Subspace::from(&b"system"[..]);
+    let key = subspace.pack(&"schema");
+    
+    let maybe_schema_json: Option<Vec<u8>> = db.run(|trx, _maybe_committed| {
+        let key = key.clone();
+        async move {
+            Ok(trx.get(&key, false).await.map(|v| v.map(|s| s.to_vec()))?)
+        }
+    }).await?;
+
+    if let Some(json_bytes) = maybe_schema_json {
+        println!("Loaded schema from FDB.");
+        let json_str = String::from_utf8(json_bytes)?;
+        let schema_json: serde_json::Value = serde_json::from_str(&json_str)?;
+        let schema: Schema = serde_json::from_value(schema_json)?;
+        Ok(schema)
+    } else {
+        println!("Schema not found in FDB. Creating default.");
+        let mut schema_builder = Schema::builder();
+        schema_builder.add_text_field("id", STRING | STORED);
+        schema_builder.add_json_field("body", TEXT | STORED);
+        let schema = schema_builder.build();
+        
+        // Save it
+        let schema_json = serde_json::to_vec(&schema)?;
+        db.run(|trx, _maybe_committed| {
+            let key = key.clone();
+            let val = schema_json.clone();
+            async move {
+                trx.set(&key, &val);
+                Ok(())
+            }
+        }).await?;
+        
+        Ok(schema)
+    }
 }
