@@ -10,7 +10,8 @@ const (
 	NodeFunction
 	NodeLiteral
 	NodePath
-	NodeParen // Typically resolved during parsing, but kept if useful
+	NodeParen
+	NodeUpdate // Root node for Update Expressions
 )
 
 type Node interface {

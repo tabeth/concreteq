@@ -1262,7 +1262,7 @@ func (s *FoundationDBStore) updateItemInternal(tr fdbadapter.FDBTransaction, tab
 	// 5. Apply Update Expression
 	changed := make(map[string]bool)
 	if updateExpression != "" {
-		c, err := applyUpdateExpression(item, updateExpression, exprAttrNames, exprAttrValues)
+		c, err := s.evaluator.ApplyUpdate(item, updateExpression, exprAttrNames, exprAttrValues)
 		if err != nil {
 			return nil, err
 		}
@@ -1507,112 +1507,7 @@ func (s *FoundationDBStore) TransactWriteItems(ctx context.Context, transactItem
 }
 
 // Simple expression parser for MVP supporting SET and REMOVE
-func applyUpdateExpression(item map[string]models.AttributeValue, expr string, names map[string]string, values map[string]models.AttributeValue) (map[string]bool, error) {
-	changed := make(map[string]bool)
-	expr = strings.TrimSpace(expr)
-
-	// Split by major sections (SET, REMOVE)
-	sections := make(map[string]string)
-	currentSection := ""
-	var sectionWords []string
-
-	words := strings.Fields(expr)
-	for _, word := range words {
-		upper := strings.ToUpper(word)
-		if upper == "SET" || upper == "REMOVE" || upper == "ADD" || upper == "DELETE" {
-			if currentSection != "" {
-				sections[currentSection] = strings.Join(sectionWords, " ")
-			}
-			currentSection = upper
-			sectionWords = nil
-		} else {
-			sectionWords = append(sectionWords, word)
-		}
-	}
-	if currentSection != "" {
-		sections[currentSection] = strings.Join(sectionWords, " ")
-	}
-
-	// If no section keyword, assume SET for backward compatibility with very simple expressions
-	if currentSection == "" && expr != "" {
-		sections["SET"] = expr
-	}
-
-	// Helpers
-	resolve := func(name string) (string, error) {
-		if strings.HasPrefix(name, "#") {
-			if n, ok := names[name]; ok {
-				return n, nil
-			}
-			return "", fmt.Errorf("missing expression attribute name: %s", name)
-		}
-		return name, nil
-	}
-
-	// Process SET
-	if body, ok := sections["SET"]; ok {
-		assignments := strings.Split(body, ",")
-		for _, assignment := range assignments {
-			assignment = strings.TrimSpace(assignment)
-			if assignment == "" {
-				continue
-			}
-			parts := strings.Split(assignment, "=")
-			if len(parts) != 2 {
-				return nil, fmt.Errorf("invalid assignment: %s", assignment)
-			}
-
-			lhs := strings.TrimSpace(parts[0])
-			rhs := strings.TrimSpace(parts[1])
-
-			realName, err := resolve(lhs)
-			if err != nil {
-				return nil, err
-			}
-
-			// Resolve RHS (Value)
-			var val models.AttributeValue
-			if strings.HasPrefix(rhs, ":") {
-				if v, ok := values[rhs]; ok {
-					val = v
-				} else {
-					return nil, fmt.Errorf("missing expression attribute value: %s", rhs)
-				}
-			} else {
-				return nil, fmt.Errorf("only literal values with ':' prefix supported in MVP")
-			}
-
-			item[realName] = val
-			changed[realName] = true
-		}
-	}
-
-	// Process REMOVE
-	if body, ok := sections["REMOVE"]; ok {
-		attrs := strings.Split(body, ",")
-		for _, a := range attrs {
-			name := strings.TrimSpace(a)
-			if name == "" {
-				continue
-			}
-			realName, err := resolve(name)
-			if err != nil {
-				return nil, err
-			}
-			delete(item, realName)
-			changed[realName] = true
-		}
-	}
-
-	if _, ok := sections["ADD"]; ok {
-		return nil, fmt.Errorf("ADD expression not yet supported in MVP")
-	}
-	if _, ok := sections["DELETE"]; ok {
-		return nil, fmt.Errorf("DELETE expression not yet supported in MVP")
-	}
-
-	return changed, nil
-}
+// applyUpdateExpression removed in favor of expression.Evaluator.ApplyUpdate
 
 // BatchGetItem retrieves multiple items from multiple tables.
 func (s *FoundationDBStore) BatchGetItem(ctx context.Context, requestItems map[string]models.KeysAndAttributes) (map[string][]map[string]models.AttributeValue, map[string]models.KeysAndAttributes, error) {

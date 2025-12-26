@@ -189,6 +189,11 @@ func (p *Parser) parseOperand() (Node, error) {
 	if p.match(TokenValue) {
 		return &LiteralNode{Value: p.prev().Literal}, nil
 	}
+
+	if p.isFunctionStart() {
+		return p.parseFunctionCall()
+	}
+
 	// TODO: Support raw numbers/strings if we scan them? Lexer currently only does identifiers and :start.
 	// Assuming placeholders for now.
 	if p.match(TokenSize) {

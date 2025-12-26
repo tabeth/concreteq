@@ -46,6 +46,12 @@ const (
 	TokenDot      // .
 	TokenLBracket // [
 	TokenRBracket // ]
+	TokenSET
+	TokenREMOVE
+	TokenADD
+	TokenDELETE
+	TokenPlus
+	TokenMinus
 )
 
 var keywords = map[string]TokenType{
@@ -61,6 +67,10 @@ var keywords = map[string]TokenType{
 	"size":                 TokenSize,
 	"list_append":          TokenListAppend,
 	"if_not_exists":        TokenIfNotExists,
+	"SET":                  TokenSET,
+	"REMOVE":               TokenREMOVE,
+	"ADD":                  TokenADD,
+	"DELETE":               TokenDELETE,
 }
 
 type Token struct {
@@ -140,6 +150,10 @@ func lexText(l *Lexer) stateFn {
 			return nil
 		case isSpace(r):
 			l.ignore()
+		case r == '+':
+			l.emit(TokenPlus)
+		case r == '-':
+			l.emit(TokenMinus)
 		case r == '=':
 			l.emit(TokenEq)
 		case r == '<':

@@ -259,7 +259,7 @@ func TestFoundationDBStore_UpdateItem_Comprehensive(t *testing.T) {
 
 	// 11. Literal value without colon (unsupported by our simple parser)
 	_, err = store.UpdateItem(ctx, tableName, key, "SET age = 25", "", nil, nil, "")
-	if err == nil || !strings.Contains(err.Error(), "only literal values with ':' prefix supported") {
+	if err == nil || !strings.Contains(err.Error(), "value not found") {
 		t.Error("expected error for literal without colon")
 	}
 }
