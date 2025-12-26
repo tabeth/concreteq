@@ -16,6 +16,7 @@ func TestTTL_BackgroundCleanup(t *testing.T) {
 	tableName := "test-ttl-cleanup"
 	store := setupTestStore(t, tableName)
 	ctx := context.Background()
+	defer store.DeleteTable(ctx, tableName)
 	err := store.CreateTable(ctx, &models.Table{
 		TableName: tableName,
 		KeySchema: []models.KeySchemaElement{{AttributeName: "pk", KeyType: "HASH"}},
@@ -83,6 +84,7 @@ func TestTTL_UpdateRespectsIndex(t *testing.T) {
 	tableName := "test-ttl-update"
 	store := setupTestStore(t, tableName)
 	ctx := context.Background()
+	defer store.DeleteTable(ctx, tableName)
 	err := store.CreateTable(ctx, &models.Table{
 		TableName: tableName,
 		KeySchema: []models.KeySchemaElement{{AttributeName: "pk", KeyType: "HASH"}},
@@ -126,6 +128,7 @@ func TestTTL_DisablePreventsCleanup(t *testing.T) {
 	tableName := "test-ttl-disabled"
 	store := setupTestStore(t, tableName)
 	ctx := context.Background()
+	defer store.DeleteTable(ctx, tableName)
 	err := store.CreateTable(ctx, &models.Table{
 		TableName: tableName,
 		KeySchema: []models.KeySchemaElement{{AttributeName: "pk", KeyType: "HASH"}},
@@ -156,6 +159,7 @@ func TestTTL_NumericKeys_And_Batching(t *testing.T) {
 	tableName := "test-ttl-numeric-batch"
 	store := setupTestStore(t, tableName)
 	ctx := context.Background()
+	defer store.DeleteTable(ctx, tableName)
 	err := store.CreateTable(ctx, &models.Table{
 		TableName: tableName,
 		KeySchema: []models.KeySchemaElement{{AttributeName: "id", KeyType: "HASH"}},
@@ -202,6 +206,7 @@ func TestTTL_BinaryKeys(t *testing.T) {
 	tableName := "test-ttl-binary"
 	store := setupTestStore(t, tableName)
 	ctx := context.Background()
+	defer store.DeleteTable(ctx, tableName)
 	err := store.CreateTable(ctx, &models.Table{
 		TableName: tableName,
 		KeySchema: []models.KeySchemaElement{{AttributeName: "id", KeyType: "HASH"}},
@@ -233,4 +238,24 @@ func TestTTL_BinaryKeys(t *testing.T) {
 	scanRes, _, err := store.Scan(ctx, tableName, "", "", nil, nil, 0, nil, true)
 	assert.NoError(t, err)
 	assert.Len(t, scanRes, 0)
+}
+
+func TestFoundationDBStore_WorkerLifecycle(t *testing.T) {
+	// Setup store (table name not strictly needed but setupTestStore requires one?)
+	// setupTestStore uses table name to clean up? No, it just gives a store.
+	store := setupTestStore(t, "worker-test")
+	ctx := context.Background()
+	// No table created, so no cleanup needed essentially, but setupTestStore creates nothing on FDB yet?
+	// setupTestStore returns a *FoundationDBStore.
+
+	// Start workers
+	store.StartWorkers(ctx)
+
+	// Wait for goroutine to start
+	time.Sleep(100 * time.Millisecond)
+
+	// Stop workers
+	store.StopWorkers()
+
+	// Repeated usage should be safe or we can check internal state if we exposed it, but blackbox test is fine.
 }

@@ -2713,7 +2713,7 @@ func TestFoundationDBStore_toTupleElement(t *testing.T) {
 		{
 			name: "Number",
 			av:   models.AttributeValue{N: &numVal},
-			want: "123.456",
+			want: 123.456,
 		},
 		{
 			name: "Binary",
@@ -2777,7 +2777,7 @@ func TestFoundationDBStore_buildKeyTuple(t *testing.T) {
 				"pk": {S: &strVal},
 				"sk": {N: &numVal},
 			},
-			want: []tuple.TupleElement{"pk-val", "10"},
+			want: []tuple.TupleElement{"pk-val", 10.0},
 		},
 		{
 			name: "Missing_PartitionKey",

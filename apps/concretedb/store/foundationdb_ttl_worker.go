@@ -2,7 +2,6 @@ package store
 
 import (
 	"context"
-	"encoding/base64"
 	"fmt"
 	"log"
 	"time"
@@ -173,6 +172,11 @@ func (s *FoundationDBStore) cleanupExpiredItems(ctx context.Context, tableName s
 					return 0, err // Retry transaction
 				}
 
+				// Explicitly clear the TTL index entry to prevent infinite loops if deleteItemInternal
+				// fails to find the item (stale index) or doesn't trigger updateTTLIndex correctly.
+				// Clearing it twice (here and in updateTTLIndex) is safe/idempotent.
+				tr.Clear(item.TTLKey)
+
 				// Explicitly clear the TTL index entry?
 				// `deleteItemInternal` clears ALL indexes.
 				// We need to ensure `deleteItemInternal` knows about TTL index or generic index clearing covers it.
@@ -241,11 +245,10 @@ func (s *FoundationDBStore) buildKeyMapFromTuple(table *models.Table, keyTuple t
 				}
 			}
 		case []byte:
-			// If B type, we need base64? No, models.AV B is base64 string?
-			// `toTupleElement` takes AV.B (string) -> []byte.
-			// So here we take []byte -> AV.B (string base64 encoded).
-			encoded := base64.StdEncoding.EncodeToString(v)
-			res[ke.AttributeName] = models.AttributeValue{B: &encoded}
+			// toTupleElement stores the Base64 string as []byte (without decoding).
+			// So here v is the Base64 string bytes. We just need to convert back to string.
+			s := string(v)
+			res[ke.AttributeName] = models.AttributeValue{B: &s}
 		case int64: // Should not happen for our keys unless old data
 			strVal := fmt.Sprintf("%d", v)
 			res[ke.AttributeName] = models.AttributeValue{N: &strVal}
