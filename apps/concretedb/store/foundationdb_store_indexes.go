@@ -200,7 +200,11 @@ func toFDBElement(v models.AttributeValue) (tuple.TupleElement, error) {
 		return *v.S, nil
 	}
 	if v.N != nil {
-		return *v.N, nil
+		var f float64
+		if _, err := fmt.Sscanf(*v.N, "%f", &f); err != nil {
+			return nil, fmt.Errorf("invalid number format: %s", *v.N)
+		}
+		return f, nil
 	}
 	if v.B != nil {
 		return []byte(*v.B), nil

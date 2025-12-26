@@ -378,16 +378,15 @@ func (s *FoundationDBStore) performPointInTimeRestore(sourceTableName, targetTab
 			}
 
 			// If we hit limit but haven't finalized ANY PK (one huge PK history),
-			// logic fails. For MVP, we just return prevKey (end of batch) and hope next batch picks up correct state?
-			// NO, state is lost between batches (currentPK, bestCandidateItem).
-			// Robust implementation requires passing state.
-			// Ideally we assume batchSize > largest single-PK history size.
-			// Returning nil here would terminate loop, which is bad.
-			// Returning prevKey resumes > prevKey, missing the rest of this PK's history?
-			// Or just skipping the rest of this PK?
-			// For now, return prevKey to ensure progress, even if this edge case is broken.
-			if prevKey != nil {
+			// logic fails to finalize it correctly without state.
+			// To avoid infinite loops or state loss, if lastSafeResumeKey is nil (meaning the whole batch was one PK),
+			// we skip the rest of THIS PK and resume from the next one.
+			if lastSafeResumeKey == nil && prevKey != nil {
 				return prevKey, nil
+			}
+
+			if lastSafeResumeKey != nil {
+				return lastSafeResumeKey, nil
 			}
 
 			return nil, nil

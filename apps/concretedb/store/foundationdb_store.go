@@ -825,10 +825,20 @@ func (s *FoundationDBStore) putItemInternal(tr fdbadapter.FDBTransaction, table 
 		}
 	}
 
-	// 4. Serialize Item
+	// 4. Serialize Item and Check Size Limits
 	itemBytes, err := json.Marshal(item)
 	if err != nil {
 		return nil, err
+	}
+
+	// DynamoDB item size limit: 400KB
+	if len(itemBytes) > 400*1024 {
+		return nil, models.New("ValidationException", "Item size exceeds the maximum limit of 400 KB")
+	}
+
+	// FoundationDB value size limit: 100,000 bytes (safely check against slightly less)
+	if len(itemBytes) > 95*1024 {
+		return nil, models.New("ValidationException", "Item size exceeds the FoundationDB value limit of 100,000 bytes. Consider using S3 for large attributes.")
 	}
 
 	// 5. Store
@@ -1089,16 +1099,13 @@ func toTupleElement(av models.AttributeValue) (tuple.TupleElement, error) {
 		return *av.S, nil
 	}
 	if av.N != nil {
-		// Store numbers as strings/bytes or convert?
-		// FDB Tuple layer supports integers and floats. DynamoDB numbers are arbitrary precision strings.
-		// For MVP simplicity and sorting correctness for common numbers, maybe store as string?
-		// Actually, DynamoDB strings sort differently than numbers.
-		// If we store as string in tuple, "10" comes before "2". That's wrong for numbers.
-		// We should try to parse as float64 or int64 if possible for ordering.
-		// But for exact equality matching (Hash key), string is fine.
-		// Range keys need proper ordering.
-		// Let's store as string for MVP to ensure round-trip accuracy, realizing range queries might be lexicographical on the string rep.
-		return *av.N, nil
+		// Store numbers as float64 to ensure correct numerical sorting in FDB tuples.
+		// DynamoDB numbers are strings, but for sorting we need numerical representation.
+		var f float64
+		if _, err := fmt.Sscanf(*av.N, "%f", &f); err != nil {
+			return nil, fmt.Errorf("invalid number format: %s", *av.N)
+		}
+		return f, nil
 	}
 	if av.B != nil {
 		return []byte(*av.B), nil
@@ -1204,10 +1211,20 @@ func (s *FoundationDBStore) updateItemInternal(tr fdbadapter.FDBTransaction, tab
 		}
 	}
 
-	// 6. Serialize and Write
+	// 6. Serialize and Write and Check Size Limits
 	itemBytes, err := json.Marshal(item)
 	if err != nil {
 		return nil, err
+	}
+
+	// DynamoDB item size limit: 400KB
+	if len(itemBytes) > 400*1024 {
+		return nil, models.New("ValidationException", "Item size exceeds the maximum limit of 400 KB")
+	}
+
+	// FoundationDB value size limit: 100,000 bytes
+	if len(itemBytes) > 95*1024 {
+		return nil, models.New("ValidationException", "Item size exceeds the FoundationDB value limit of 100,000 bytes. Consider using S3 for large attributes.")
 	}
 	tr.Set(itemKey, itemBytes)
 
@@ -1347,6 +1364,25 @@ func (s *FoundationDBStore) TransactWriteItems(ctx context.Context, transactItem
 	}
 
 	_, err := s.db.Transact(func(tr fdbadapter.FDBTransaction) (interface{}, error) {
+		// 1. Idempotency Check
+		if clientRequestToken != "" {
+			// Path: ["tx_tokens", clientRequestToken]
+			tokenDir, err := s.dir.CreateOrOpen(tr, []string{"tx_tokens"}, nil)
+			if err != nil {
+				return nil, err
+			}
+			tokenKey := tokenDir.Pack(tuple.Tuple{clientRequestToken})
+			existing, err := tr.Get(tokenKey).Get()
+			if err != nil {
+				return nil, err
+			}
+			if existing != nil {
+				return nil, nil // Idempotent success
+			}
+			// Store token (value can be empty or "COMPLETED")
+			tr.Set(tokenKey, []byte("COMPLETED"))
+		}
+
 		for _, item := range transactItems {
 			// Determine action
 			var tableName string
