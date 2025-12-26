@@ -35,18 +35,32 @@ This means you can have 10 identical search nodes running behind a load balancer
 ## 🚥 How to Run
 
 ### Prerequisites
-- **Rust Toolchain** (cargo, rustc)
-- **FoundationDB Server** running locally (or configured via `fdb.cluster`).
+
+1. **Rust Toolchain**: Install via [rustup.rs](https://rustup.rs).
+2. **FoundationDB**:
+   - Install the FoundationDB client and server packages for your OS.
+   - Ensure the server is running.
+   - **Important**: You must have the `fdb.cluster` file (usually in `/etc/foundationdb/fdb.cluster` or user config) accessible.
+3. **Build Dependencies**:
+   - `clang` / `libclang`: Required by `bindgen` to generate FDB bindings.
+     - Ubuntu: `sudo apt install libclang-dev clang`
+     - macOS: `xcode-select --install`
 
 ### Running the Server
 ```bash
+# Debug build
+cargo run
+
+# Release build (recommended for benchmarks)
 cargo run --release
 ```
- The server listens on `0.0.0.0:3000`.
+The server listens on `0.0.0.0:3000`.
 
 ## 🔌 API Usage
 
-### 1. Synchronous Indexing (`POST /index/sync`)
+### 1. Indexing (Add Documents)
+
+#### Synchronous Indexing (`POST /index/sync`)
 Adds a document and waits for it to be safely committed to FDB. Slower per-request, but immediately searchable.
 
 ```bash
@@ -61,7 +75,7 @@ curl -X POST http://localhost:3000/index/sync \
   }'
 ```
 
-### 2. Asynchronous Indexing (`POST /index/async`)
+#### Asynchronous Indexing (`POST /index/async`)
 Adds a document to a high-speed queue in FDB and returns immediately (`202 Accepted`). A background worker process picks it up and indexes it in batches. Perfect for high-ingestion rates.
 
 ```bash
@@ -74,6 +88,26 @@ curl -X POST http://localhost:3000/index/async \
       "body": "Non-blocking I/O is crucial for performance..."
     }
   }'
+```
+
+### 2. Deleting (Remove Documents)
+
+#### Synchronous Deletion (`POST /delete/sync`)
+Deletes a document by ID and waits for the commit.
+
+```bash
+curl -X POST http://localhost:3000/delete/sync \
+  -H "Content-Type: application/json" \
+  -d '{ "id": "doc1" }'
+```
+
+#### Asynchronous Deletion (`POST /delete/async`)
+Enqueues a deletion job. Returns `202 Accepted` immediately.
+
+```bash
+curl -X POST http://localhost:3000/delete/async \
+  -H "Content-Type: application/json" \
+  -d '{ "id": "doc2" }'
 ```
 
 ### 3. Search (`POST /search`)

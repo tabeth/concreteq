@@ -51,7 +51,7 @@ fn safe_block_on<F: std::future::Future>(future: F) -> F::Output {
 /// - Reads verify if the file is in the local cache (`/tmp/concrete_cache`).
 /// - If cached: Read from disk (fast).
 /// - If not cached: Download from FDB -> Save to Cache -> Read from disk.
-/// This "Lazy Loading" strategy balances network usage and performance.
+///   This "Lazy Loading" strategy balances network usage and performance.
 #[derive(Clone)]
 pub struct FdbDirectory {
     db: Arc<Database>,
@@ -98,7 +98,7 @@ impl FdbDirectory {
     async fn fetch_file_registry(&self, path: &Path) -> Result<Option<FileRegistry>, OpenReadError> {
         let path_str = Self::get_key_str(path);
         let trx = self.db.create_trx().map_err(|e| OpenReadError::IoError {
-            io_error: io::Error::new(io::ErrorKind::Other, e.to_string()).into(),
+            io_error: io::Error::other(e.to_string()).into(),
             filepath: path.to_path_buf(),
         })?;
         
@@ -114,7 +114,7 @@ impl FdbDirectory {
             }
             Ok(None) => Ok(None),
             Err(e) => Err(OpenReadError::IoError {
-                io_error: io::Error::new(io::ErrorKind::Other, e.to_string()).into(),
+                io_error: io::Error::other(e.to_string()).into(),
                 filepath: path.to_path_buf(),
             }),
         }
@@ -123,30 +123,31 @@ impl FdbDirectory {
     /// Ensures the file exists in the local cache. If not, it downloads it from FDB.
     async fn ensure_cached(&self, path: &Path) -> Result<(), OpenReadError> {
         let local_path = self.cache_path.join(path);
-        if local_path.exists() {
-             return Ok(());
+        
+        let is_meta = path.to_string_lossy() == "meta.json";
+        
+        if !is_meta && local_path.exists() {
+            return Ok(());
         }
 
-        // Check if file exists in FDB
         let registry = self.fetch_file_registry(path).await?;
         let _registry = registry.ok_or_else(|| OpenReadError::FileDoesNotExist(path.to_path_buf()))?;
 
         // Create a temporary file to download chunks into
-        let mut temp_file = NamedTempFile::new_in(&self.cache_path).map_err(|e| OpenReadError::IoError {
-            io_error: e.into(),
-            filepath: path.to_path_buf(),
-        })?;
+        let mut temp_file = NamedTempFile::new_in(&self.cache_path)
+            .map_err(|e| OpenReadError::IoError { io_error: Arc::new(e), filepath: path.to_path_buf() })?;
+
 
         let trx = self.db.create_trx().map_err(|e| OpenReadError::IoError {
-             io_error: io::Error::new(io::ErrorKind::Other, e.to_string()).into(),
+             io_error: io::Error::other(e.to_string()).into(),
              filepath: path.to_path_buf()
         })?;
 
         let path_str = Self::get_key_str(path);
         // Define the range of keys for this file's blobs.
         // FDB keys refer to chunks: (prefix, "blob", filename, chunk_id 0..N)
-        let range_start = self.subspace.pack(&("blob", path_str.clone(), 0 as u64));
-        let range_end = self.subspace.pack(&("blob", path_str, 0xFFFF_FFFF_FFFF_FFFF as u64));
+        let range_start = self.subspace.pack(&("blob", path_str.clone(), 0_u64));
+        let range_end = self.subspace.pack(&("blob", path_str, 0xFFFF_FFFF_FFFF_FFFF_u64));
 
         let range = RangeOption {
             mode: foundationdb::options::StreamingMode::WantAll,
@@ -155,13 +156,13 @@ impl FdbDirectory {
         
         // Stream all chunks from FDB
         let chunks = trx.get_range(&range, 1_000, false).await.map_err(|e| OpenReadError::IoError {
-             io_error: io::Error::new(io::ErrorKind::Other, e.to_string()).into(),
+             io_error: io::Error::other(e.to_string()).into(),
              filepath: path.to_path_buf()
         })?;
 
         // Write chunks to the temp file
         for chunk_kv in chunks {
-            temp_file.write_all(&chunk_kv.value()).map_err(|e| OpenReadError::IoError {
+            temp_file.write_all(chunk_kv.value()).map_err(|e| OpenReadError::IoError {
                 io_error: e.into(),
                 filepath: path.to_path_buf(),
             })?;
@@ -203,7 +204,7 @@ impl Directory for FdbDirectory {
         // Delete from FDB (Transactional)
         safe_block_on(async {
              let trx = self.db.create_trx().map_err(|e| DeleteError::IoError {
-                io_error: io::Error::new(io::ErrorKind::Other, e.to_string()).into(),
+                io_error: io::Error::other(e.to_string()).into(),
                 filepath: path.to_path_buf(),
             })?;
             
@@ -214,12 +215,12 @@ impl Directory for FdbDirectory {
             trx.clear(&meta_key);
             
             // Delete All Blobs (Chunks)
-            let range_start = self.subspace.pack(&("blob", path_str.clone(), 0 as u64));
-            let range_end = self.subspace.pack(&("blob", path_str, 0xFFFF_FFFF_FFFF_FFFF as u64));
+            let range_start = self.subspace.pack(&("blob", path_str.clone(), 0_u64));
+            let range_end = self.subspace.pack(&("blob", path_str, 0xFFFF_FFFF_FFFF_FFFF_u64));
             trx.clear_range(&range_start, &range_end);
 
             trx.commit().await.map_err(|e| DeleteError::IoError {
-                 io_error: io::Error::new(io::ErrorKind::Other, e.to_string()).into(),
+                 io_error: io::Error::other(e.to_string()).into(),
                  filepath: path.to_path_buf(),
             })?;
             Ok::<(), DeleteError>(())
@@ -258,7 +259,7 @@ impl Directory for FdbDirectory {
 
     fn atomic_write(&self, path: &Path, data: &[u8]) -> io::Result<()> {
         // Utility for writing small files in one go
-        let mut writer = self.open_write(path).map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+        let mut writer = self.open_write(path).map_err(|e| io::Error::other(e.to_string()))?;
         writer.write_all(data)?;
         
         // Ensure data is properly committed
@@ -270,9 +271,10 @@ impl Directory for FdbDirectory {
         self.local_cache.sync_directory()
     }
 
-    fn watch(&self, _watch_callback: WatchCallback) -> tantivy::Result<WatchHandle> {
-        // Watch functionality (not needed for this prototype)
-        Ok(WatchHandle::empty())
+    fn watch(&self, watch_callback: WatchCallback) -> tantivy::Result<WatchHandle> {
+        // Delegate watch to the local MmapDirectory cache.
+        // Since we update the local file in `atomic_write`, MmapDirectory's watcher should trigger.
+        self.local_cache.watch(watch_callback)
     }
     
     fn acquire_lock(&self, _lock: &Lock) -> Result<DirectoryLock, LockError> {
@@ -342,10 +344,10 @@ impl FdbWriter {
         // We don't await here because `write` calls must be fast and non-blocking.
         // We collect the task handle to `await` on all of them later in `terminate()`.
         let handle = self.rt.spawn(async move {
-            let trx = db.create_trx().map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+            let trx = db.create_trx().map_err(|e| io::Error::other(e.to_string()))?;
             let key = subspace.pack(&("blob", path_str.clone(), chunk_id));
             trx.set(&key, &chunk_data);
-            trx.commit().await.map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+            trx.commit().await.map_err(|e| io::Error::other(e.to_string()))?;
             Ok(())
         });
 
@@ -391,7 +393,7 @@ impl TerminatingWrite for FdbWriter {
              // Wait for all chunks to be written
              let results = join_all(tasks).await;
              for res in results {
-                 res.map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))??;
+                 res.map_err(|e| io::Error::other(e.to_string()))??;
              }
              
              // After all chunks are safely written, we write the "metadata" file.
@@ -412,7 +414,7 @@ impl TerminatingWrite for FdbWriter {
                     trx.set(&key, &val);
                     Ok(())
                  }
-             }).await.map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+             }).await.map_err(|e| io::Error::other(e.to_string()))?;
              
              Ok::<(), io::Error>(())
         })?;

@@ -6,8 +6,11 @@ use foundationdb::Database;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use tantivy::schema::{Schema, TEXT, STORED};
-use tantivy::Index;
+use tantivy::{
+    doc,
+    schema::{Schema, TEXT, STORED, STRING},
+    Index,
+};
 use tokio::net::TcpListener;
 
 mod api;
@@ -15,7 +18,7 @@ mod fdb_directory;
 pub mod test_utils;
 
 // Import handlers and state from the API module
-use api::{AppState, sync_index, async_index, search_handler, queue_worker};
+use api::{AppState, sync_index, async_index, sync_delete, async_delete, search_handler, queue_worker};
 use fdb_directory::FdbDirectory;
 
 /// The main entry point of the asynchronous application.
@@ -38,13 +41,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Tantivy requires a strict schema definition for the index.
     let mut schema_builder = Schema::builder();
     
-    // `TEXT | STORED`:
-    // - TEXT: The field is tokenized and indexed for full-text search.
-    // - STORED: The original field value is stored in the index so it can be retrieved in results.
-    let id_field = schema_builder.add_text_field("id", TEXT | STORED);
+    // ID should be untokenized (STRING) for exact lookups and deletions.
+    let id_field = schema_builder.add_text_field("id", STRING | STORED);
     let body_field = schema_builder.add_json_field("body", TEXT | STORED);
-    
-    // Build the final schema object.
     let schema = schema_builder.build();
 
     // ---------------------------------------------------------
@@ -67,8 +66,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let index_writer = index.writer(50_000_000)?;
 
     // The IndexReader is used to search the index. It provides a point-in-time view of the index.
-    // It needs to be reloaded to see new changes committed by the writer.
-    let index_reader = index.reader()?;
+    // We use Manual policy and explicitly reload after commits to ensure freshness.
+    let index_reader = index
+        .reader_builder()
+        .reload_policy(tantivy::ReloadPolicy::Manual)
+        .try_into()?;
 
     // ---------------------------------------------------------
     // Shared Application State
@@ -103,6 +105,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let app = Router::new()
         .route("/index/sync", post(sync_index))     // POST /index/sync
         .route("/index/async", post(async_index))   // POST /index/async
+        .route("/delete/sync", post(sync_delete))   // POST /delete/sync
+        .route("/delete/async", post(async_delete)) // POST /delete/async
         .route("/search", post(search_handler))     // POST /search
         .with_state(app_state);
 

@@ -40,6 +40,19 @@ pub struct IndexRequest {
     pub doc: HashMap<String, Value>,
 }
 
+/// Request payload for deleting a document.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct DeleteRequest {
+    pub id: String,
+}
+
+/// Enum representing possible jobs in the async queue.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub enum QueueJob {
+    Index(IndexRequest),
+    Delete(String), // ID to delete
+}
+
 /// Request payload for searching.
 #[derive(Serialize, Deserialize, Clone)]
 pub struct SearchRequest {
@@ -86,6 +99,29 @@ pub async fn sync_index(
     // This is the expensive part.
     index_writer.commit().map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     
+    // Refresh the reader
+    state.index_reader.reload().map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    
+    Ok(StatusCode::OK)
+}
+
+/// **Synchronous Delete Handler** (`POST /delete/sync`)
+/// 
+/// Deletes a document by ID and waits for commit.
+pub async fn sync_delete(
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<DeleteRequest>,
+) -> Result<impl IntoResponse, (StatusCode, String)> {
+    let mut index_writer = state.index_writer.lock().unwrap();
+    
+    let term = tantivy::Term::from_field_text(state.id_field, &payload.id);
+    index_writer.delete_term(term);
+    
+    index_writer.commit().map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    // Refresh the reader
+    state.index_reader.reload().map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    
     Ok(StatusCode::OK)
 }
 
@@ -101,7 +137,8 @@ pub async fn async_index(
     let db = state.db.clone();
     let queue_subspace = Subspace::from(QUEUE_PREFIX);
     
-    let payload_bytes = serde_json::to_vec(&payload).unwrap();
+    let job = QueueJob::Index(payload);
+    let payload_bytes = serde_json::to_vec(&job).unwrap();
     
     // Create a unique key for the queue item using Timestamp + UUID to ensure ordering and uniqueness.
     let timestamp = chrono::Utc::now().timestamp_micros();
@@ -120,6 +157,34 @@ pub async fn async_index(
     }
 }
 
+/// **Asynchronous Delete Handler** (`POST /delete/async`)
+///
+/// Pushes a delete deletion job to the queue.
+pub async fn async_delete(
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<DeleteRequest>,
+) -> impl IntoResponse {
+    let db = state.db.clone();
+    let queue_subspace = Subspace::from(QUEUE_PREFIX);
+    
+    let job = QueueJob::Delete(payload.id);
+    let payload_bytes = serde_json::to_vec(&job).unwrap();
+    
+    let timestamp = chrono::Utc::now().timestamp_micros();
+    let id = Uuid::new_v4().to_string();
+    
+    let trx_result = db.run(|trx, _maybe_committed| {
+        let key = queue_subspace.pack(&(timestamp, &id));
+        trx.set(&key, &payload_bytes);
+        async move { Ok(()) }
+    }).await;
+
+    match trx_result {
+        Ok(_) => StatusCode::ACCEPTED,
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
+    }
+}
+
 /// **Search Handler** (`POST /search`)
 ///
 /// Handles search queries against the index.
@@ -133,7 +198,7 @@ pub async fn search_handler(
     
     // Configure the query parser to search in the "body" field by default.
     let query_parser = tantivy::query::QueryParser::for_index(
-        &searcher.index(),
+        searcher.index(),
         vec![state.body_field],
     );
     
@@ -178,11 +243,11 @@ pub async fn search_handler(
 /// 4. Deletes the items from the queue.
 pub async fn queue_worker(state: Arc<AppState>) {
     let db = state.db.clone();
-    let queue_subspace = Subspace::from(QUEUE_PREFIX);
+    let queue_subspace = Subspace::from(&b"queue"[..]);
 
     loop {
         // Fetch a batch of (up to 500) items from the queue.
-        let batch_result: Result<Vec<(Vec<u8>, IndexRequest)>, _> = db.run(|trx, _maybe_committed| {
+        let batch_result: Result<Vec<(Vec<u8>, QueueJob)>, _> = db.run(|trx, _maybe_committed| {
             let queue_subspace = queue_subspace.clone();
             async move {
                 let range = RangeOption {
@@ -193,59 +258,75 @@ pub async fn queue_worker(state: Arc<AppState>) {
                 
                 let mut items = Vec::new();
                 for kv in range_result {
-                    // Deserialize the queued request
-                    let req: IndexRequest = serde_json::from_slice(kv.value()).unwrap(); 
-                    items.push((kv.key().to_vec(), req));
+                    if let Ok(job) = serde_json::from_slice::<QueueJob>(kv.value()) {
+                        items.push((kv.key().to_vec(), job));
+                    }
                 }
                 Ok(items)
             }
         }).await;
 
-        match batch_result {
-            Ok(items) if !items.is_empty() => {
-                // We have items! Let's process them.
-                let commit_result = {
-                    let mut index_writer = state.index_writer.lock().unwrap();
+        if let Ok(items) = batch_result {
+            if items.is_empty() {
+                sleep(Duration::from_millis(100)).await;
+                continue;
+            }
 
-                    for (_key, req) in &items {
-                         // Build the document JSON
-                         let doc_json = serde_json::json!({
-                             "id": req.id,
-                             "body": req.doc
-                         });
-                         let doc_str = serde_json::to_string(&doc_json).unwrap();
-                         
-                         // Parse and add to index
-                         if let Ok(doc) = TantivyDocument::parse_json(&state.schema, &doc_str) {
-                              index_writer.add_document(doc).unwrap();
-                         }
-                    }
-                    // Commit the batch to storage
-                    index_writer.commit()
-                };
-                
-                if let Err(e) = commit_result {
-                    eprintln!("Background commit failed: {}", e);
-                    sleep(Duration::from_secs(1)).await;
-                    continue; // Retry processing (queue items are not yet deleted)
-                }
+            let mut last_key: Option<Vec<u8>> = None;
+            let commit_result = {
+                let mut index_writer = state.index_writer.lock().unwrap();
 
-                // If commit succeeded, remove the processed items which are still in the queue.
-                let items_to_delete = items; 
-                let _ = db.run(|trx, _| {
-                    let items = items_to_delete.clone();
-                    async move {
-                        for (k, _) in items {
-                            trx.clear(&k);
+                for (key, req) in &items {
+                     match req {
+                        QueueJob::Index(idx_req) => {
+                             println!("Worker: Indexing doc {}", idx_req.id);
+                             let doc_json = serde_json::json!({
+                                 "id": idx_req.id,
+                                 "body": idx_req.doc
+                             });
+                             let doc_str = serde_json::to_string(&doc_json).unwrap();
+                             
+                             if let Ok(doc) = TantivyDocument::parse_json(&state.schema, &doc_str) {
+                                 index_writer.add_document(doc).ok();
+                             }
+                        },
+                        QueueJob::Delete(id_to_delete) => {
+                             println!("Worker: Deleting doc {}", id_to_delete);
+                             let term = tantivy::Term::from_field_text(state.id_field, id_to_delete);
+                             index_writer.delete_term(term);
                         }
-                        Ok(())
-                    }
-                }).await;
+                     }
+                    last_key = Some(key.clone());
+                }
+                
+                index_writer.commit()
+            };
+            
+            if let Ok(opstamp) = &commit_result {
+                println!("Worker: Batch committed, opstamp: {}", opstamp);
+                state.index_reader.reload().ok();
+            } else if let Err(e) = &commit_result {
+                println!("Worker: Commit FAILED: {:?}", e);
             }
-            _ => {
-                // Queue is empty, wait a bit before polling again to avoid hot-looping.
-                sleep(Duration::from_millis(500)).await;
+
+            if commit_result.is_ok() {
+                if let Some(mut end_key) = last_key {
+                     // We need to clear up to last_key inclusive.
+                     // FDB clear_range is exclusive on end, so we use last_key + \0.
+                     end_key.push(0u8);
+                     
+                     let _ = db.run(|trx, _maybe_committed| {
+                         let start_key = queue_subspace.range().0;
+                         let end_key_ref = &end_key;
+                         async move {
+                             trx.clear_range(start_key.as_slice(), end_key_ref);
+                             Ok(())
+                         }
+                     }).await;
+                }
             }
+        } else {
+             sleep(Duration::from_secs(1)).await;
         }
     }
 }
@@ -282,7 +363,7 @@ mod tests {
         let fdb_directory = FdbDirectory::new(db.clone(), b"test_api", cache_path).unwrap();
 
         let mut schema_builder = Schema::builder();
-        let id_field = schema_builder.add_text_field("id", tantivy::schema::TEXT | tantivy::schema::STORED);
+        let id_field = schema_builder.add_text_field("id", tantivy::schema::STRING | tantivy::schema::STORED);
         let body_field = schema_builder.add_json_field("body", tantivy::schema::TEXT | tantivy::schema::STORED);
         let schema = schema_builder.build();
 
@@ -347,7 +428,7 @@ mod tests {
         let fdb_directory = FdbDirectory::new(db.clone(), b"concretesearch-test-invalid", cache_path).unwrap();
 
         let mut schema_builder = Schema::builder();
-        let id_field = schema_builder.add_text_field("id", tantivy::schema::TEXT | tantivy::schema::STORED);
+        let id_field = schema_builder.add_text_field("id", tantivy::schema::STRING | tantivy::schema::STORED);
         let body_field = schema_builder.add_json_field("body", tantivy::schema::TEXT | tantivy::schema::STORED);
         let schema = schema_builder.build();
 
@@ -405,7 +486,7 @@ mod tests {
         let fdb_directory = FdbDirectory::new(db.clone(), b"test_async_api", cache_path).unwrap();
 
         let mut schema_builder = Schema::builder();
-        let id_field = schema_builder.add_text_field("id", tantivy::schema::TEXT | tantivy::schema::STORED);
+        let id_field = schema_builder.add_text_field("id", tantivy::schema::STRING | tantivy::schema::STORED);
         let body_field = schema_builder.add_json_field("body", tantivy::schema::TEXT | tantivy::schema::STORED);
         let schema = schema_builder.build();
 
@@ -430,8 +511,6 @@ mod tests {
 
         let app = Router::new()
             .route("/index/async", post(async_index))
-             // we need to expose async_index in super, or rather use the public one.
-             // async_index is pub in super.
             .with_state(state.clone());
 
         // Test Async Index
@@ -450,19 +529,37 @@ mod tests {
         let response = app.clone().oneshot(req).await.unwrap();
         assert_eq!(response.status(), StatusCode::ACCEPTED);
         
-        // Wait for worker to process
-        // In real test we'd poll or wait substantial time or check side effect.
-        // We can check if doc appears in index (needs searcher reload)
-        
         sleep(Duration::from_secs(2)).await; 
-        
-        // To verify, we would normally search. But here we just want to ensure it doesn't crash 
-        // and covers the code path. Coverage is the goal.
-        
-        // Trigger a commit manually or trust worker did it? Worker commits.
-        // Let's rely on execution covering lines.
     }
 
+    async fn wait_for_search(app: &Router, query: &str, expect_found: bool) -> bool {
+         for _ in 0..20 {
+             let search_payload = json!({ "query": query });
+             let req = Request::builder()
+                .method("POST")
+                .uri("/search")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_vec(&search_payload).unwrap()))
+                .unwrap();
+             
+             // Check response
+             let response = app.clone().oneshot(req).await.unwrap();
+             if response.status() == StatusCode::OK {
+                 let body_bytes = axum::body::to_bytes(response.into_body(), 10000).await.unwrap();
+                 if let Ok(body_json) = serde_json::from_slice::<Value>(&body_bytes) {
+                     if let Some(hits) = body_json["hits"].as_array() {
+                         let found = !hits.is_empty();
+                         if found == expect_found {
+                             return true;
+                         }
+                     }
+                 }
+             }
+             sleep(Duration::from_millis(200)).await;
+         }
+         false
+    }
+    
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn test_e2e_sync_async_search() {
         crate::test_utils::init_fdb();
@@ -473,17 +570,22 @@ mod tests {
         crate::test_utils::clear_subspace(&db, b"e2e_test_v1").await;
         
         let temp_dir = TempDir::new().unwrap();
+        // ... same setup ...
         let cache_path = temp_dir.path().to_path_buf();
         let fdb_directory = FdbDirectory::new(db.clone(), b"e2e_test_v1", cache_path).unwrap();
 
         let mut schema_builder = Schema::builder();
-        let id_field = schema_builder.add_text_field("id", tantivy::schema::TEXT | tantivy::schema::STORED);
+        let id_field = schema_builder.add_text_field("id", tantivy::schema::STRING | tantivy::schema::STORED);
         let body_field = schema_builder.add_json_field("body", tantivy::schema::TEXT | tantivy::schema::STORED);
         let schema = schema_builder.build();
 
         let index = tantivy::Index::open_or_create(fdb_directory, schema.clone()).unwrap();
         let index_writer = index.writer(50_000_000).unwrap();
-        let index_reader = index.reader().unwrap();
+        let index_reader = index
+            .reader_builder()
+            .reload_policy(tantivy::ReloadPolicy::Manual)
+            .try_into()
+            .unwrap();
 
         let state = Arc::new(AppState {
             index_writer: Arc::new(Mutex::new(index_writer)),
@@ -494,7 +596,6 @@ mod tests {
             body_field,
         });
         
-        // Spawn Background Worker
         let worker_state = state.clone();
         tokio::spawn(async move {
             crate::api::queue_worker(worker_state).await;
@@ -503,6 +604,8 @@ mod tests {
         let app = Router::new()
             .route("/index/sync", post(sync_index))
             .route("/index/async", post(async_index))
+            .route("/delete/sync", post(sync_delete))
+            .route("/delete/async", post(async_delete))
             .route("/search", post(search_handler))
             .with_state(state.clone());
 
@@ -517,8 +620,7 @@ mod tests {
             .header("content-type", "application/json")
             .body(Body::from(serde_json::to_vec(&sync_payload).unwrap()))
             .unwrap();
-        let response = app.clone().oneshot(req).await.unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(app.clone().oneshot(req).await.unwrap().status(), StatusCode::OK);
 
         // 2. Async Write "Async Doc"
         let async_payload = json!({
@@ -531,52 +633,36 @@ mod tests {
             .header("content-type", "application/json")
             .body(Body::from(serde_json::to_vec(&async_payload).unwrap()))
             .unwrap();
-        let response = app.clone().oneshot(req).await.unwrap();
-        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        assert_eq!(app.clone().oneshot(req).await.unwrap().status(), StatusCode::ACCEPTED);
 
-        // 3. Wait for Async Worker (Sleep + Poll Logic)
-        // We wait a bit to let the worker cycle.
-        sleep(Duration::from_secs(2)).await;
+        // 3. Verify Both exist (Retry loop handles wait for Async + Reload)
+        assert!(wait_for_search(&app, "body.title:\"Sync Doc\"", true).await, "Timed out waiting for Sync Doc");
+        assert!(wait_for_search(&app, "body.title:\"Async Doc\"", true).await, "Timed out waiting for Async Doc");
 
-        // Force a reload of the searcher to see new commits
-        index_reader.reload().unwrap();
-
-        // 4. Search for "Sync Doc"
-        let search_sync = json!({ "query": "body.title:\"Sync Doc\"" });
+        // 6. Test Sync Delete
+        let delete_sync_payload = json!({ "id": "sync_doc" });
         let req = Request::builder()
             .method("POST")
-            .uri("/search")
+            .uri("/delete/sync")
             .header("content-type", "application/json")
-            .body(Body::from(serde_json::to_vec(&search_sync).unwrap()))
+            .body(Body::from(serde_json::to_vec(&delete_sync_payload).unwrap()))
             .unwrap();
-        let response = app.clone().oneshot(req).await.unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
-        
-        let body_bytes = axum::body::to_bytes(response.into_body(), 10000).await.unwrap();
-        let body_json: Value = serde_json::from_slice(&body_bytes).unwrap();
-        let hits = body_json["hits"].as_array().unwrap();
-        assert!(hits.len() >= 1, "Should find 'Sync Doc'");
-        // Check content
-        let hit_str = serde_json::to_string(&hits[0]).unwrap();
-        assert!(hit_str.contains("Sync Doc"));
+        assert_eq!(app.clone().oneshot(req).await.unwrap().status(), StatusCode::OK);
 
-        // 5. Search for "Async Doc"
-        let search_async = json!({ "query": "body.title:\"Async Doc\"" });
+        // Verify Deletion
+        assert!(wait_for_search(&app, "body.title:\"Sync Doc\"", false).await, "Timed out waiting for Sync Doc deletion");
+
+        // 7. Test Async Delete
+        let delete_async_payload = json!({ "id": "async_doc" });
         let req = Request::builder()
             .method("POST")
-            .uri("/search")
+            .uri("/delete/async")
             .header("content-type", "application/json")
-            .body(Body::from(serde_json::to_vec(&search_async).unwrap()))
+            .body(Body::from(serde_json::to_vec(&delete_async_payload).unwrap()))
             .unwrap();
-        let response = app.clone().oneshot(req).await.unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(app.clone().oneshot(req).await.unwrap().status(), StatusCode::ACCEPTED);
 
-        let body_bytes = axum::body::to_bytes(response.into_body(), 10000).await.unwrap();
-        let body_json: Value = serde_json::from_slice(&body_bytes).unwrap();
-        let hits = body_json["hits"].as_array().unwrap();
-        assert!(hits.len() >= 1, "Should find 'Async Doc'");
-        // Check content
-        let hit_str = serde_json::to_string(&hits[0]).unwrap();
-        assert!(hit_str.contains("Async Doc"));
+        // Verify Deletion
+        assert!(wait_for_search(&app, "body.title:\"Async Doc\"", false).await, "Timed out waiting for Async Doc deletion");
     }
 }
