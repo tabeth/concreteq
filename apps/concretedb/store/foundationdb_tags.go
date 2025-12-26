@@ -18,20 +18,16 @@ func parseTableNameFromARN(arn string) (string, error) {
 	if len(parts) < 2 {
 		return "", fmt.Errorf("invalid ARN format: %s", arn)
 	}
-	// Assuming the part after the last / is the table name, or "table/Name"
 	// Standard ARN: ...:table/MyTable
-	// OR ...:table/MyTable/stream/... (tags usually only on Table)
-
-	// Let's look for "table/" in the string for safer extraction
+	// Look for ":table/" in the string for extraction
 	idx := strings.Index(arn, ":table/")
 	if idx == -1 {
 		return "", fmt.Errorf("invalid ARN: resource must be a table")
 	}
 	sub := arn[idx+7:] // everything after ":table/"
 
-	// If there are more slashes, it might be a stream or index, but Tagging is usually table level
-	// or we need to support sub-resources. Standard DynamoDB Tagging is on Table.
-	// We will assume the segment until the next / or end is the TableName
+	// Tags are applied at the table level.
+	// Extract the TableName segment.
 	slashIdx := strings.Index(sub, "/")
 	if slashIdx != -1 {
 		return sub[:slashIdx], nil
@@ -46,8 +42,7 @@ func (s *FoundationDBStore) TagResource(ctx context.Context, resourceArn string,
 	}
 
 	_, err = s.db.Transact(func(tr fdbadapter.FDBTransaction) (interface{}, error) {
-		// 1. Check if table exists
-		// We check using Exists on the directory provider
+		// Check if table exists
 		exists, err := s.dir.Exists(tr, []string{"tables", tableName})
 		if err != nil {
 			return nil, err
@@ -56,9 +51,7 @@ func (s *FoundationDBStore) TagResource(ctx context.Context, resourceArn string,
 			return nil, ErrTableNotFound
 		}
 
-		// 2. Write Tags
-		// Path: tables/<TableName>/tags/<TagKey> = TagValue
-		// We use the directory provider to open the nested path
+		// Write Tags
 		tagsDir, err := s.dir.CreateOrOpen(tr, []string{"tables", tableName, "tags"}, nil)
 		if err != nil {
 			return nil, err

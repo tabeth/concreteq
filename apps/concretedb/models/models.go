@@ -26,7 +26,6 @@ type TableStatus string
 const (
 	StatusCreating TableStatus = "CREATING"
 	StatusActive   TableStatus = "ACTIVE"
-	// For now, "DELETING" won't be used since we will block on deletion when you call DeleteTable. Once things are queued this will be used.
 	StatusDeleting TableStatus = "DELETING"
 )
 
@@ -107,16 +106,16 @@ type LocalSecondaryIndex struct {
 // AttributeDefinition corresponds to the DynamoDB AttributeDefinition type.
 type AttributeDefinition struct {
 	AttributeName string `json:"AttributeName"`
-	AttributeType string `json:"AttributeType"` // "S" for string, "N" for number, "B" for binary
+	AttributeType string `json:"AttributeType"` // S, N, or B
 }
 
 // KeySchemaElement corresponds to the DynamoDB KeySchemaElement type.
 type KeySchemaElement struct {
 	AttributeName string `json:"AttributeName"`
-	KeyType       string `json:"KeyType"` // "HASH" or "RANGE"
+	KeyType       string `json:"KeyType"` // HASH or RANGE
 }
 
-// ProvisionedThroughput is accepted for compatibility but not used by ConcreteDB.
+// ProvisionedThroughput defines the capacity units for a table or index.
 type ProvisionedThroughput struct {
 	ReadCapacityUnits  int64 `json:"ReadCapacityUnits"`
 	WriteCapacityUnits int64 `json:"WriteCapacityUnits"`
@@ -139,7 +138,7 @@ type TableDescription struct {
 	TableStatus            string                 `json:"TableStatus"`
 	AttributeDefinitions   []AttributeDefinition  `json:"AttributeDefinitions"`
 	KeySchema              []KeySchemaElement     `json:"KeySchema"`
-	CreationDateTime       float64                `json:"CreationDateTime"` // Represented as Unix epoch time
+	CreationDateTime       float64                `json:"CreationDateTime"`
 	ProvisionedThroughput  ProvisionedThroughput  `json:"ProvisionedThroughput"`
 	TableSizeBytes         int64                  `json:"TableSizeBytes"`
 	ItemCount              int64                  `json:"ItemCount"`

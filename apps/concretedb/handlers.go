@@ -16,17 +16,15 @@ func (h *DynamoDBHandler) createTableHandler(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	// 1. Map API request model to internal DB model
+	// Map API request model to internal DB model
 	tableToCreate := mapRequestToDBTable(&req)
 
-	// 2. Call the service
 	createdTable, err := h.tableService.CreateTable(r.Context(), tableToCreate)
 	if err != nil {
 		writeAPIError(w, err, http.StatusBadRequest) // Use our new helper
 		return
 	}
 
-	// 3. Map internal DB model back to API response model
 	resp := mapDBTableToCreateResponse(createdTable)
 	writeSuccess(w, resp, http.StatusOK)
 }
@@ -39,14 +37,12 @@ func (h *DynamoDBHandler) deleteTableHandler(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	// Call the service with just the table name
 	deletedTable, err := h.tableService.DeleteTable(r.Context(), req.TableName)
 	if err != nil {
 		writeAPIError(w, err, http.StatusBadRequest) // Our helper handles apperror types
 		return
 	}
 
-	// Map the internal models.Table model back to an API response
 	resp := mapDBTableToDeleteResponse(deletedTable)
 	writeSuccess(w, resp, http.StatusOK)
 }
@@ -128,7 +124,6 @@ func (h *DynamoDBHandler) listGlobalTablesHandler(w http.ResponseWriter, r *http
 }
 
 // mapDBTableToDeleteResponse converts the internal DB model to the API response for DeleteTable.
-// This is very similar to the CreateTable mapping.
 func mapDBTableToDeleteResponse(table *models.Table) *models.DeleteTableResponse {
 	apiDesc := mapDBTableToAPIDescription(table)
 	return &models.DeleteTableResponse{TableDescription: apiDesc}

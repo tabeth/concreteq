@@ -28,13 +28,11 @@ func (s *FoundationDBStore) UpdateTimeToLive(ctx context.Context, request *model
 			}
 		}
 
-		// Simplified state transition logic for now
 		if request.TimeToLiveSpecification.Enabled {
 			table.TimeToLiveDescription.TimeToLiveStatus = "ENABLED"
 			table.TimeToLiveDescription.AttributeName = request.TimeToLiveSpecification.AttributeName
 		} else {
 			table.TimeToLiveDescription.TimeToLiveStatus = "DISABLED"
-			// Keep the attribute name even if disabled, similar to DynamoDB behavior often retaining context
 		}
 
 		// 3. Save updated metadata
@@ -84,8 +82,3 @@ func (s *FoundationDBStore) DescribeTimeToLive(ctx context.Context, tableName st
 	}
 	return val.(*models.TimeToLiveDescription), nil
 }
-
-// Helper to get table internal (reused from foundationdb_store.go but since this is a new file we can't access private methods if they are in another file in the same package?
-// No, Go allows access to private methods in the same package.
-// However, I need to make sure getTableInternal is available or duplicate it.
-// Checking foundationdb_store.go again... getTableInternal IS NOT exported, so I can use it if I put this code in a file in the same package.)

@@ -18,10 +18,9 @@ import (
 func main() {
 	logger := log.New(os.Stdout, "concretedb: ", log.LstdFlags|log.Lshortfile)
 
-	// 1. Load application configuration
+	// Initialize configuration and dependencies
 	cfg := config.NewConfig()
 
-	// 2. Initialize FoundationDB
 	fdb.MustAPIVersion(710)
 	var fdbConn fdb.Database
 	type fdbConnResult struct {
@@ -38,20 +37,15 @@ func main() {
 	select {
 	case res := <-fdbChan:
 		if res.err != nil {
-			logger.Fatalf("Failed to connecto FoundationDB. Make sure it's up, or diagnose. Error: %v", res.err)
+			logger.Fatalf("Failed to connect to FoundationDB: %v", res.err)
 		}
 		fdbConn = res.db
 		logger.Println("Successfully connected to FoundationDB.")
 
-	// Parameterize this in some configuration
 	case <-time.After(10 * time.Second):
 		logger.Fatalf("Failed to connect to FoundationDB after 10 seconds")
 	}
 
-	// Note: In a real long-running server, you'd manage this connection
-	// more carefully, but for now, we don't close it.
-
-	// 3. Initialize layers, injecting dependencies
 	fdbStore := store.NewFoundationDBStore(fdbConn)
 	tableService := service.NewTableService(fdbStore)
 	apiHandler := NewDynamoDBHandler(tableService)
@@ -61,7 +55,7 @@ func main() {
 	ttlWorker.Start()
 	defer ttlWorker.Stop()
 
-	// 4. Configure HTTP server with a new router
+	// Configure HTTP server
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
@@ -71,16 +65,15 @@ func main() {
 
 	mux.Handle("/", apiHandler)
 
-	// 5. Start the server
+	// Start the server
 	portStr := strconv.Itoa(cfg.Port)
 	addr := ":" + portStr
 
-	// Wrap our main router with the timeout middleware.
 	handlerWithTimeout := TimeoutMiddleware(mux)
 
 	server := &http.Server{
 		Addr:    addr,
-		Handler: handlerWithTimeout, // Use our new multiplexer
+		Handler: handlerWithTimeout,
 
 		// ReadTimeout is the maximum duration for reading the entire
 		// request, including the body. Protects against slow clients.

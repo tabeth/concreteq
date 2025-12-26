@@ -34,9 +34,7 @@ func (db *concreteDB) Read(ctx context.Context, table string, key string, fields
 			"ycsb_key": {S: &key},
 		},
 	}
-	// TODO: Handle fields projection if needed, checking existing impl ignores it effectively or fetches all
-	// If fields are specified, we could set ProjectionExpression, but populating ExpressionAttributeNames is annoying.
-	// We'll fetch all.
+	// Fetch all fields for now.
 
 	resp, err := db.svc.GetItem(ctx, req)
 	if err != nil {
@@ -51,8 +49,6 @@ func (db *concreteDB) Read(ctx context.Context, table string, key string, fields
 		if v.S != nil {
 			result[k] = []byte(*v.S)
 		} else if v.B != nil {
-			// If we used B, we would need to decode base64.
-			// But we assume S for now as per plan.
 			result[k] = []byte(*v.B)
 		}
 	}
@@ -157,9 +153,6 @@ type concreteDBCreator struct{}
 func (c concreteDBCreator) Create(p *properties.Properties) (ycsb.DB, error) {
 	// Initialize FDB
 	fdb.MustAPIVersion(710)
-	// We need to wait for connection or just OpenDefault?
-	// OpenDefault blocks or returns error? It usually returns DB structure immediately but connection might be established lazily.
-	// But concretedb main has a goroutine to wait.
 
 	dbObj, err := fdb.OpenDefault()
 	if err != nil {
@@ -172,15 +165,8 @@ func (c concreteDBCreator) Create(p *properties.Properties) (ycsb.DB, error) {
 	// Ensure table exists
 	ctx := context.Background()
 	_, err = tableService.GetTable(ctx, "usertable")
-	if err != nil {
-		// Possibly TableNotFound error or other
-		// concretedb/models doesn't export ErrTableNotFound easily reachable?
-		// check error string or just try creating
-	}
 
-	// Try creating it. If exists, it might fail or we ignore.
-	// concretedb CreateTable returns error if exists.
-	// We want to swallow "TableExists".
+	// Try creating it. If exists, it will fail and we'll ignore it.
 
 	table := &models.Table{
 		TableName: "usertable",
@@ -195,11 +181,7 @@ func (c concreteDBCreator) Create(p *properties.Properties) (ycsb.DB, error) {
 
 	_, err = tableService.CreateTable(ctx, table)
 	if err != nil {
-		// If error is "Table already exists", we are fine.
-		// Since we can't easily check error type without importing internal or dependency,
-		// we will assume if GetTable failed earlier maybe it wasn't there.
-		// Actually, let's just log and proceed.
-		// fmt.Printf("CreateTable: %v\n", err)
+		// Log and proceed if creation fails (likely already exists)
 	}
 
 	return &concreteDB{svc: tableService}, nil

@@ -210,8 +210,7 @@ func lexNumber(l *Lexer) stateFn {
 		l.next()
 		l.acceptRun("0123456789")
 	}
-	// We call it TokenIdentifier for now so Parser accepts it in [index]
-	// Or we can add TokenNumber
+	// Treat numbers as TokenIdentifier for Parser compatibility
 	l.emit(TokenIdentifier)
 	return lexText
 }

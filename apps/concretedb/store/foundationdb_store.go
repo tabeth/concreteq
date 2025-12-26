@@ -517,7 +517,6 @@ func (s *FoundationDBStore) CreateTable(ctx context.Context, table *models.Table
 	}
 	fmt.Println("Creating table :", table.TableName)
 	_, err := s.db.Transact(func(tr fdbadapter.FDBTransaction) (interface{}, error) {
-		// Simulating instant provisioning for ConcreteDB
 		if table.Status == "" {
 			table.Status = models.StatusActive
 		}
@@ -647,8 +646,6 @@ func (s *FoundationDBStore) UpdateTable(ctx context.Context, request *models.Upd
 		}
 
 		// 1.6 Process GSI Updates
-		// Note: Robust implementation should validate schemas and backfill data.
-		// For MVP, we metadata-only update and set status to ACTIVE.
 		if len(request.GlobalSecondaryIndexUpdates) > 0 {
 			for _, update := range request.GlobalSecondaryIndexUpdates {
 				if update.Create != nil {
@@ -1506,15 +1503,12 @@ func (s *FoundationDBStore) TransactWriteItems(ctx context.Context, transactItem
 	return err
 }
 
-// Simple expression parser for MVP supporting SET and REMOVE
-// applyUpdateExpression removed in favor of expression.Evaluator.ApplyUpdate
-
 // BatchGetItem retrieves multiple items from multiple tables.
 func (s *FoundationDBStore) BatchGetItem(ctx context.Context, requestItems map[string]models.KeysAndAttributes) (map[string][]map[string]models.AttributeValue, map[string]models.KeysAndAttributes, error) {
 	responses := make(map[string][]map[string]models.AttributeValue)
 	unprocessed := make(map[string]models.KeysAndAttributes)
 
-	// Real implementation with Futures
+	// Implementation with Futures
 	res, err := s.db.ReadTransact(func(rtr fdbadapter.FDBReadTransaction) (interface{}, error) {
 		type futureItem struct {
 			tableName string
@@ -1623,11 +1617,9 @@ func (s *FoundationDBStore) writeStreamRecord(tr fdbadapter.FDBTransaction, tabl
 		ApproximateCreationDateTime: float64(time.Now().Unix()),
 		Keys:                        s.extractKeys(table, oldImage, newImage),
 		StreamViewType:              viewType,
-		// SequenceNumber will be set by the versionstamp efficiently if we could,
-		// but since it's inside the value JSON, we can't easily versionstamp it dynamically
-		// without a second read. For now, we leave it empty or use a placeholder.
-		// Real DynamoDB puts the sequence number here.
-		// We might need to rethink this if we strictly need it in the payload.
+		// SequenceNumber will be populated from the versionstamp upon retrieval.
+		// It is difficult to insert the versionstamp directly into the JSON payload during the write without a second read.
+		// For now, we leave it as pending.
 		SequenceNumber: "PENDING",
 		SizeBytes:      0,
 	}
@@ -1695,7 +1687,7 @@ func (s *FoundationDBStore) extractKeys(table *models.Table, oldItem, newItem ma
 // Stream APIs
 
 // ListStreams lists the streams.
-// Note: This implementation scans tables to find active streams, which is suitable for MVP.
+// Note: This implementation scans tables to find active streams.
 func (s *FoundationDBStore) ListStreams(ctx context.Context, tableName string, limit int, exclusiveStartStreamArn string) ([]models.StreamSummary, string, error) {
 	if limit <= 0 {
 		limit = 100
@@ -1750,12 +1742,7 @@ func (s *FoundationDBStore) ListStreams(ctx context.Context, tableName string, l
 
 	// Scan tables
 	// tables, lastTable, err := s.ListTables(ctx, limit, startTableName)
-	// We do manual scan to populate stream info.
-	// Getting one by one is N+1 but ok for MVP.
-
-	// Issue: We might scan 100 tables and find 0 streams. Pagination becomes hard.
-	// Better approach: Scan tables until we find 'limit' streams or hit end.
-	// Since we reused ListTables which relies on FDB range scan of table names, we can do manual scan here.
+	// Scan tables until we find 'limit' streams or hit end.
 
 	// Manual Scan of Table Metadata
 	chunkSize := limit
@@ -1845,7 +1832,7 @@ func (s *FoundationDBStore) DescribeStream(ctx context.Context, streamArn string
 	}
 
 	// Shards
-	// For MVP, we have one shard: "shard-0000"
+	// Currently supporting a single shard: "shard-0000"
 	shards := []models.Shard{}
 
 	// Determine Sequence Numbers (approx)
@@ -1955,7 +1942,7 @@ func (s *FoundationDBStore) GetRecords(ctx context.Context, shardIterator string
 		iter := rtr.GetRange(fdb.SelectorRange{Begin: beginSel.FDBKeySelector(), End: fdb.FirstGreaterOrEqual(end)}, fdb.RangeOptions{Limit: limit, Mode: fdb.StreamingModeWantAll})
 
 		if data.IteratorType == "LATEST" {
-			// For MVP, just return empty list and next points to current end
+			// Return empty list; caller will handle next iterator logic.
 			lastKv, _ := rtr.GetRange(streamDir, fdb.RangeOptions{Limit: 1, Reverse: true}).GetSliceWithError()
 			if len(lastKv) > 0 {
 				// We'll set nextSeqNum from this in the caller or handle here

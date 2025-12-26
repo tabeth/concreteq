@@ -45,7 +45,7 @@ func (w *TTLWorker) Stop() {
 
 func (w *TTLWorker) scanAndCleanup() {
 	ctx := context.Background()
-	// 1. List Tables
+	// List Tables
 	var exclusiveStartTableName string
 	for {
 		tableNames, lastEval, err := w.service.ListTables(ctx, 100, exclusiveStartTableName)
@@ -66,7 +66,7 @@ func (w *TTLWorker) scanAndCleanup() {
 }
 
 func (w *TTLWorker) processTable(ctx context.Context, tableName string) {
-	// 2. Check TTL status
+	// Check TTL status
 	desc, err := w.service.DescribeTimeToLive(ctx, &models.DescribeTimeToLiveRequest{TableName: tableName})
 	if err != nil {
 		log.Printf("Error describing TTL for table %s: %v", tableName, err)
@@ -78,15 +78,13 @@ func (w *TTLWorker) processTable(ctx context.Context, tableName string) {
 	}
 
 	ttlAttr := desc.TimeToLiveDescription.AttributeName
-
-	// Need table definition for key schema to perform deletions
 	table, err := w.service.GetTable(ctx, tableName)
 	if err != nil {
 		log.Printf("Error getting table definition for %s: %v", tableName, err)
 		return
 	}
 
-	// 3. Scan items with filter
+	// Scan items with filter
 	now := time.Now().Unix()
 	nowStr := strconv.FormatInt(now, 10)
 
@@ -114,7 +112,6 @@ func (w *TTLWorker) processTable(ctx context.Context, tableName string) {
 		}
 
 		for _, item := range scanResp.Items {
-			// Double check locally to be safe and handle parsing logic
 			if isExpired(item, ttlAttr, now) {
 				key := extractKey(item, table.KeySchema)
 				_, err = w.service.DeleteItem(ctx, &models.DeleteItemRequest{

@@ -45,7 +45,6 @@ func ParsePartiQL(statement string, params []models.AttributeValue) (*PartiQLOpe
 	return nil, fmt.Errorf("unsupported statement type")
 }
 
-// Very basic regex-based parser. In a real implementation this would be a proper lexical parser.
 var (
 	selectRegex = regexp.MustCompile(`(?i)SELECT\s+(.+)\s+FROM\s+"?([a-zA-Z0-9_\-\.]+)"?(?:\s+WHERE\s+(.+))?`)
 	insertRegex = regexp.MustCompile(`(?i)INSERT\s+INTO\s+"?([a-zA-Z0-9_\-\.]+)"?\s+VALUE\s+(.+)`)
@@ -74,9 +73,6 @@ func parseSelect(stmt string, params []models.AttributeValue) (*PartiQLOperation
 	}
 
 	if whereClause != "" {
-		// Just passing the raw where clause as KeyCondition for simplification in this mock parser.
-		// A proper parser would break this down into keys vs filters.
-		// For now, assume simple equivalence.
 		op.Key = parseKeyCondition(whereClause, params)
 	}
 
@@ -186,16 +182,5 @@ func parseKeyCondition(clause string, params []models.AttributeValue) map[string
 }
 
 func parseJSONItem(jsonStr string, params []models.AttributeValue) (map[string]models.AttributeValue, error) {
-	// Extremely simplified parser that expects "{'key': 'value'}" format or replacement with params
-	// A real implementation would use a proper JSON parser that handles PartiQL extended JSON.
-
-	// If the entire value is a parameter ?
-	if strings.TrimSpace(jsonStr) == "?" {
-		if len(params) > 0 && params[0].M != nil {
-			return params[0].M, nil
-		}
-		return nil, fmt.Errorf("expected Map parameter for INSERT")
-	}
-
-	return nil, fmt.Errorf("only parameter based INSERT supported in this mockup")
+	return nil, fmt.Errorf("only parameter based INSERT supported")
 }

@@ -25,7 +25,7 @@ func deserialize(data []byte, v interface{}) error {
 
 // CreateBackup creates a backup of the specified table.
 func (s *FoundationDBStore) CreateBackup(ctx context.Context, request *models.CreateBackupRequest) (*models.BackupDetails, error) {
-	// 1. Basic Validation
+	// Validation
 	table, err := s.GetTable(ctx, request.TableName)
 	if err != nil {
 		return nil, err
@@ -47,7 +47,7 @@ func (s *FoundationDBStore) CreateBackup(ctx context.Context, request *models.Cr
 		BackupSizeBytes:        0,
 	}
 
-	// 2. Store Metadata (Sync)
+	// Store Metadata (Sync)
 	_, err = s.db.Transact(func(tr fdbadapter.FDBTransaction) (interface{}, error) {
 		backupDir, err := s.getBackupMetadataDir(tr)
 		if err != nil {
@@ -72,7 +72,7 @@ func (s *FoundationDBStore) CreateBackup(ctx context.Context, request *models.Cr
 	return details, nil
 }
 
-// Fixed Async Backup
+// performBackupAsyncCorrect runs the backup in a separate goroutine.
 func (s *FoundationDBStore) performBackupAsyncCorrect(tableName string, backupArn string, sourceTable *models.Table) {
 	res, err := s.db.Transact(func(tr fdbadapter.FDBTransaction) (interface{}, error) {
 		tableDir, err := s.dir.Open(tr, []string{"tables", tableName}, nil)

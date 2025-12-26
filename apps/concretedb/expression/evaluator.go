@@ -89,7 +89,7 @@ func (e *Evaluator) evalNode(node Node, item map[string]models.AttributeValue, n
 		lhsVal, err := e.resolveValue(n.Left, item, names, values)
 		if err != nil {
 			return false, err
-		} // or non-fatal?
+		}
 
 		rhsVal, err := e.resolveValue(n.Right, item, names, values)
 		if err != nil {
@@ -110,17 +110,12 @@ func (e *Evaluator) evalNode(node Node, item map[string]models.AttributeValue, n
 		return !val, nil
 
 	case *PathNode:
-		// Standalone path as condition?
-		// "foo" -> true if foo is true?
-		// Evaluate value.
+		// Standalone path as condition
 		val, err := e.resolveValue(n, item, names, values)
 		if err != nil {
 			return false, err
 		}
 		if val == nil {
-			// Missing path is false? Or error?
-			// DDB says condition expression must evaluate to true.
-			// If path is missing, it's not true.
 			return false, nil
 		}
 		if val.BOOL != nil {
@@ -192,11 +187,9 @@ func (e *Evaluator) evalFunction(n *FunctionNode, item map[string]models.Attribu
 			}
 			return false, nil
 		}
-		// TODO: NS, BS
 		return false, nil
 
 	case "BETWEEN":
-		// Special internal function: BETWEEN(val, low, high)
 		if len(n.Arguments) != 3 {
 			return false, fmt.Errorf("BETWEEN requires 3 args")
 		}
@@ -259,27 +252,17 @@ func (e *Evaluator) resolveValue(node Node, item map[string]models.AttributeValu
 			if len(n.Arguments) != 1 {
 				return nil, fmt.Errorf("size() takes 1 argument")
 			}
-			// Resolve arg as path
-			// The argument might be a PathNode
 			pathNode, ok := n.Arguments[0].(*PathNode)
 			if !ok {
 				return nil, fmt.Errorf("size() argument must be a path")
 			}
-
-			// Resolve path to value, but careful not to strictly require it exists?
-			// size(path) returns 0 if path doesn't exist? Or null?
-			// DDB: "If the attribute does not exist, size returns 0? No, it might error or return null."
-			// Actually DDB docs: "size(path)" returns size of value.
-			// implementation details...
 
 			val, err := e.resolveValue(pathNode, item, names, values)
 			if err != nil {
 				return nil, err
 			}
 			if val == nil {
-				// Path doesn't exist. Does size return -1 or error?
-				// Let's assume 0 for now as safe default or nil.
-				return nil, nil // nil compare?
+				return nil, nil
 			}
 
 			var sz int
@@ -318,7 +301,6 @@ func (e *Evaluator) resolvePath(n *PathNode, item map[string]models.AttributeVal
 	// item is { string -> AV }
 
 	firstPart := n.Parts[0]
-	// Use helper
 	resolvedName := resolveName(firstPart.Name, names)
 
 	if val, ok := item[resolvedName]; ok {
@@ -339,7 +321,6 @@ func (e *Evaluator) resolvePath(n *PathNode, item map[string]models.AttributeVal
 			}
 			current = &current.L[part.Index]
 		} else {
-			// Map access
 			resolvedPartName := resolveName(part.Name, names)
 			if current.M == nil {
 				return nil, nil
@@ -368,7 +349,7 @@ func compareAttributeValues(lhs, rhs *models.AttributeValue, op TokenType) (bool
 	if lhs == nil || rhs == nil {
 		if op == TokenNE {
 			return true, nil
-		} // If left is missing, it's not equal to right
+		}
 		return false, nil
 	}
 
@@ -445,30 +426,10 @@ func checkBetween(val, low, high *models.AttributeValue) (bool, error) {
 }
 
 // ProjectItem filters the item attributes based on projection expression.
-// REFACTORED to use Lexer/Parser for nested projections if needed,
-// but for now keeping it simple or upgrading?
-// Plan said "Implement Nested Paths". ProjectItem uses paths.
 func (e *Evaluator) ProjectItem(item map[string]models.AttributeValue, expr string, names map[string]string) map[string]models.AttributeValue {
 	if expr == "" {
 		return item
 	}
-	// Basic comma split is insufficient for "a.b, c[1]"
-	// Can reuse Parser? "a.b, c[1]" is a list of Paths.
-	// We need a parser entry point for `ProjectionExpression`.
-	// For now, let's just stick to the existing simple implementation or upgrade if time permits.
-	// The implementation plan mainly focused on EvaluateFilter.
-	// Let's keep existing logic but upgrade resolvePath if we can.
-	// Actually, old Logic: "Only supports top-level comma-separated".
-	// Let's upgrade it to support nested.
-
-	// Issue: constructing a nested result map is complex.
-	// { "info": { "address": { "zip": 123, "city": "A" } } }
-	// Project: "info.address.zip" -> { "info": { "address": { "zip": 123 } } }
-	// That requires deep merging/creation.
-	// Staying with MVP for Projection for this turn unless strictly requested.
-	// User request: "Resolve expression language bits... AND OR NOT... Nested Paths".
-	// Filter Expression is the main consumer of logic.
-
 	return e.projectItemSimple(item, expr, names)
 }
 

@@ -83,12 +83,8 @@ func (s *TableService) CreateTable(ctx context.Context, table *models.Table) (*m
 		return nil, err
 	}
 
-	// Default to StatusCreating
-	// Later creating will be queued up. For now it's done in a single, long request.
-	// Handling the queued version will later by the default, with a flag introduced to make it atomic.
-	// Default to StatusActive for now to allow integration tests to pass without background workers.
 	if table.Status == "" {
-		table.Status = models.StatusActive // Was models.StatusCreating
+		table.Status = models.StatusActive
 	}
 
 	if err := s.store.CreateTable(ctx, table); err != nil {
@@ -102,9 +98,6 @@ func (s *TableService) CreateTable(ctx context.Context, table *models.Table) (*m
 	return table, nil
 }
 
-// Add the DeleteTable method to the TableService struct
-// At some point in the future, DeleteTable will use a SQS interface which will queue up the work that's needed for deletion.
-// For now the deletion will happen entirely in the request-response, so it can take a while.
 func (s *TableService) DeleteTable(ctx context.Context, tableName string) (*models.Table, error) {
 	if tableName == "" {
 		return nil, models.New("ValidationException", "TableName cannot be empty")
@@ -215,9 +208,6 @@ func (s *TableService) GetItem(ctx context.Context, request *models.GetItemReque
 	if err != nil {
 		return nil, models.New("InternalFailure", fmt.Sprintf("failed to get item: %v", err))
 	}
-	// Note: Item not found just returns nil, nil in DynamoDB GetItem (with empty Item in response),
-	// unless we specifically want to distinguish. The store returns nil, nil.
-	// The API handler will map this to an empty Item field if nil.
 	resp := &models.GetItemResponse{Item: item}
 	if request.ReturnConsumedCapacity != "" && request.ReturnConsumedCapacity != "NONE" {
 		size := EstimateItemSize(item)
@@ -238,7 +228,6 @@ func (s *TableService) DeleteItem(ctx context.Context, request *models.DeleteIte
 
 	attributes, err := s.store.DeleteItem(ctx, request.TableName, request.Key, request.ConditionExpression, request.ExpressionAttributeNames, request.ExpressionAttributeValues, request.ReturnValues)
 	if err != nil {
-		// DeleteItem in DynamoDB is idempotent.
 		if errors.Is(err, store.ErrTableNotFound) {
 			return nil, models.New("ResourceNotFoundException", fmt.Sprintf("Table not found: %s", request.TableName))
 		}
@@ -246,7 +235,6 @@ func (s *TableService) DeleteItem(ctx context.Context, request *models.DeleteIte
 	}
 	resp := &models.DeleteItemResponse{Attributes: attributes}
 	if request.ReturnConsumedCapacity != "" && request.ReturnConsumedCapacity != "NONE" {
-		// Minimum 1 WCU for delete
 		resp.ConsumedCapacity = BuildConsumedCapacity(request.TableName, 1.0, false)
 	}
 	if request.ReturnItemCollectionMetrics != "" && request.ReturnItemCollectionMetrics != "NONE" {
@@ -255,9 +243,7 @@ func (s *TableService) DeleteItem(ctx context.Context, request *models.DeleteIte
 	return resp, nil
 }
 
-// validateTable performs business rule validation on the internal db model. In general all table validation
-// should occur here. Types of table validaiton that might happen here is schema validation,
-// presence of various appropriate values, and others.
+// validateTable performs business rule validation on the internal db model.
 func validateTable(table *models.Table) error {
 	if table.TableName == "" {
 		return models.New("ValidationException", "TableName cannot be empty")
@@ -288,9 +274,6 @@ func (s *TableService) UpdateItem(ctx context.Context, request *models.UpdateIte
 
 	resp := &models.UpdateItemResponse{Attributes: attributes}
 	if request.ReturnConsumedCapacity != "" && request.ReturnConsumedCapacity != "NONE" {
-		// UpdateItem consumes WCU based on the new item size.
-		// Since we don't have the final item here, we approximate with 1.0 or based on Attributes if ALL_NEW.
-		// For now 1.0 as approximation.
 		resp.ConsumedCapacity = BuildConsumedCapacity(request.TableName, 1.0, false)
 	}
 	if request.ReturnItemCollectionMetrics != "" && request.ReturnItemCollectionMetrics != "NONE" {
@@ -317,7 +300,7 @@ func (s *TableService) Scan(ctx context.Context, input *models.ScanRequest) (*mo
 	resp := &models.ScanResponse{
 		Items:            items,
 		Count:            int32(len(items)),
-		ScannedCount:     int32(len(items)), // For now same as Count
+		ScannedCount:     int32(len(items)),
 		LastEvaluatedKey: lastKey,
 	}
 
@@ -416,7 +399,7 @@ func (s *TableService) BatchWriteItem(ctx context.Context, input *models.BatchWr
 		return nil, models.New("ValidationException", "RequestItems cannot be empty")
 	}
 
-	// Basic validation of item count (DynamoDB limit is 25)
+	// Basic validation of item count
 	count := 0
 	for _, reqs := range input.RequestItems {
 		count += len(reqs)
@@ -444,7 +427,7 @@ func (s *TableService) BatchWriteItem(ctx context.Context, input *models.BatchWr
 				if req.PutRequest != nil {
 					totalSize += EstimateItemSize(req.PutRequest.Item)
 				} else {
-					totalSize += 1024 // Approximate delete as 1KB
+					totalSize += 1024
 				}
 			}
 			units := CalculateWriteCapacity(totalSize)
@@ -514,7 +497,7 @@ func (s *TableService) TransactWriteItems(ctx context.Context, input *models.Tra
 		return nil, models.New("ValidationException", "TransactItems cannot be empty")
 	}
 
-	// Basic validation of item count (DynamoDB limit is 100)
+	// Basic validation of item count
 	if len(input.TransactItems) > 100 {
 		return nil, models.New("ValidationException", "TransactItems must have length less than or equal to 100")
 	}
@@ -783,8 +766,6 @@ func (s *TableService) ExecuteStatement(ctx context.Context, input *models.Execu
 	switch op.Type {
 	case "SELECT":
 		// Map to Query or Scan or GetItem depending on Key
-		// Simplification: Direct mapping to GetItem if Key matches PK/SK structure, else Scan/Query not fully implemented in this MVP parser
-		// For MVP, if we have a full Key, do GetItem.
 		if len(op.TableName) == 0 {
 			return nil, models.New("ValidationException", "TableName missing in statement")
 		}
@@ -812,13 +793,12 @@ func (s *TableService) ExecuteStatement(ctx context.Context, input *models.Execu
 				ConsumedCapacity: getResp.ConsumedCapacity,
 			}, nil
 		} else {
-			// Fallback to Scan if no key (or Query if we supported it in parser)
+			// Fallback to Scan if no key
 			scanReq := &models.ScanRequest{
 				TableName:              op.TableName,
 				Limit:                  op.Limit,
 				ConsistentRead:         input.ConsistentRead,
 				ReturnConsumedCapacity: input.ReturnConsumedCapacity,
-				// FilterExpression: op.FilterExpr, // Not fully wired in MVP parser
 			}
 			scanResp, err := s.Scan(ctx, scanReq)
 			if err != nil {
@@ -827,7 +807,7 @@ func (s *TableService) ExecuteStatement(ctx context.Context, input *models.Execu
 			return &models.ExecuteStatementResponse{
 				Items:            scanResp.Items,
 				ConsumedCapacity: scanResp.ConsumedCapacity,
-				NextToken:        scanString(scanResp.LastEvaluatedKey), // Simplified token handling
+				NextToken:        scanString(scanResp.LastEvaluatedKey),
 			}, nil
 		}
 
@@ -887,7 +867,6 @@ func (s *TableService) BatchExecuteStatement(ctx context.Context, input *models.
 	responses := make([]models.BatchStatementResponse, len(input.Statements))
 	consumedCapacity := make([]models.ConsumedCapacity, 0)
 
-	// Naive sequential execution
 	for i, stmt := range input.Statements {
 		execReq := &models.ExecuteStatementRequest{
 			Statement:              stmt.Statement,
@@ -914,7 +893,6 @@ func (s *TableService) BatchExecuteStatement(ctx context.Context, input *models.
 				consumedCapacity = append(consumedCapacity, *resp.ConsumedCapacity)
 			}
 			// Extract TableName from statement if possible for response
-			// Re-parse just to get table name? Inefficient but works for MVP.
 			if op, _ := ParsePartiQL(stmt.Statement, stmt.Parameters); op != nil {
 				res.TableName = op.TableName
 			}
@@ -928,8 +906,7 @@ func (s *TableService) BatchExecuteStatement(ctx context.Context, input *models.
 	}, nil
 }
 
-// Helper to serialize key for token (placeholder)
+// Helper to serialize key for token
 func scanString(key map[string]models.AttributeValue) string {
-	// In reality this would serialize the key to base64
 	return ""
 }

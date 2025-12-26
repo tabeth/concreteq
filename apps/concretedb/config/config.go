@@ -8,8 +8,6 @@ import (
 // Config holds all configuration for the application.
 type Config struct {
 	Port int
-	// LogLevel string // Can be, DEBUG, INFO, WARNING, ERROR
-	// StoragePath string
 }
 
 // NewConfig creates and returns a new Config instance, populating it from

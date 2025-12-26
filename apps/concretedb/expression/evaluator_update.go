@@ -120,31 +120,18 @@ func (e *Evaluator) resolveUpdateValue(node Node, item map[string]models.Attribu
 			if err != nil {
 				return nil, err
 			}
-			fmt.Printf("DEBUG: list_append l1 len=%d l2 len=%d\n", len(l1.L), len(l2.L))
-			res, err := applyListAppend(l1, l2)
-			if err == nil {
-				fmt.Printf("DEBUG: list_append result len=%d\n", len(res.L))
-			}
-			return res, err
+			return applyListAppend(l1, l2)
 		}
 		if n.Name == "if_not_exists" {
 			if len(n.Arguments) != 2 {
 				return nil, fmt.Errorf("if_not_exists requires 2 arguments")
 			}
-			// Special handling: resolve path (arg0). If nil or err, use arg1.
-			// Re-use logic: e.resolveValue returns nil if path not found?
-			// But e.resolveValue errors on missing placeholders?
-			// Arg0 MUST be a path.
 			pathNode, ok := n.Arguments[0].(*PathNode)
 			if !ok {
 				return nil, fmt.Errorf("if_not_exists first argument must be a path")
 			}
 
 			// Try resolving path
-			// Note: We need a version of resolvePath that doesn't return (nil, nil) if intermediate missing?
-			// Actually resolvePath returns (nil, nil) if missing.
-
-			// We need to resolve with current item context
 			val, err := e.resolvePath(pathNode, item, names)
 			if err != nil {
 				return nil, err
@@ -173,32 +160,17 @@ func (e *Evaluator) setValue(item map[string]models.AttributeValue, pathNode Nod
 		return "", fmt.Errorf("empty path")
 	}
 
-	// We need to traverse references until the *last* part.
-	// item is map[string]AV.
-
-	// Create a pointer to the current map we are traversing
+	// We need to traverse references until the last part.
 	currentMap := item
-
-	// Top level key is always the first part name
 	topLevelKey := resolveName(pNode.Parts[0].Name, names)
 
 	// Traverse up to len-1
 	for i := 0; i < len(pNode.Parts)-1; i++ {
 		part := pNode.Parts[i]
 
-		// Resolve next container
 		if part.IsIndex {
-			// Array indexing in SET path is tricky: "a[1].b = 2"
-			// "item" here is not addressable easily if we recursed?
-			// Wait, the structural traversal is hard with Go maps/structs copies.
-			// But maps are references. Slices are references.
-			// BUT: AttributeValue holds *pointers* to values? Or slice of structs?
-			// type AttributeValue struct { L []AttributeValue ... }
-			// L is a slice of structs.
-			// modifying L[i] modifies the backing array, but we need to ensure we hold the pointer.
-			return "", fmt.Errorf("nested types in SET path not fully supported in this MVP phase (requires complex pointer traversal)")
+			return "", fmt.Errorf("nested types in SET path not fully supported")
 		} else {
-			// Map key
 			key := resolveName(part.Name, names)
 			nextVal, ok := currentMap[key]
 			if !ok {
@@ -207,23 +179,12 @@ func (e *Evaluator) setValue(item map[string]models.AttributeValue, pathNode Nod
 			if nextVal.M == nil {
 				return "", fmt.Errorf("item at path %s is not a Map", key)
 			}
-			currentMap = nextVal.M // This is a map, so it's a reference type! We can modify it.
+			currentMap = nextVal.M
 		}
 	}
 
-	// Last part
 	lastPart := pNode.Parts[len(pNode.Parts)-1]
 	if lastPart.IsIndex {
-		// SET a[1] = val
-		// We need the parent slice.
-		// If len(parts) == 1, parent is 'item' (map), so index access is invalid on 'item'.
-		// Index access must imply the *previous* part yielded a List.
-		// Logic error in loop above?
-		// if lastPart is Index, the `currentMap` is WRONG context. We need `currentList`.
-		// Refactoring traversal for mixed types is complex.
-		// For MVP: Support Map nesting, but maybe not List indexing?
-		// "Updating nested paths" was requested.
-		// Let's stick to Map-only nesting for now + Top-level.
 		return "", fmt.Errorf("list indexing in SET target not supported")
 	} else {
 		key := resolveName(lastPart.Name, names)
@@ -239,7 +200,6 @@ func (e *Evaluator) removeValue(item map[string]models.AttributeValue, pathNode 
 		return "", fmt.Errorf("REMOVE target must be a path")
 	}
 
-	// Simplify: Only Top Level removel for now for safety, or simple Map traversal
 	if len(pNode.Parts) == 1 {
 		key := resolveName(pNode.Parts[0].Name, names)
 		delete(item, key)
@@ -249,10 +209,6 @@ func (e *Evaluator) removeValue(item map[string]models.AttributeValue, pathNode 
 }
 
 func (e *Evaluator) addValue(item map[string]models.AttributeValue, pathNode Node, val models.AttributeValue, names map[string]string) (string, error) {
-	// ADD path value.
-	// If path doesn't exist: create it with value.
-	// If path exists and is Number: Add.
-	// If path exists and is Set: Union.
 	pNode, ok := pathNode.(*PathNode)
 	if !ok {
 		return "", fmt.Errorf("ADD target must be a path")

@@ -11,7 +11,7 @@ const (
 	NodeLiteral
 	NodePath
 	NodeParen
-	NodeUpdate // Root node for Update Expressions
+	NodeUpdate
 )
 
 type Node interface {
@@ -51,16 +51,15 @@ func (n *FunctionNode) String() string {
 }
 
 type LiteralNode struct {
-	Value string // Usually the TokenValue literal e.g. ":v1"
+	Value string
 }
 
 func (n *LiteralNode) Type() NodeType { return NodeLiteral }
 func (n *LiteralNode) String() string { return n.Value }
 
-// PathNode represents a document path (a.b[1])
 type PathPart struct {
-	Name    string // For map keys
-	Index   int    // For list index, -1 if map key
+	Name    string
+	Index   int
 	IsIndex bool
 }
 
@@ -70,6 +69,5 @@ type PathNode struct {
 
 func (n *PathNode) Type() NodeType { return NodePath }
 func (n *PathNode) String() string {
-	// approximate stringification
 	return fmt.Sprintf("Path(%v)", n.Parts)
 }

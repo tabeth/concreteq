@@ -6,9 +6,6 @@ import (
 	"github.com/tabeth/concretedb/models"
 )
 
-// Helper to validate generic requests?
-// For now, we trust the store validation or add basic checks.
-
 func (s *TableService) CreateBackup(ctx context.Context, request *models.CreateBackupRequest) (*models.CreateBackupResponse, error) {
 	if request.TableName == "" {
 		return nil, models.New("ValidationException", "TableName is required")
@@ -16,7 +13,6 @@ func (s *TableService) CreateBackup(ctx context.Context, request *models.CreateB
 	if request.BackupName == "" {
 		return nil, models.New("ValidationException", "BackupName is required")
 	}
-	// We could validate name format here.
 
 	// Delegate to store
 	details, err := s.store.CreateBackup(ctx, request)

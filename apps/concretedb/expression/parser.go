@@ -110,7 +110,6 @@ func (p *Parser) parseCondition() (Node, error) {
 	}
 
 	// LHS: Path or Function (size)
-	// For now, assume Path. If we see 'size', handle it.
 	var left Node
 	var err error
 
@@ -147,12 +146,7 @@ func (p *Parser) parseCondition() (Node, error) {
 			return nil, err
 		}
 
-		// Represent BETWEEN as a special BinaryNode or Function?
-		// Usually standard AST uses a ternary or special node.
-		// Let's use FunctionNode for simplicity or a custom node.
-		// Actually, let's allow FunctionNode to handle BETWEEN with 3 args?
-		// Or update BinaryNode to support range? No.
-		// Let's overload FunctionNode for internal representation: "BETWEEN(left, start, end)"
+		// Internal representation: "BETWEEN(left, start, end)"
 		return &FunctionNode{
 			Name:      "BETWEEN",
 			Arguments: []Node{left, start, end},
@@ -194,28 +188,12 @@ func (p *Parser) parseOperand() (Node, error) {
 		return p.parseFunctionCall()
 	}
 
-	// TODO: Support raw numbers/strings if we scan them? Lexer currently only does identifiers and :start.
-	// Assuming placeholders for now.
+	// Currently assuming placeholders or identifiers.
 	if p.match(TokenSize) {
 		// size(path) as operand
-		// Don't backup, just parse path?
-		// No, parseFunctionCall expects to sit on the token (Name).
-		// But match() advanced it.
-		// p.advance() in function call consumes StartToken.
-		// match() has already consumed TokenSize.
-		// So p.prev() is TokenSize.
-		// parseFunctionCall starts with: startToken := p.advance().
-		// If we call parseFunctionCall now, it will consume the NEXT token (LParen).
-		// We want it to use the Previous token as name?
-		// Or we construct FunctionNode manually here.
-		// "size" is special because it's a keyword but used as function name.
-
 		if !p.match(TokenLParen) {
 			return nil, fmt.Errorf("expected '(' after size")
 		}
-		// ... manual parse loop ...
-		// Actually, let's just reuse logic.
-		// Construct node manually.
 
 		// Logic similar to parseFunctionCall loop
 		var args []Node

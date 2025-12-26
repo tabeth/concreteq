@@ -17,9 +17,6 @@ func (s *TableService) TagResource(ctx context.Context, req *models.TagResourceR
 
 	err := s.store.TagResource(ctx, req.ResourceArn, req.Tags)
 	if err != nil {
-		// Passthrough store errors (e.g. ErrTableNotFound -> ResourceNotFoundException ideally)
-		// Assuming Store methods return generic errors we should wrap or specific errors we should map.
-		// foundationdb_tags.go returns generic errors or ErrTableNotFound
 		return err
 	}
 	return nil

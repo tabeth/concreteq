@@ -5,7 +5,7 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/tabeth/concretedb/models" // Use new error package
+	"github.com/tabeth/concretedb/models"
 	"github.com/tabeth/concretedb/service"
 )
 
@@ -29,7 +29,6 @@ func (h *DynamoDBHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch target {
 	case "DynamoDB_20120810.CreateTable":
 		h.createTableHandler(w, r)
-	// ADDED: Route for the DeleteTable action
 	case "DynamoDB_20120810.DeleteTable":
 		h.deleteTableHandler(w, r)
 	case "DynamoDB_20120810.ListTables":

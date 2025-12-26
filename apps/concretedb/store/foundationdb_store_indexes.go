@@ -154,23 +154,9 @@ func (s *FoundationDBStore) buildIndexKeyTuple(table *models.Table, indexKeySche
 	}
 
 	// 2. Table Keys (to ensure uniqueness)
-	// We append TablePK (and TableSK if exists) to the tuple.
-	// BUT, if the Index Key ALREADY includes Table Key (e.g. LSI shares PK), we shouldn't duplicate it?
-	// FDB logic: The tuple forms the key.
-	// GSI: (GSI_PK, GSI_SK, TablePK, TableSK).
-	// LSI: (TablePK, LSI_SK, TableSK). (TablePK is already in indexKeySchema[0]).
-
-	// Optimization: Append Table Keys ONLY if they are not already in Index Keys?
-	// Or just blindly append them? strict deduplication?
-	// DynamoDB GSI keys are (Partition Key, Sort Key, Table Partition Key, Table Sort Key).
-	// If any overlap, they are merged? No, generally they are distinct unless same name.
-
+	// Append TablePK (and TableSK if exists) to the tuple if they are not already part of the index key.
 	for _, ke := range table.KeySchema {
-		// Check if already in parts?
-		// Simple approach: Always append table keys.
-		// For LSI: indexKeySchema[0] IS TablePK. So we duplicate it?
-		// (TablePK, LSI_SK, TablePK, TableSK). This is redundant but works for uniqueness.
-		// Better: Check if attribute name is already in indexKeySchema.
+		// Check if attribute name is already in indexKeySchema.
 
 		isInData := false
 		for _, ike := range indexKeySchema {
@@ -217,8 +203,7 @@ func toFDBElement(v models.AttributeValue) (tuple.TupleElement, error) {
 // backfillIndex scans the table and adds entries for the new index.
 // This runs in a background goroutine.
 func (s *FoundationDBStore) backfillIndex(ctx context.Context, tableName string, indexName string) {
-	// 1. Get Table Schema (for projection/key schema)
-	// We need to do this in a transaction.
+	// 1. Get Table Schema
 	var table *models.Table
 	val, err := s.db.ReadTransact(func(tr fdbadapter.FDBReadTransaction) (interface{}, error) {
 		res, err := s.getTableInternal(tr, tableName)
@@ -322,7 +307,7 @@ func (s *FoundationDBStore) backfillIndex(ctx context.Context, tableName string,
 
 		if err != nil {
 			fmt.Printf("Backfill error: %v\n", err)
-			return // Retry? simplified for now.
+			return
 		}
 
 		if lastRead == nil {
@@ -365,8 +350,6 @@ func (s *FoundationDBStore) backfillIndex(ctx context.Context, tableName string,
 
 	if err != nil {
 		fmt.Printf("Failed to set index ACTIVE: %v\n", err)
-	} else {
-		// fmt.Printf("Backfill complete for %s\n", indexName)
 	}
 }
 

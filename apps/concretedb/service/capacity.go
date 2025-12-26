@@ -9,7 +9,7 @@ import (
 // CalculateReadCapacity calculates RCU based on item size and consistency.
 func CalculateReadCapacity(itemSize int, consistent bool) float64 {
 	if itemSize == 0 {
-		itemSize = 1 // Minimum 1 byte for calculation? No, DynamoDB says 4KB rounds up.
+		itemSize = 1
 	}
 	// Round up to nearest 4KB
 	units := math.Ceil(float64(itemSize) / 4096.0)
@@ -105,8 +105,6 @@ func BuildConsumedCapacity(tableName string, units float64, isRead bool) *models
 
 // BuildItemCollectionMetrics constructs a models.ItemCollectionMetrics struct.
 func BuildItemCollectionMetrics(tableName string, key map[string]models.AttributeValue) *models.ItemCollectionMetrics {
-	// For MVP, we use the whole key as ItemCollectionKey.
-	// In reality, it should only be the Partition Key.
 	return &models.ItemCollectionMetrics{
 		ItemCollectionKey:   key,
 		SizeEstimateRangeGB: []float64{0.0, 0.01},
