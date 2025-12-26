@@ -101,4 +101,8 @@ type Store interface {
 	UpdateContinuousBackups(ctx context.Context, req *models.UpdateContinuousBackupsRequest) (*models.ContinuousBackupsDescription, error)
 	DescribeContinuousBackups(ctx context.Context, tableName string) (*models.ContinuousBackupsDescription, error)
 	RestoreTableToPointInTime(ctx context.Context, req *models.RestoreTableToPointInTimeRequest) (*models.TableDescription, error)
+
+	// Background Worker Control
+	StartWorkers(ctx context.Context)
+	StopWorkers()
 }

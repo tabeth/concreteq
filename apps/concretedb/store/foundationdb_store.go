@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
@@ -25,6 +26,10 @@ type FoundationDBStore struct {
 	db        fdbadapter.FDBDatabase
 	dir       fdbadapter.DirectoryProvider
 	evaluator *expression.Evaluator
+
+	// Worker control
+	workerCancel context.CancelFunc
+	workerWg     sync.WaitGroup
 }
 
 // NewFoundationDBStore creates a new store connected to FoundationDB.
@@ -35,6 +40,23 @@ func NewFoundationDBStore(db fdb.Database) *FoundationDBStore {
 		dir:       fdbadapter.NewRealDirectoryProvider(directory.NewDirectoryLayer(subspace.Sub(tuple.Tuple{"concretedb"}), subspace.Sub(tuple.Tuple{"content"}), true)),
 		evaluator: expression.NewEvaluator(),
 	}
+}
+
+func (s *FoundationDBStore) StartWorkers(ctx context.Context) {
+	// Create a derived context for cancellation
+	ctx, cancel := context.WithCancel(ctx)
+	s.workerCancel = cancel
+
+	// Start TTL Worker
+	s.workerWg.Add(1)
+	go s.startTTLWorker(ctx)
+}
+
+func (s *FoundationDBStore) StopWorkers() {
+	if s.workerCancel != nil {
+		s.workerCancel()
+	}
+	s.workerWg.Wait()
 }
 
 // Scan scans the table.
@@ -865,7 +887,12 @@ func (s *FoundationDBStore) putItemInternal(tr fdbadapter.FDBTransaction, table 
 		return nil, err
 	}
 
-	// 8. Stream Record
+	// 8. Update TTL Index
+	if err := s.updateTTLIndex(tr, table, oldItem, item); err != nil {
+		return nil, err
+	}
+
+	// 9. Stream Record
 	eventName := "MODIFY"
 	if oldItem == nil {
 		eventName = "INSERT" // Or INSERT if oldItem was nil/empty
@@ -990,11 +1017,17 @@ func (s *FoundationDBStore) deleteItemInternal(tr fdbadapter.FDBTransaction, tab
 	// or just the keys. But `writeHistoryRecord` takes the item.
 	// If we are deleting, the "Item at Time T" is "Deleted".
 	// We pass the oldItem so we can recover the key.
+	// 6. Write to History (PITR)
 	if err := s.writeHistoryRecord(tr, table, oldItem, true); err != nil {
 		return nil, err
 	}
 
-	// 7. Stream Record
+	// 7. Update TTL Index
+	if err := s.updateTTLIndex(tr, table, oldItem, nil); err != nil {
+		return nil, err
+	}
+
+	// 8. Stream Record
 	if oldItem != nil { // Only stream if something was deleted
 		if err := s.writeStreamRecord(tr, table, "REMOVE", oldItem, nil); err != nil {
 			return nil, err
@@ -1249,7 +1282,12 @@ func (s *FoundationDBStore) updateItemInternal(tr fdbadapter.FDBTransaction, tab
 		return nil, err
 	}
 
-	// 9. Stream Record
+	// 9. Update TTL Index
+	if err := s.updateTTLIndex(tr, table, oldItem, item); err != nil {
+		return nil, err
+	}
+
+	// 10. Stream Record
 	eventName := "MODIFY"
 	if oldItem == nil {
 		eventName = "INSERT" // It was a new item (Upsert)
@@ -2329,6 +2367,70 @@ func cloneAttributeValue(v models.AttributeValue) models.AttributeValue {
 		}
 	}
 	return clone
+}
+
+// updateTTLIndex maintains the TTL index entries
+func (s *FoundationDBStore) updateTTLIndex(tr fdbadapter.FDBTransaction, table *models.Table, oldItem map[string]models.AttributeValue, newItem map[string]models.AttributeValue) error {
+	// If TTL not enabled, check if we need to clean up old items just in case?
+	// Usually if disabled, we stop indexing, but existing indexes remain until background cleanup (not implemented yet for disable)
+	// For now, only proceed if ENABLED
+	if table.TimeToLiveDescription == nil || table.TimeToLiveDescription.TimeToLiveStatus != "ENABLED" || table.TimeToLiveDescription.AttributeName == "" {
+		return nil
+	}
+
+	ttlAttr := table.TimeToLiveDescription.AttributeName
+
+	// Helper to extract TTL timestamp
+	getTimestamp := func(item map[string]models.AttributeValue) (float64, bool) {
+		if item == nil {
+			return 0, false
+		}
+		val, ok := item[ttlAttr]
+		if !ok || val.N == nil {
+			return 0, false
+		}
+		var ts float64
+		if _, err := fmt.Sscanf(*val.N, "%f", &ts); err != nil {
+			return 0, false
+		}
+		return ts, true
+	}
+
+	// 1. Remove old index entry if it existed
+	oldTS, oldHasTTL := getTimestamp(oldItem)
+	if oldHasTTL {
+		// Key: (expiration, PK...)
+		pkTuple, err := s.buildKeyTuple(table, oldItem)
+		if err != nil {
+			return err
+		}
+		ttlDir, err := s.dir.CreateOrOpen(tr, []string{"tables", table.TableName, "ttl"}, nil)
+		if err != nil {
+			return err
+		}
+		// Pack key
+		ttlKey := ttlDir.Pack(append(tuple.Tuple{oldTS}, pkTuple...))
+		tr.Clear(ttlKey)
+	}
+
+	// 2. Add new index entry if applicable
+	newTS, newHasTTL := getTimestamp(newItem)
+	if newHasTTL {
+		// Key: (expiration, PK...)
+		pkTuple, err := s.buildKeyTuple(table, newItem)
+		if err != nil {
+			return err
+		}
+		ttlDir, err := s.dir.CreateOrOpen(tr, []string{"tables", table.TableName, "ttl"}, nil)
+		if err != nil {
+			return err
+		}
+		// Pack key
+		ttlKey := ttlDir.Pack(append(tuple.Tuple{newTS}, pkTuple...))
+		tr.Set(ttlKey, []byte{}) // Empty value, key is enough
+	}
+
+	return nil
 }
 
 func validateItem(item map[string]models.AttributeValue) error {

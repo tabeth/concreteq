@@ -51,6 +51,9 @@ type mockStore struct {
 	UpdateContinuousBackupsFunc   func(ctx context.Context, req *models.UpdateContinuousBackupsRequest) (*models.ContinuousBackupsDescription, error)
 	DescribeContinuousBackupsFunc func(ctx context.Context, tableName string) (*models.ContinuousBackupsDescription, error)
 	RestoreTableToPointInTimeFunc func(ctx context.Context, req *models.RestoreTableToPointInTimeRequest) (*models.TableDescription, error)
+	// Background Worker
+	StartWorkersFunc func(ctx context.Context)
+	StopWorkersFunc  func()
 }
 
 func (m *mockStore) CreateTable(ctx context.Context, table *models.Table) error {
@@ -186,6 +189,18 @@ func (m *mockStore) DescribeContinuousBackups(ctx context.Context, tableName str
 
 func (m *mockStore) RestoreTableToPointInTime(ctx context.Context, req *models.RestoreTableToPointInTimeRequest) (*models.TableDescription, error) {
 	return m.RestoreTableToPointInTimeFunc(ctx, req)
+}
+
+func (m *mockStore) StartWorkers(ctx context.Context) {
+	if m.StartWorkersFunc != nil {
+		m.StartWorkersFunc(ctx)
+	}
+}
+
+func (m *mockStore) StopWorkers() {
+	if m.StopWorkersFunc != nil {
+		m.StopWorkersFunc()
+	}
 }
 
 func TestTableService_DeleteTable_NotFound(t *testing.T) {

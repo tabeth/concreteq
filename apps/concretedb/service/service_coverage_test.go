@@ -253,6 +253,14 @@ func (m *MockStore) RestoreTableToPointInTime(ctx context.Context, request *mode
 	return args.Get(0).(*models.TableDescription), args.Error(1)
 }
 
+func (m *MockStore) StartWorkers(ctx context.Context) {
+	m.Called(ctx)
+}
+
+func (m *MockStore) StopWorkers() {
+	m.Called()
+}
+
 func TestTableService_Coverage_1(t *testing.T) {
 	mockStore := new(MockStore)
 	service := NewTableService(mockStore)
