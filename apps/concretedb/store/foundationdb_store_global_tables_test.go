@@ -136,8 +136,20 @@ func TestFoundationDBStore_UpdateTable_GSI(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Len(t, updated.GlobalSecondaryIndexes, 1)
 	assert.Equal(t, "NewGSI", updated.GlobalSecondaryIndexes[0].IndexName)
-	// Status might be CREATING or ACTIVE depending on implementation (sync backfill -> ACTIVE probably)
-	assert.Equal(t, "ACTIVE", updated.GlobalSecondaryIndexes[0].IndexStatus)
+	// Status will be CREATING initially due to async backfill
+	assert.Contains(t, []string{"CREATING", "ACTIVE"}, updated.GlobalSecondaryIndexes[0].IndexStatus)
+
+	// Poll for ACTIVE
+	assert.Eventually(t, func() bool {
+		tbl, err := s.GetTable(ctx, tableName)
+		if err != nil {
+			return false
+		}
+		if len(tbl.GlobalSecondaryIndexes) == 0 {
+			return false
+		}
+		return tbl.GlobalSecondaryIndexes[0].IndexStatus == "ACTIVE"
+	}, 10*time.Second, 100*time.Millisecond, "GSI should become ACTIVE")
 
 	// 4. Verify GSI Data (if we had Query on it, or just trust backfill ran without error)
 	// For now just success is enough to prove integration.
