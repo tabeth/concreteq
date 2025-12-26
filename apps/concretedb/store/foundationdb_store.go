@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -797,6 +798,11 @@ func (s *FoundationDBStore) PutItem(ctx context.Context, tableName string, item 
 }
 
 func (s *FoundationDBStore) putItemInternal(tr fdbadapter.FDBTransaction, table *models.Table, item map[string]models.AttributeValue, conditionExpression string, exprAttrNames map[string]string, exprAttrValues map[string]models.AttributeValue, returnValues string) (map[string]models.AttributeValue, error) {
+	// 1a. Validate Item
+	if err := validateItem(item); err != nil {
+		return nil, err
+	}
+
 	// 1. Extract Key Fields
 	keyTuple, err := s.buildKeyTuple(table, item)
 	if err != nil {
@@ -1209,6 +1215,11 @@ func (s *FoundationDBStore) updateItemInternal(tr fdbadapter.FDBTransaction, tab
 		if changed[k.AttributeName] {
 			return nil, fmt.Errorf("cannot update attribute %s. This is part of the key", k.AttributeName)
 		}
+	}
+
+	// 5b. Validate resulting item
+	if err := validateItem(item); err != nil {
+		return nil, err
 	}
 
 	// 6. Serialize and Write and Check Size Limits
@@ -2318,4 +2329,85 @@ func cloneAttributeValue(v models.AttributeValue) models.AttributeValue {
 		}
 	}
 	return clone
+}
+
+func validateItem(item map[string]models.AttributeValue) error {
+	for k, v := range item {
+		if err := validateAttributeValue(v, 0); err != nil {
+			return fmt.Errorf("invalid attribute %s: %w", k, err)
+		}
+	}
+	return nil
+}
+
+func validateAttributeValue(av models.AttributeValue, depth int) error {
+	if depth > 32 {
+		return models.New("ValidationException", "Item depth exceeds limit of 32")
+	}
+
+	setCount := 0
+	if av.S != nil {
+		setCount++
+	}
+	if av.N != nil {
+		setCount++
+		var f float64
+		if _, err := fmt.Sscanf(*av.N, "%f", &f); err == nil {
+			if math.IsNaN(f) || math.IsInf(f, 0) {
+				return models.New("ValidationException", "Number contains NaN or Infinity")
+			}
+		}
+	}
+	if av.B != nil {
+		setCount++
+	}
+	if av.BOOL != nil {
+		setCount++
+	}
+	if av.NULL != nil {
+		setCount++
+	}
+	if av.SS != nil {
+		setCount++
+		if len(av.SS) == 0 {
+			return models.New("ValidationException", "Sets must not be empty")
+		}
+	}
+	if av.NS != nil {
+		setCount++
+		if len(av.NS) == 0 {
+			return models.New("ValidationException", "Sets must not be empty")
+		}
+	}
+	if av.BS != nil {
+		setCount++
+		if len(av.BS) == 0 {
+			return models.New("ValidationException", "Sets must not be empty")
+		}
+	}
+	if av.L != nil {
+		setCount++
+		for _, lv := range av.L {
+			if err := validateAttributeValue(lv, depth+1); err != nil {
+				return err
+			}
+		}
+	}
+	if av.M != nil {
+		setCount++
+		for _, mv := range av.M {
+			if err := validateAttributeValue(mv, depth+1); err != nil {
+				return err
+			}
+		}
+	}
+
+	if setCount == 0 {
+		return models.New("ValidationException", "AttributeValue must contain a value")
+	}
+	if setCount > 1 {
+		return models.New("ValidationException", "AttributeValue must contain only one value")
+	}
+
+	return nil
 }
