@@ -38,6 +38,8 @@ type TableServicer interface {
 	BatchWriteItem(ctx context.Context, input *models.BatchWriteItemRequest) (*models.BatchWriteItemResponse, error)
 	TransactGetItems(ctx context.Context, input *models.TransactGetItemsRequest) (*models.TransactGetItemsResponse, error)
 	TransactWriteItems(ctx context.Context, input *models.TransactWriteItemsRequest) (*models.TransactWriteItemsResponse, error)
+	ExecuteStatement(ctx context.Context, input *models.ExecuteStatementRequest) (*models.ExecuteStatementResponse, error)
+	BatchExecuteStatement(ctx context.Context, input *models.BatchExecuteStatementRequest) (*models.BatchExecuteStatementResponse, error)
 
 	// Stream Operations
 	ListStreams(ctx context.Context, input *models.ListStreamsRequest) (*models.ListStreamsResponse, error)
@@ -466,6 +468,9 @@ func (s *TableService) TransactGetItems(ctx context.Context, input *models.Trans
 	if len(input.TransactItems) == 0 {
 		return nil, models.New("ValidationException", "TransactItems cannot be empty")
 	}
+	if len(input.TransactItems) > 100 {
+		return nil, models.New("ValidationException", "TransactItems must have length less than or equal to 100")
+	}
 
 	responses, err := s.store.TransactGetItems(ctx, input.TransactItems)
 	if err != nil {
@@ -503,9 +508,9 @@ func (s *TableService) TransactWriteItems(ctx context.Context, input *models.Tra
 		return nil, models.New("ValidationException", "TransactItems cannot be empty")
 	}
 
-	// Basic validation of item count (DynamoDB limit is 25)
-	if len(input.TransactItems) > 25 {
-		return nil, models.New("ValidationException", "TransactItems must have length less than or equal to 25")
+	// Basic validation of item count (DynamoDB limit is 100)
+	if len(input.TransactItems) > 100 {
+		return nil, models.New("ValidationException", "TransactItems must have length less than or equal to 100")
 	}
 
 	err := s.store.TransactWriteItems(ctx, input.TransactItems, input.ClientRequestToken)
@@ -755,4 +760,170 @@ func mapStoreError(err error, msg string) error {
 		return models.New("ResourceInUseException", msg+": already exists")
 	}
 	return models.New("InternalFailure", fmt.Sprintf("%s: %v", msg, err))
+}
+
+// PartiQL Operations
+
+func (s *TableService) ExecuteStatement(ctx context.Context, input *models.ExecuteStatementRequest) (*models.ExecuteStatementResponse, error) {
+	if input.Statement == "" {
+		return nil, models.New("ValidationException", "Statement cannot be empty")
+	}
+
+	op, err := ParsePartiQL(input.Statement, input.Parameters)
+	if err != nil {
+		return nil, models.New("ValidationException", fmt.Sprintf("Failed to parse statement: %v", err))
+	}
+
+	switch op.Type {
+	case "SELECT":
+		// Map to Query or Scan or GetItem depending on Key
+		// Simplification: Direct mapping to GetItem if Key matches PK/SK structure, else Scan/Query not fully implemented in this MVP parser
+		// For MVP, if we have a full Key, do GetItem.
+		if len(op.TableName) == 0 {
+			return nil, models.New("ValidationException", "TableName missing in statement")
+		}
+
+		// If we have a full primary key, map to GetItem
+		if len(op.Key) > 0 {
+			getReq := &models.GetItemRequest{
+				TableName:              op.TableName,
+				Key:                    op.Key,
+				ConsistentRead:         input.ConsistentRead,
+				ReturnConsumedCapacity: input.ReturnConsumedCapacity,
+			}
+			getResp, err := s.GetItem(ctx, getReq)
+			if err != nil {
+				return nil, err
+			}
+
+			var items []map[string]models.AttributeValue
+			if getResp.Item != nil {
+				items = append(items, getResp.Item)
+			}
+
+			return &models.ExecuteStatementResponse{
+				Items:            items,
+				ConsumedCapacity: getResp.ConsumedCapacity,
+			}, nil
+		} else {
+			// Fallback to Scan if no key (or Query if we supported it in parser)
+			scanReq := &models.ScanRequest{
+				TableName:              op.TableName,
+				Limit:                  op.Limit,
+				ConsistentRead:         input.ConsistentRead,
+				ReturnConsumedCapacity: input.ReturnConsumedCapacity,
+				// FilterExpression: op.FilterExpr, // Not fully wired in MVP parser
+			}
+			scanResp, err := s.Scan(ctx, scanReq)
+			if err != nil {
+				return nil, err
+			}
+			return &models.ExecuteStatementResponse{
+				Items:            scanResp.Items,
+				ConsumedCapacity: scanResp.ConsumedCapacity,
+				NextToken:        scanString(scanResp.LastEvaluatedKey), // Simplified token handling
+			}, nil
+		}
+
+	case "INSERT":
+		putReq := &models.PutItemRequest{
+			TableName:              op.TableName,
+			Item:                   op.Item,
+			ReturnConsumedCapacity: input.ReturnConsumedCapacity,
+		}
+		putResp, err := s.PutItem(ctx, putReq)
+		if err != nil {
+			return nil, err
+		}
+		return &models.ExecuteStatementResponse{
+			ConsumedCapacity: putResp.ConsumedCapacity,
+		}, nil
+
+	case "UPDATE":
+		updateReq := &models.UpdateItemRequest{
+			TableName:              op.TableName,
+			Key:                    op.Key,
+			UpdateExpression:       op.UpdateExpr,
+			ReturnConsumedCapacity: input.ReturnConsumedCapacity,
+		}
+		updateResp, err := s.UpdateItem(ctx, updateReq)
+		if err != nil {
+			return nil, err
+		}
+		return &models.ExecuteStatementResponse{
+			ConsumedCapacity: updateResp.ConsumedCapacity,
+		}, nil
+
+	case "DELETE":
+		delReq := &models.DeleteItemRequest{
+			TableName:              op.TableName,
+			Key:                    op.Key,
+			ReturnConsumedCapacity: input.ReturnConsumedCapacity,
+		}
+		delResp, err := s.DeleteItem(ctx, delReq)
+		if err != nil {
+			return nil, err
+		}
+		return &models.ExecuteStatementResponse{
+			ConsumedCapacity: delResp.ConsumedCapacity,
+		}, nil
+
+	default:
+		return nil, models.New("ValidationException", "Unsupported operation type")
+	}
+}
+
+func (s *TableService) BatchExecuteStatement(ctx context.Context, input *models.BatchExecuteStatementRequest) (*models.BatchExecuteStatementResponse, error) {
+	if len(input.Statements) == 0 {
+		return nil, models.New("ValidationException", "Statements cannot be empty")
+	}
+
+	responses := make([]models.BatchStatementResponse, len(input.Statements))
+	consumedCapacity := make([]models.ConsumedCapacity, 0)
+
+	// Naive sequential execution
+	for i, stmt := range input.Statements {
+		execReq := &models.ExecuteStatementRequest{
+			Statement:              stmt.Statement,
+			Parameters:             stmt.Parameters,
+			ConsistentRead:         stmt.ConsistentRead,
+			ReturnConsumedCapacity: input.ReturnConsumedCapacity,
+		}
+
+		resp, err := s.ExecuteStatement(ctx, execReq)
+
+		res := models.BatchStatementResponse{}
+		if err != nil {
+			if apiErr, ok := err.(*models.APIError); ok {
+				res.Error = apiErr
+			} else {
+				res.Error = models.New("InternalFailure", err.Error())
+			}
+		} else {
+			// For BatchExecute, mostly write ops are expected, but checks for reads exist
+			if len(resp.Items) > 0 {
+				res.Item = resp.Items[0]
+			}
+			if resp.ConsumedCapacity != nil {
+				consumedCapacity = append(consumedCapacity, *resp.ConsumedCapacity)
+			}
+			// Extract TableName from statement if possible for response
+			// Re-parse just to get table name? Inefficient but works for MVP.
+			if op, _ := ParsePartiQL(stmt.Statement, stmt.Parameters); op != nil {
+				res.TableName = op.TableName
+			}
+		}
+		responses[i] = res
+	}
+
+	return &models.BatchExecuteStatementResponse{
+		Responses:        responses,
+		ConsumedCapacity: consumedCapacity,
+	}, nil
+}
+
+// Helper to serialize key for token (placeholder)
+func scanString(key map[string]models.AttributeValue) string {
+	// In reality this would serialize the key to base64
+	return ""
 }

@@ -1388,7 +1388,7 @@ func TestTableService_TransactErrors(t *testing.T) {
 	assert.Error(t, err)
 
 	// TransactWrite Validation (Too many)
-	items := make([]models.TransactWriteItem, 26)
+	items := make([]models.TransactWriteItem, 101)
 	_, err = service.TransactWriteItems(context.Background(), &models.TransactWriteItemsRequest{TransactItems: items})
 	assert.Error(t, err)
 

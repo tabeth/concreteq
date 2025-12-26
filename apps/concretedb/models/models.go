@@ -744,3 +744,43 @@ type RestoreTableToPointInTimeRequest struct {
 type RestoreTableToPointInTimeResponse struct {
 	TableDescription TableDescription `json:"TableDescription"`
 }
+
+// PartiQL Models
+
+type ExecuteStatementRequest struct {
+	Statement              string           `json:"Statement"`
+	Parameters             []AttributeValue `json:"Parameters,omitempty"`
+	ConsistentRead         bool             `json:"ConsistentRead,omitempty"`
+	NextToken              string           `json:"NextToken,omitempty"`
+	ReturnConsumedCapacity string           `json:"ReturnConsumedCapacity,omitempty"`
+	Limit                  int32            `json:"Limit,omitempty"`
+}
+
+type ExecuteStatementResponse struct {
+	Items            []map[string]AttributeValue `json:"Items,omitempty"`
+	NextToken        string                      `json:"NextToken,omitempty"`
+	ConsumedCapacity *ConsumedCapacity           `json:"ConsumedCapacity,omitempty"`
+	LastEvaluatedKey map[string]AttributeValue   `json:"LastEvaluatedKey,omitempty"`
+}
+
+type BatchExecuteStatementRequest struct {
+	Statements             []BatchStatementRequest `json:"Statements"`
+	ReturnConsumedCapacity string                  `json:"ReturnConsumedCapacity,omitempty"`
+}
+
+type BatchStatementRequest struct {
+	Statement      string           `json:"Statement"`
+	Parameters     []AttributeValue `json:"Parameters,omitempty"`
+	ConsistentRead bool             `json:"ConsistentRead,omitempty"`
+}
+
+type BatchExecuteStatementResponse struct {
+	Responses        []BatchStatementResponse `json:"Responses,omitempty"`
+	ConsumedCapacity []ConsumedCapacity       `json:"ConsumedCapacity,omitempty"`
+}
+
+type BatchStatementResponse struct {
+	Error     *APIError                 `json:"Error,omitempty"`
+	TableName string                    `json:"TableName,omitempty"`
+	Item      map[string]AttributeValue `json:"Item,omitempty"`
+}

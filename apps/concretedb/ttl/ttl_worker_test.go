@@ -48,6 +48,9 @@ type mockTableService struct {
 	UpdateContinuousBackupsFunc   func(ctx context.Context, req *models.UpdateContinuousBackupsRequest) (*models.ContinuousBackupsDescription, error)
 	DescribeContinuousBackupsFunc func(ctx context.Context, tableName string) (*models.ContinuousBackupsDescription, error)
 	RestoreTableToPointInTimeFunc func(ctx context.Context, req *models.RestoreTableToPointInTimeRequest) (*models.TableDescription, error)
+	// PartiQL
+	ExecuteStatementFunc      func(ctx context.Context, input *models.ExecuteStatementRequest) (*models.ExecuteStatementResponse, error)
+	BatchExecuteStatementFunc func(ctx context.Context, input *models.BatchExecuteStatementRequest) (*models.BatchExecuteStatementResponse, error)
 }
 
 func (m *mockTableService) ListTables(ctx context.Context, limit int, exclusiveStartTableName string) ([]string, string, error) {
@@ -194,6 +197,20 @@ func (m *mockTableService) DescribeContinuousBackups(ctx context.Context, tableN
 func (m *mockTableService) RestoreTableToPointInTime(ctx context.Context, req *models.RestoreTableToPointInTimeRequest) (*models.TableDescription, error) {
 	if m.RestoreTableToPointInTimeFunc != nil {
 		return m.RestoreTableToPointInTimeFunc(ctx, req)
+	}
+	return nil, nil
+}
+
+func (m *mockTableService) ExecuteStatement(ctx context.Context, input *models.ExecuteStatementRequest) (*models.ExecuteStatementResponse, error) {
+	if m.ExecuteStatementFunc != nil {
+		return m.ExecuteStatementFunc(ctx, input)
+	}
+	return nil, nil
+}
+
+func (m *mockTableService) BatchExecuteStatement(ctx context.Context, input *models.BatchExecuteStatementRequest) (*models.BatchExecuteStatementResponse, error) {
+	if m.BatchExecuteStatementFunc != nil {
+		return m.BatchExecuteStatementFunc(ctx, input)
 	}
 	return nil, nil
 }

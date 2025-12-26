@@ -35,28 +35,23 @@
 === RUN   TestBuildItemCollectionMetrics
 --- PASS: TestBuildItemCollectionMetrics (0.00s)
 === RUN   TestParsePartiQL_Select
-    partiql_test.go:23: 
-        	Error Trace:	/config/kiroku-core/apps/concretedb/service/partiql_test.go:23
-        	Error:      	Not equal: 
-        	            	expected: models.AttributeValue{S:(*string)(0xc000028da0), N:(*string)(nil), B:(*string)(nil), SS:[]string(nil), NS:[]string(nil), BS:[]string(nil), M:map[string]models.AttributeValue(nil), L:[]models.AttributeValue(nil), NULL:(*bool)(nil), BOOL:(*bool)(nil)}
-        	            	actual  : models.AttributeValue{S:(*string)(nil), N:(*string)(nil), B:(*string)(nil), SS:[]string(nil), NS:[]string(nil), BS:[]string(nil), M:map[string]models.AttributeValue(nil), L:[]models.AttributeValue(nil), NULL:(*bool)(nil), BOOL:(*bool)(nil)}
-        	            	
-        	            	Diff:
-        	            	--- Expected
-        	            	+++ Actual
-        	            	@@ -1,3 +1,3 @@
-        	            	 (models.AttributeValue) {
-        	            	- S: (*string)((len=3) "123"),
-        	            	+ S: (*string)(<nil>),
-        	            	  N: (*string)(<nil>),
-        	Test:       	TestParsePartiQL_Select
---- FAIL: TestParsePartiQL_Select (0.00s)
+--- PASS: TestParsePartiQL_Select (0.00s)
 === RUN   TestParsePartiQL_Insert
 --- PASS: TestParsePartiQL_Insert (0.00s)
+=== RUN   TestParsePartiQL_Update
+--- PASS: TestParsePartiQL_Update (0.00s)
+=== RUN   TestParsePartiQL_Delete
+--- PASS: TestParsePartiQL_Delete (0.00s)
 === RUN   TestExecuteStatement_Select
 --- PASS: TestExecuteStatement_Select (0.00s)
 === RUN   TestExecuteStatement_Select_Scan
 --- PASS: TestExecuteStatement_Select_Scan (0.00s)
+=== RUN   TestExecuteStatement_Insert
+--- PASS: TestExecuteStatement_Insert (0.00s)
+=== RUN   TestExecuteStatement_Update
+--- PASS: TestExecuteStatement_Update (0.00s)
+=== RUN   TestExecuteStatement_Delete
+--- PASS: TestExecuteStatement_Delete (0.00s)
 === RUN   TestBatchExecuteStatement_Mixed
 --- PASS: TestBatchExecuteStatement_Mixed (0.00s)
 === RUN   TestTableService_Coverage_1
@@ -145,6 +140,6 @@
 --- PASS: TestTableService_GlobalTables (0.00s)
 === RUN   TestTableService_TTL
 --- PASS: TestTableService_TTL (0.00s)
-FAIL
-FAIL	github.com/tabeth/concretedb/service	0.011s
-FAIL
+PASS
+coverage: 90.3% of statements
+ok  	github.com/tabeth/concretedb/service	0.013s	coverage: 90.3% of statements

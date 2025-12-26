@@ -53,6 +53,9 @@ type mockTableService struct {
 	UpdateContinuousBackupsFunc   func(ctx context.Context, req *models.UpdateContinuousBackupsRequest) (*models.ContinuousBackupsDescription, error)
 	DescribeContinuousBackupsFunc func(ctx context.Context, tableName string) (*models.ContinuousBackupsDescription, error)
 	RestoreTableToPointInTimeFunc func(ctx context.Context, req *models.RestoreTableToPointInTimeRequest) (*models.TableDescription, error)
+	// PartiQL
+	ExecuteStatementFunc      func(ctx context.Context, input *models.ExecuteStatementRequest) (*models.ExecuteStatementResponse, error)
+	BatchExecuteStatementFunc func(ctx context.Context, input *models.BatchExecuteStatementRequest) (*models.BatchExecuteStatementResponse, error)
 }
 
 // CreateTable is the method required to satisfy the interface.
@@ -132,6 +135,20 @@ func (m *mockTableService) TransactGetItems(ctx context.Context, request *models
 
 func (m *mockTableService) TransactWriteItems(ctx context.Context, request *models.TransactWriteItemsRequest) (*models.TransactWriteItemsResponse, error) {
 	return m.TransactWriteItemsFunc(ctx, request)
+}
+
+func (m *mockTableService) ExecuteStatement(ctx context.Context, input *models.ExecuteStatementRequest) (*models.ExecuteStatementResponse, error) {
+	if m.ExecuteStatementFunc != nil {
+		return m.ExecuteStatementFunc(ctx, input)
+	}
+	return nil, nil
+}
+
+func (m *mockTableService) BatchExecuteStatement(ctx context.Context, input *models.BatchExecuteStatementRequest) (*models.BatchExecuteStatementResponse, error) {
+	if m.BatchExecuteStatementFunc != nil {
+		return m.BatchExecuteStatementFunc(ctx, input)
+	}
+	return nil, nil
 }
 
 func (m *mockTableService) ListStreams(ctx context.Context, request *models.ListStreamsRequest) (*models.ListStreamsResponse, error) {
