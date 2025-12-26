@@ -11,3 +11,9 @@ fdb.cluster
 
 # Logs
 *.log
+
+# Test Artifacts
+.fdb_test/
+.fdb_test_store/
+*.html
+test.cluster
