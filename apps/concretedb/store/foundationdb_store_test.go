@@ -1984,11 +1984,11 @@ func TestFoundationDBStore_FinalPolish_Coverage(t *testing.T) {
 	key := map[string]models.AttributeValue{"pk": {S: stringPtr("1")}}
 	_, err := s.UpdateItem(ctx, tableName, key, "ADD attr 1", "", nil, nil, "NONE")
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "ADD expression not yet supported")
+	assert.Contains(t, err.Error(), "value not found for ADD action")
 
 	_, err = s.UpdateItem(ctx, tableName, key, "DELETE attr :v", "", nil, nil, "NONE")
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "DELETE expression not yet supported")
+	assert.Contains(t, err.Error(), "missing value for placeholder :v")
 
 	// 2. Scan/Query with limit > 100 (triggers line 153-155 in table_service or equivalent in store if handled)
 	// In store, Scan limit is just passed to FDB.

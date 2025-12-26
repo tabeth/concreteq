@@ -54,6 +54,11 @@ type mockStore struct {
 	// Background Worker
 	StartWorkersFunc func(ctx context.Context)
 	StopWorkersFunc  func()
+
+	// Tagging
+	TagResourceFunc        func(ctx context.Context, resourceArn string, tags []models.Tag) error
+	UntagResourceFunc      func(ctx context.Context, resourceArn string, tagKeys []string) error
+	ListTagsOfResourceFunc func(ctx context.Context, resourceArn string, nextToken string) ([]models.Tag, string, error)
 }
 
 func (m *mockStore) CreateTable(ctx context.Context, table *models.Table) error {
@@ -191,6 +196,18 @@ func (m *mockStore) RestoreTableToPointInTime(ctx context.Context, req *models.R
 	return m.RestoreTableToPointInTimeFunc(ctx, req)
 }
 
+func (m *mockStore) TagResource(ctx context.Context, resourceArn string, tags []models.Tag) error {
+	return m.TagResourceFunc(ctx, resourceArn, tags)
+}
+
+func (m *mockStore) UntagResource(ctx context.Context, resourceArn string, tagKeys []string) error {
+	return m.UntagResourceFunc(ctx, resourceArn, tagKeys)
+}
+
+func (m *mockStore) ListTagsOfResource(ctx context.Context, resourceArn string, nextToken string) ([]models.Tag, string, error) {
+	return m.ListTagsOfResourceFunc(ctx, resourceArn, nextToken)
+}
+
 func (m *mockStore) StartWorkers(ctx context.Context) {
 	if m.StartWorkersFunc != nil {
 		m.StartWorkersFunc(ctx)
@@ -245,8 +262,8 @@ func TestTableService_CreateTable_Success(t *testing.T) {
 	if resp.TableName != "test-service-table" {
 		t.Errorf("unexpected table name: got %s, want %s", resp.TableName, "test-service-table")
 	}
-	if resp.Status != models.StatusCreating {
-		t.Errorf("unexpected table status: got %s, want %s", resp.Status, "CREATING")
+	if resp.Status != models.StatusActive {
+		t.Errorf("unexpected table status: got %s, want %s", resp.Status, "ACTIVE")
 	}
 }
 

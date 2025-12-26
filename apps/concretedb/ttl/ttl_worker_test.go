@@ -201,6 +201,16 @@ func (m *mockTableService) RestoreTableToPointInTime(ctx context.Context, req *m
 	return nil, nil
 }
 
+func (m *mockTableService) TagResource(ctx context.Context, req *models.TagResourceRequest) error {
+	return nil
+}
+func (m *mockTableService) UntagResource(ctx context.Context, req *models.UntagResourceRequest) error {
+	return nil
+}
+func (m *mockTableService) ListTagsOfResource(ctx context.Context, req *models.ListTagsOfResourceRequest) (*models.ListTagsOfResourceResponse, error) {
+	return nil, nil
+}
+
 func (m *mockTableService) ExecuteStatement(ctx context.Context, input *models.ExecuteStatementRequest) (*models.ExecuteStatementResponse, error) {
 	if m.ExecuteStatementFunc != nil {
 		return m.ExecuteStatementFunc(ctx, input)

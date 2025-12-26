@@ -56,6 +56,11 @@ type mockTableService struct {
 	// PartiQL
 	ExecuteStatementFunc      func(ctx context.Context, input *models.ExecuteStatementRequest) (*models.ExecuteStatementResponse, error)
 	BatchExecuteStatementFunc func(ctx context.Context, input *models.BatchExecuteStatementRequest) (*models.BatchExecuteStatementResponse, error)
+
+	// Tagging
+	TagResourceFunc        func(ctx context.Context, req *models.TagResourceRequest) error
+	UntagResourceFunc      func(ctx context.Context, req *models.UntagResourceRequest) error
+	ListTagsOfResourceFunc func(ctx context.Context, req *models.ListTagsOfResourceRequest) (*models.ListTagsOfResourceResponse, error)
 }
 
 // CreateTable is the method required to satisfy the interface.
@@ -222,6 +227,27 @@ func (m *mockTableService) DescribeBackup(ctx context.Context, request *models.D
 func (m *mockTableService) RestoreTableFromBackup(ctx context.Context, request *models.RestoreTableFromBackupRequest) (*models.RestoreTableFromBackupResponse, error) {
 	if m.RestoreTableFromBackupFunc != nil {
 		return m.RestoreTableFromBackupFunc(ctx, request)
+	}
+	return nil, nil
+}
+
+func (m *mockTableService) TagResource(ctx context.Context, req *models.TagResourceRequest) error {
+	if m.TagResourceFunc != nil {
+		return m.TagResourceFunc(ctx, req)
+	}
+	return nil
+}
+
+func (m *mockTableService) UntagResource(ctx context.Context, req *models.UntagResourceRequest) error {
+	if m.UntagResourceFunc != nil {
+		return m.UntagResourceFunc(ctx, req)
+	}
+	return nil
+}
+
+func (m *mockTableService) ListTagsOfResource(ctx context.Context, req *models.ListTagsOfResourceRequest) (*models.ListTagsOfResourceResponse, error) {
+	if m.ListTagsOfResourceFunc != nil {
+		return m.ListTagsOfResourceFunc(ctx, req)
 	}
 	return nil, nil
 }

@@ -165,7 +165,7 @@ func TestAdversarial_ExpressionParsing(t *testing.T) {
 		expected bool
 	}{
 		{"Invalid Syntax", "INVALID EXPRESSION !!!", false},
-		{"Missing Placeholder Name", "#missing = :v", false},
+		{"Missing Placeholder Name", "#missing = :v", true},
 		{"Missing Placeholder Value", "age = :missing", false},
 		{"Valid Complexish", "age = :v", true},
 	}

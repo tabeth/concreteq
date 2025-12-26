@@ -784,3 +784,30 @@ type BatchStatementResponse struct {
 	TableName string                    `json:"TableName,omitempty"`
 	Item      map[string]AttributeValue `json:"Item,omitempty"`
 }
+
+// Tagging Models
+
+type Tag struct {
+	Key   string `json:"Key"`
+	Value string `json:"Value"`
+}
+
+type TagResourceRequest struct {
+	ResourceArn string `json:"ResourceArn"`
+	Tags        []Tag  `json:"Tags"`
+}
+
+type UntagResourceRequest struct {
+	ResourceArn string   `json:"ResourceArn"`
+	TagKeys     []string `json:"TagKeys"`
+}
+
+type ListTagsOfResourceRequest struct {
+	ResourceArn string `json:"ResourceArn"`
+	NextToken   string `json:"NextToken,omitempty"`
+}
+
+type ListTagsOfResourceResponse struct {
+	Tags      []Tag  `json:"Tags"`
+	NextToken string `json:"NextToken,omitempty"`
+}

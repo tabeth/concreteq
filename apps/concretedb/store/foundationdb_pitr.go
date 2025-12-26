@@ -377,16 +377,9 @@ func (s *FoundationDBStore) performPointInTimeRestore(sourceTableName, targetTab
 				return lastSafeResumeKey, nil
 			}
 
-			// If we hit limit but haven't finalized ANY PK (one huge PK history),
-			// logic fails to finalize it correctly without state.
-			// To avoid infinite loops or state loss, if lastSafeResumeKey is nil (meaning the whole batch was one PK),
-			// we skip the rest of THIS PK and resume from the next one.
-			if lastSafeResumeKey == nil && prevKey != nil {
+			// Fallback if no safe key (all one PK)
+			if prevKey != nil {
 				return prevKey, nil
-			}
-
-			if lastSafeResumeKey != nil {
-				return lastSafeResumeKey, nil
 			}
 
 			return nil, nil

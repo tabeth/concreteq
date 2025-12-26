@@ -261,6 +261,21 @@ func (m *MockStore) StopWorkers() {
 	m.Called()
 }
 
+func (m *MockStore) TagResource(ctx context.Context, resourceArn string, tags []models.Tag) error {
+	args := m.Called(ctx, resourceArn, tags)
+	return args.Error(0)
+}
+
+func (m *MockStore) UntagResource(ctx context.Context, resourceArn string, tagKeys []string) error {
+	args := m.Called(ctx, resourceArn, tagKeys)
+	return args.Error(0)
+}
+
+func (m *MockStore) ListTagsOfResource(ctx context.Context, resourceArn string, nextToken string) ([]models.Tag, string, error) {
+	args := m.Called(ctx, resourceArn, nextToken)
+	return args.Get(0).([]models.Tag), args.String(1), args.Error(2)
+}
+
 func TestTableService_Coverage_1(t *testing.T) {
 	mockStore := new(MockStore)
 	service := NewTableService(mockStore)

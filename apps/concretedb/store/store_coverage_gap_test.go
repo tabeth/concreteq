@@ -423,9 +423,13 @@ func TestUnexported_Coverage(t *testing.T) {
 
 	// 4. deleteIndexEntries Error Path
 	// It calls deleteIndexEntry -> dir.Open -> fails
-	// We need a dummy item
+	// We need a dummy item and Table with Index
 	testPk := "p1"
-	item := map[string]models.AttributeValue{"pk": {S: &testPk}}
+	testVal := "v1"
+	item := map[string]models.AttributeValue{"pk": {S: &testPk}, "val": {S: &testVal}}
+	tbl.GlobalSecondaryIndexes = []models.GlobalSecondaryIndex{
+		{IndexName: "gsi1", KeySchema: []models.KeySchemaElement{{AttributeName: "val", KeyType: "HASH"}}, Projection: models.Projection{ProjectionType: "KEYS_ONLY"}},
+	}
 	err = s.deleteIndexEntries(mockTR, tbl, item)
 	assert.Error(t, err)
 
@@ -444,7 +448,10 @@ type MockDirectoryLayer struct {
 }
 
 func (m *MockDirectoryLayer) CreateOrOpen(tr fdbadapter.FDBTransaction, path []string, layer []byte) (fdbadapter.FDBDirectorySubspace, error) {
-	return nil, nil
+	if m.OpenErr != nil {
+		return nil, m.OpenErr
+	}
+	return &MockDirectorySubspace{}, nil
 }
 func (m *MockDirectoryLayer) Create(tr fdbadapter.FDBTransaction, path []string, layer []byte) (fdbadapter.FDBDirectorySubspace, error) {
 	return nil, nil

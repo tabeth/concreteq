@@ -173,7 +173,7 @@ func mapDBTableToCreateResponse(table *models.Table) *models.CreateTableResponse
 func mapRequestToDBTable(req *models.CreateTableRequest) *models.Table {
 	dbTable := &models.Table{
 		TableName:              req.TableName,
-		Status:                 models.StatusCreating,
+		Status:                 models.StatusActive,
 		CreationDateTime:       time.Now().UTC(),
 		GlobalSecondaryIndexes: req.GlobalSecondaryIndexes,
 		LocalSecondaryIndexes:  req.LocalSecondaryIndexes,

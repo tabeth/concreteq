@@ -102,6 +102,11 @@ type Store interface {
 	DescribeContinuousBackups(ctx context.Context, tableName string) (*models.ContinuousBackupsDescription, error)
 	RestoreTableToPointInTime(ctx context.Context, req *models.RestoreTableToPointInTimeRequest) (*models.TableDescription, error)
 
+	// Tagging Methods
+	TagResource(ctx context.Context, resourceArn string, tags []models.Tag) error
+	UntagResource(ctx context.Context, resourceArn string, tagKeys []string) error
+	ListTagsOfResource(ctx context.Context, resourceArn string, nextToken string) ([]models.Tag, string, error)
+
 	// Background Worker Control
 	StartWorkers(ctx context.Context)
 	StopWorkers()

@@ -58,6 +58,9 @@ func (e *Evaluator) ApplyUpdate(item map[string]models.AttributeValue, updateExp
 		if err != nil {
 			return nil, err
 		}
+		if val == nil {
+			return nil, fmt.Errorf("value not found for ADD action")
+		}
 		affected, err := e.addValue(item, action.Path, *val, names)
 		if err != nil {
 			return nil, err
@@ -70,6 +73,9 @@ func (e *Evaluator) ApplyUpdate(item map[string]models.AttributeValue, updateExp
 		val, err := e.resolveUpdateValue(action.Value, item, names, values)
 		if err != nil {
 			return nil, err
+		}
+		if val == nil {
+			return nil, fmt.Errorf("value not found for DELETE action")
 		}
 		affected, err := e.deleteValue(item, action.Path, *val, names)
 		if err != nil {
