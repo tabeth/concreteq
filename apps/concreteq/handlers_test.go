@@ -79,21 +79,21 @@ func TestCreateQueueHandler(t *testing.T) {
 			inputBody:          `{"QueueName": "q", "Attributes": {"DelaySeconds": "901"}}`,
 			mockSetup:          func(ms *MockStore) {},
 			expectedStatusCode: http.StatusBadRequest,
-			expectedBody:       `{"__type":"InvalidAttributeName", "message":"invalid value for DelaySeconds: must be between 0 and 900"}`,
+			expectedBody:       `{"__type":"InvalidAttributeValue", "message":"invalid value for DelaySeconds: must be between 0 and 900"}`,
 		},
 		{
 			name:               "Invalid Redrive Policy JSON",
 			inputBody:          `{"QueueName": "q", "Attributes": {"RedrivePolicy": "not-json"}}`,
 			mockSetup:          func(ms *MockStore) {},
 			expectedStatusCode: http.StatusBadRequest,
-			expectedBody:       `{"__type":"InvalidAttributeName", "message":"invalid value for RedrivePolicy: must be a valid JSON object"}`,
+			expectedBody:       `{"__type":"InvalidAttributeValue", "message":"invalid value for RedrivePolicy: must be a valid JSON object"}`,
 		},
 		{
 			name:               "Invalid Redrive Policy MaxReceiveCount",
 			inputBody:          `{"QueueName": "q", "Attributes": {"RedrivePolicy": "{\"deadLetterTargetArn\":\"arn:aws:sqs:us-east-1:123456789012:my-dlq\",\"maxReceiveCount\":\"2000\"}"}}`,
 			mockSetup:          func(ms *MockStore) {},
 			expectedStatusCode: http.StatusBadRequest,
-			expectedBody:       `{"__type":"InvalidAttributeName", "message":"invalid value for RedrivePolicy: maxReceiveCount must be an integer between 1 and 1000"}`,
+			expectedBody:       `{"__type":"InvalidAttributeValue", "message":"invalid value for RedrivePolicy: maxReceiveCount must be an integer between 1 and 1000"}`,
 		},
 		{
 			name:               "FIFO Attribute on Standard Queue",
@@ -293,7 +293,7 @@ func TestSetQueueAttributesHandler(t *testing.T) {
 			inputBody:          `{"QueueUrl": "http://localhost/queues/my-queue"}`,
 			mockSetup:          func(ms *MockStore) {},
 			expectedStatusCode: http.StatusBadRequest,
-			expectedBody:       `{"__type":"MissingParameter", "message":"The request must contain Attributes."}`,
+			expectedBody:       `{"__type":"MissingParameter", "message":"The request must contain the parameter Attributes."}`,
 		},
 		{
 			name:      "Queue Does Not Exist",
@@ -991,42 +991,46 @@ func TestReceiveMessageHandler(t *testing.T) {
 			inputBody:          `{"QueueUrl": "http://localhost:8080/queues/my-queue", "MaxNumberOfMessages": 11}`,
 			mockSetup:          func(ms *MockStore) {},
 			expectedStatusCode: http.StatusBadRequest,
-			expectedBody:       `{"__type":"InvalidParameterValue", "message":"Value for parameter MaxNumberOfMessages is invalid. Reason: Must be an integer from 1 to 10."}`,
+			expectedBody:       `{"__type":"InvalidParameterValue", "message":"MaxNumberOfMessages must be between 1 and 10."}`,
 		},
 		{
 			name:               "Invalid VisibilityTimeout",
 			inputBody:          `{"QueueUrl": "http://localhost:8080/queues/my-queue", "VisibilityTimeout": 99999}`,
 			mockSetup:          func(ms *MockStore) {},
 			expectedStatusCode: http.StatusBadRequest,
-			expectedBody:       `{"__type":"InvalidParameterValue", "message":"Value for parameter VisibilityTimeout is invalid. Reason: Must be an integer from 0 to 43200."}`,
+			expectedBody:       `{"__type":"InvalidParameterValue", "message":"VisibilityTimeout must be between 0 and 43200."}`,
 		},
 		{
 			name:               "Invalid ReceiveRequestAttemptId",
 			inputBody:          `{"QueueUrl": "http://localhost:8080/queues/my-queue", "ReceiveRequestAttemptId": "toolong` + strings.Repeat("a", 128) + `"}`,
 			mockSetup:          func(ms *MockStore) {},
 			expectedStatusCode: http.StatusBadRequest,
-			expectedBody:       `{"__type":"InvalidParameterValue", "message":"ReceiveRequestAttemptId can be up to 128 characters long."}`,
+			expectedBody:       `{"__type":"InvalidParameterValue", "message":"ReceiveRequestAttemptId length cannot exceed 128 characters"}`,
 		},
 		{
-			name:               "Invalid System Attribute Name",
-			inputBody:          `{"QueueUrl": "http://localhost:8080/queues/my-queue", "MessageSystemAttributeNames": ["InvalidName"]}`,
-			mockSetup:          func(ms *MockStore) {},
+			name:      "Invalid System Attribute Name",
+			inputBody: `{"QueueUrl": "http://localhost:8080/queues/my-queue", "MessageSystemAttributeNames": ["InvalidName"]}`,
+			mockSetup: func(ms *MockStore) {
+				ms.On("ReceiveMessage", mock.Anything, "my-queue", mock.Anything).Return(nil, errors.New("unsupported attribute 'InvalidName'"))
+			},
 			expectedStatusCode: http.StatusBadRequest,
-			expectedBody:       `{"__type":"InvalidAttributeName", "message":"The attribute 'InvalidName' is not supported."}`,
+			expectedBody:       `{"__type":"InvalidAttributeName", "message":"unsupported attribute 'InvalidName'"}`,
 		},
 		{
-			name:               "Invalid Custom Attribute Name",
-			inputBody:          `{"QueueUrl": "http://localhost:8080/queues/my-queue", "MessageAttributeNames": ["AWS.Invalid"]}`,
-			mockSetup:          func(ms *MockStore) {},
+			name:      "Invalid Custom Attribute Name",
+			inputBody: `{"QueueUrl": "http://localhost:8080/queues/my-queue", "MessageAttributeNames": ["AWS.Invalid"]}`,
+			mockSetup: func(ms *MockStore) {
+				ms.On("ReceiveMessage", mock.Anything, "my-queue", mock.Anything).Return(nil, errors.New("unsupported attribute 'AWS.Invalid'"))
+			},
 			expectedStatusCode: http.StatusBadRequest,
-			expectedBody:       `{"__type":"InvalidAttributeName", "message":"The attribute name 'AWS.Invalid' is invalid."}`,
+			expectedBody:       `{"__type":"InvalidAttributeName", "message":"unsupported attribute 'AWS.Invalid'"}`,
 		},
 		{
 			name:               "Invalid WaitTimeSeconds",
 			inputBody:          `{"QueueUrl": "http://localhost:8080/queues/my-queue", "WaitTimeSeconds": 21}`,
 			mockSetup:          func(ms *MockStore) {},
 			expectedStatusCode: http.StatusBadRequest,
-			expectedBody:       `{"__type":"InvalidParameterValue", "message":"Value for parameter WaitTimeSeconds is invalid. Reason: Must be an integer from 0 to 20."}`,
+			expectedBody:       `{"__type":"InvalidParameterValue", "message":"WaitTimeSeconds must be between 0 and 20."}`,
 		},
 		{
 			name:      "Queue Does Not Exist",
@@ -1289,8 +1293,8 @@ func TestListQueuesHandler(t *testing.T) {
 			name:      "Malformed JSON is ignored",
 			inputBody: `{"MaxResults": 1, "QueueNamePrefix": "test"`,
 			mockSetup: func(ms *MockStore) {
-				// The handler should proceed with default values, so the mock expects 0, "", ""
-				ms.On("ListQueues", mock.Anything, 0, "", "").Return([]string{"q1"}, "this-should-be-ignored", nil)
+				// The handler should proceed with default values, so the mock expects 1000, "", ""
+				ms.On("ListQueues", mock.Anything, 1000, "", "").Return([]string{"q1"}, "this-should-be-ignored", nil)
 			},
 			expectedStatusCode: http.StatusOK,
 			expectedBody:       `{"QueueUrls":["http://localhost:8080/queues/q1"]}`, // NextToken is omitted
@@ -1299,7 +1303,7 @@ func TestListQueuesHandler(t *testing.T) {
 			name:      "Store Internal Error",
 			inputBody: `{}`,
 			mockSetup: func(ms *MockStore) {
-				ms.On("ListQueues", mock.Anything, 0, "", "").Return(nil, "", errors.New("internal error"))
+				ms.On("ListQueues", mock.Anything, 1000, "", "").Return(nil, "", errors.New("internal error"))
 			},
 			expectedStatusCode: http.StatusInternalServerError,
 			expectedBody:       `{"__type":"InternalFailure", "message":"Failed to list queues"}`,
@@ -1312,7 +1316,7 @@ func TestListQueuesHandler(t *testing.T) {
 				for i := 0; i < 1001; i++ {
 					queues[i] = fmt.Sprintf("q%d", i)
 				}
-				ms.On("ListQueues", mock.Anything, 0, "", "").Return(queues, "next", nil)
+				ms.On("ListQueues", mock.Anything, 1000, "", "").Return(queues, "next", nil)
 			},
 			expectedStatusCode: http.StatusOK,
 			responseLength:     1000, // Should be truncated to 1000
@@ -1328,8 +1332,10 @@ func TestListQueuesHandler(t *testing.T) {
 			name:      "No NextToken when MaxResults is not specified",
 			inputBody: `{}`,
 			mockSetup: func(ms *MockStore) {
-				// Store returns a next token, but the handler should omit it because MaxResults is 0
-				ms.On("ListQueues", mock.Anything, 0, "", "").Return([]string{"q1"}, "some-token", nil)
+				// Store returns a next token, but the handler should omit it because MaxResults is 1000 (implied) but request didn't specify it explicitely?
+				// Actually server logic sets nextToken = "" if req.MaxResults == nil.
+				// Mock should expect 1000.
+				ms.On("ListQueues", mock.Anything, 1000, "", "").Return([]string{"q1"}, "some-token", nil)
 			},
 			expectedStatusCode: http.StatusOK,
 			expectedBody:       `{"QueueUrls":["http://localhost:8080/queues/q1"]}`, // NextToken is omitted
@@ -1653,7 +1659,7 @@ func TestListDeadLetterSourceQueuesHandler(t *testing.T) {
 			name:      "Successful Listing",
 			inputBody: `{"QueueUrl": "http://localhost:8080/queues/dlq", "MaxResults": 10}`,
 			mockSetup: func(ms *MockStore) {
-				ms.On("ListDeadLetterSourceQueues", mock.Anything, "http://localhost:8080/queues/dlq", 10, "").Return([]string{"src-q1"}, "token", nil)
+				ms.On("ListDeadLetterSourceQueues", mock.Anything, "dlq", 10, "").Return([]string{"src-q1"}, "token", nil)
 			},
 			expectedStatusCode: http.StatusOK,
 			expectedBody:       `{"queueUrls":["http://localhost:8080/queues/src-q1"],"NextToken":"token"}`,
@@ -1662,7 +1668,7 @@ func TestListDeadLetterSourceQueuesHandler(t *testing.T) {
 			name:      "Successful Listing Defaults",
 			inputBody: `{"QueueUrl": "http://localhost:8080/queues/dlq"}`,
 			mockSetup: func(ms *MockStore) {
-				ms.On("ListDeadLetterSourceQueues", mock.Anything, "http://localhost:8080/queues/dlq", 1000, "").Return([]string{"src-q1"}, "", nil)
+				ms.On("ListDeadLetterSourceQueues", mock.Anything, "dlq", 1000, "").Return([]string{"src-q1"}, "", nil)
 			},
 			expectedStatusCode: http.StatusOK,
 			expectedBody:       `{"queueUrls":["http://localhost:8080/queues/src-q1"]}`,
@@ -1685,7 +1691,7 @@ func TestListDeadLetterSourceQueuesHandler(t *testing.T) {
 			name:      "Queue Does Not Exist",
 			inputBody: `{"QueueUrl": "http://localhost:8080/queues/non-existent"}`,
 			mockSetup: func(ms *MockStore) {
-				ms.On("ListDeadLetterSourceQueues", mock.Anything, "http://localhost:8080/queues/non-existent", 1000, "").Return(nil, "", store.ErrQueueDoesNotExist)
+				ms.On("ListDeadLetterSourceQueues", mock.Anything, "non-existent", 1000, "").Return(nil, "", store.ErrQueueDoesNotExist)
 			},
 			expectedStatusCode: http.StatusBadRequest,
 			expectedBody:       `{"__type":"QueueDoesNotExist", "message":"The specified queue does not exist."}`,

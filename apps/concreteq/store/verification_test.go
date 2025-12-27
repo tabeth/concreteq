@@ -120,7 +120,7 @@ func TestProperty_SendMessage_Invariants(t *testing.T) {
 		req := &models.SendMessageRequest{
 			QueueUrl:     queueName,
 			MessageBody:  body,
-			DelaySeconds: &delay,
+			DelaySeconds: models.Ptr(int(delay)),
 		}
 
 		resp, err := s.SendMessage(ctx, queueName, req)

@@ -63,8 +63,8 @@ func BenchmarkReceiveMessageWithContention(b *testing.B) {
 		for pb.Next() {
 			// Each goroutine will loop, receiving and deleting one message at a time.
 			receiveReq := &models.ReceiveMessageRequest{
-				MaxNumberOfMessages: 1,
-				WaitTimeSeconds:     1,
+				MaxNumberOfMessages: models.Ptr(1),
+				WaitTimeSeconds: models.Ptr(1),
 			}
 			resp, err := store.ReceiveMessage(ctx, queueName, receiveReq)
 			if err != nil {

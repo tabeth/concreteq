@@ -1617,12 +1617,12 @@ func (s *FDBStore) receiveFifoMessages(ctx context.Context, tr fdb.Transaction, 
 // ReceiveMessage orchestrates the message retrieval process, including long polling.
 func (s *FDBStore) ReceiveMessage(ctx context.Context, queueName string, req *models.ReceiveMessageRequest) (*models.ReceiveMessageResponse, error) {
 	maxMessages := 1
-	if req.MaxNumberOfMessages > 0 {
-		maxMessages = req.MaxNumberOfMessages
+	if req.MaxNumberOfMessages != nil && *req.MaxNumberOfMessages > 0 {
+		maxMessages = *req.MaxNumberOfMessages
 	}
 	waitTime := 0
-	if req.WaitTimeSeconds > 0 {
-		waitTime = req.WaitTimeSeconds
+	if req.WaitTimeSeconds != nil && *req.WaitTimeSeconds > 0 {
+		waitTime = *req.WaitTimeSeconds
 	}
 
 	isFifo := strings.HasSuffix(queueName, ".fifo")
@@ -1662,8 +1662,8 @@ func (s *FDBStore) ReceiveMessage(ctx context.Context, queueName string, req *mo
 					visibilityTimeout = vt
 				}
 			}
-			if req.VisibilityTimeout > 0 {
-				visibilityTimeout = req.VisibilityTimeout
+			if req.VisibilityTimeout != nil && *req.VisibilityTimeout >= 0 {
+				visibilityTimeout = *req.VisibilityTimeout
 			}
 
 			// Call the appropriate receive logic based on queue type.
@@ -1977,12 +1977,21 @@ func (s *FDBStore) ChangeMessageVisibilityBatch(ctx context.Context, queueName s
 	}
 
 	for _, entry := range entries {
-		err := s.ChangeMessageVisibility(ctx, queueName, entry.ReceiptHandle, entry.VisibilityTimeout)
+		var err error
+		if entry.VisibilityTimeout == nil {
+			err = errors.New("VisibilityTimeout is required")
+		} else {
+			err = s.ChangeMessageVisibility(ctx, queueName, entry.ReceiptHandle, *entry.VisibilityTimeout)
+		}
+
 		if err != nil {
 			// Map internal errors to SQS error types for the response.
 			code := "InternalError"
 			senderFault := false
-			if errors.Is(err, ErrInvalidReceiptHandle) {
+			if entry.VisibilityTimeout == nil {
+				code = "InvalidParameterValue"
+				senderFault = true
+			} else if errors.Is(err, ErrInvalidReceiptHandle) {
 				code = "ReceiptHandleIsInvalid"
 				senderFault = true
 			} else if errors.Is(err, ErrMessageNotInflight) {
@@ -2536,9 +2545,9 @@ func (s *FDBStore) runMessageMoveTask(taskHandle, sourceArn, destinationArn stri
 		// 2. Receive messages
 		receiveReq := &models.ReceiveMessageRequest{
 			QueueUrl:              sourceQueueName,
-			MaxNumberOfMessages:   10,
-			WaitTimeSeconds:       1,
-			VisibilityTimeout:     30,
+			MaxNumberOfMessages:   models.Ptr(10),
+			WaitTimeSeconds:       models.Ptr(1),
+			VisibilityTimeout:     models.Ptr(30),
 			AttributeNames:        []string{"All"},
 			MessageAttributeNames: []string{"All"},
 		}

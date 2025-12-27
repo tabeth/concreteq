@@ -109,9 +109,9 @@ func TestIntegration_ConcreteQ_Full(t *testing.T) {
 			// Use ConcreteQ Store (or API) to check for messages
 			// ReceiveMessageRequest
 			req := qmodels.ReceiveMessageRequest{
-				MaxNumberOfMessages: 10,
-				VisibilityTimeout:   10,
-				WaitTimeSeconds:     0,
+				MaxNumberOfMessages: qmodels.Ptr(10),
+				VisibilityTimeout:   qmodels.Ptr(10),
+				WaitTimeSeconds:     qmodels.Ptr(0),
 			}
 			resp, err := qs.ReceiveMessage(ctx, queueName, &req)
 			if err != nil {

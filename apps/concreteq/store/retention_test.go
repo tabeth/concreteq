@@ -26,7 +26,7 @@ func TestMessageRetention(t *testing.T) {
 		// Wait 2s (Use sufficient buffer for flake resistance)
 		time.Sleep(2200 * time.Millisecond)
 
-		resp, err := store.ReceiveMessage(ctx, queueName, &models.ReceiveMessageRequest{MaxNumberOfMessages: 1})
+		resp, err := store.ReceiveMessage(ctx, queueName, &models.ReceiveMessageRequest{MaxNumberOfMessages: models.Ptr(1)})
 		require.NoError(t, err)
 		assert.Empty(t, resp.Messages)
 	})
@@ -41,7 +41,7 @@ func TestMessageRetention(t *testing.T) {
 		require.NoError(t, err)
 
 		// No wait or short wait
-		resp, err := store.ReceiveMessage(ctx, queueName, &models.ReceiveMessageRequest{MaxNumberOfMessages: 1})
+		resp, err := store.ReceiveMessage(ctx, queueName, &models.ReceiveMessageRequest{MaxNumberOfMessages: models.Ptr(1)})
 		require.NoError(t, err)
 		require.Len(t, resp.Messages, 1)
 		assert.Equal(t, "test-ok", resp.Messages[0].Body)
@@ -64,7 +64,7 @@ func TestMessageRetention(t *testing.T) {
 
 		time.Sleep(2200 * time.Millisecond)
 
-		resp, err := store.ReceiveMessage(ctx, queueName, &models.ReceiveMessageRequest{MaxNumberOfMessages: 1})
+		resp, err := store.ReceiveMessage(ctx, queueName, &models.ReceiveMessageRequest{MaxNumberOfMessages: models.Ptr(1)})
 		require.NoError(t, err)
 		assert.Empty(t, resp.Messages)
 	})
@@ -84,7 +84,7 @@ func TestMessageRetention(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		resp, err := store.ReceiveMessage(ctx, queueName, &models.ReceiveMessageRequest{MaxNumberOfMessages: 1})
+		resp, err := store.ReceiveMessage(ctx, queueName, &models.ReceiveMessageRequest{MaxNumberOfMessages: models.Ptr(1)})
 		require.NoError(t, err)
 		require.Len(t, resp.Messages, 1)
 		assert.Equal(t, "test-fifo-ok", resp.Messages[0].Body)

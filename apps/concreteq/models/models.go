@@ -26,7 +26,7 @@ type CreateQueueResponse struct {
 // It supports pagination (MaxResults, NextToken) and filtering by prefix.
 type ListQueuesRequest struct {
 	// MaxResults is the maximum number of results to return in a single call.
-	MaxResults int `json:"MaxResults"`
+	MaxResults *int `json:"MaxResults"`
 	// NextToken is the token to retrieve the next page of results.
 	NextToken string `json:"NextToken"`
 	// QueueNamePrefix is an optional filter to list only queues starting with this prefix.
@@ -90,8 +90,7 @@ type MessageSystemAttributeValue struct {
 // It contains the message body, optional delay, and attributes for standard queues,
 // as well as required group and deduplication IDs for FIFO queues.
 type SendMessageRequest struct {
-	// DelaySeconds is the number of seconds to delay the message (0-900).
-	DelaySeconds *int32 `json:"DelaySeconds,omitempty"`
+	DelaySeconds *int `json:"DelaySeconds,omitempty"`
 	// MessageAttributes is a map of custom attributes for the message.
 	MessageAttributes map[string]MessageAttributeValue `json:"MessageAttributes,omitempty"`
 	// MessageBody is the body of the message.
@@ -167,7 +166,7 @@ type ReceiveMessageRequest struct {
 	// AttributeNames is a list of attributes that need to be returned along with each message.
 	AttributeNames []string `json:"AttributeNames"`
 	// MaxNumberOfMessages is the maximum number of messages to return (1-10).
-	MaxNumberOfMessages int `json:"MaxNumberOfMessages"`
+	MaxNumberOfMessages *int `json:"MaxNumberOfMessages"`
 	// MessageAttributeNames is a list of message attributes to retrieve.
 	MessageAttributeNames []string `json:"MessageAttributeNames"`
 	// MessageSystemAttributeNames is a list of system attributes to retrieve.
@@ -177,9 +176,9 @@ type ReceiveMessageRequest struct {
 	// ReceiveRequestAttemptId is the deduplication token for the receive request (FIFO only).
 	ReceiveRequestAttemptId string `json:"ReceiveRequestAttemptId"`
 	// VisibilityTimeout is the duration (in seconds) that the received messages are hidden from subsequent retrieve requests.
-	VisibilityTimeout int `json:"VisibilityTimeout"`
+	VisibilityTimeout *int `json:"VisibilityTimeout"`
 	// WaitTimeSeconds is the duration (in seconds) for which the call waits for a message to arrive in the queue before returning.
-	WaitTimeSeconds int `json:"WaitTimeSeconds"`
+	WaitTimeSeconds *int `json:"WaitTimeSeconds"`
 }
 
 // ReceiveMessageResponse defines the structure for the SQS ReceiveMessage action's output.
@@ -222,9 +221,8 @@ type ChangeMessageVisibilityRequest struct {
 	// QueueUrl is the URL of the queue.
 	QueueUrl string `json:"QueueUrl"`
 	// ReceiptHandle is the handle associated with the message.
-	ReceiptHandle string `json:"ReceiptHandle"`
-	// VisibilityTimeout is the new value for the message's visibility timeout (in seconds).
-	VisibilityTimeout int `json:"VisibilityTimeout"`
+	ReceiptHandle     string `json:"ReceiptHandle"`
+	VisibilityTimeout *int   `json:"VisibilityTimeout"`
 }
 
 // ErrorResponse defines the standard AWS JSON error response format.
@@ -252,9 +250,8 @@ type SendMessageBatchRequestEntry struct {
 	// Id is a unique identifier for the entry within the batch.
 	Id string `json:"Id"`
 	// MessageBody is the body of the message.
-	MessageBody string `json:"MessageBody"`
-	// DelaySeconds is the number of seconds to delay the message.
-	DelaySeconds *int32 `json:"DelaySeconds,omitempty"`
+	MessageBody  string `json:"MessageBody"`
+	DelaySeconds *int   `json:"DelaySeconds,omitempty"`
 	// MessageAttributes is a map of custom attributes for the message.
 	MessageAttributes map[string]MessageAttributeValue `json:"MessageAttributes,omitempty"`
 	// MessageSystemAttributes is a map of system attributes for the message.
@@ -369,9 +366,8 @@ type ChangeMessageVisibilityBatchRequestEntry struct {
 	// Id is a unique identifier for the entry within the batch.
 	Id string `json:"Id"`
 	// ReceiptHandle is the handle associated with the message.
-	ReceiptHandle string `json:"ReceiptHandle"`
-	// VisibilityTimeout is the new visibility timeout in seconds.
-	VisibilityTimeout int `json:"VisibilityTimeout"`
+	ReceiptHandle     string `json:"ReceiptHandle"`
+	VisibilityTimeout *int   `json:"VisibilityTimeout"`
 }
 
 // ChangeMessageVisibilityBatchResponse defines the structure for the SQS ChangeMessageVisibilityBatch action's output.
@@ -501,7 +497,7 @@ type ListDeadLetterSourceQueuesRequest struct {
 	// QueueUrl is the URL of the dead-letter queue.
 	QueueUrl string `json:"QueueUrl"`
 	// MaxResults is the maximum number of results to return.
-	MaxResults int `json:"MaxResults"`
+	MaxResults *int `json:"MaxResults"`
 	// NextToken is the token to retrieve the next page of results.
 	NextToken string `json:"NextToken"`
 }
@@ -532,4 +528,9 @@ type RemovePermissionRequest struct {
 	QueueUrl string `json:"QueueUrl"`
 	// Label is the unique identifier of the permission statement to remove.
 	Label string `json:"Label"`
+}
+
+// Ptr returns a pointer to the given value.
+func Ptr[T any](v T) *T {
+	return &v
 }

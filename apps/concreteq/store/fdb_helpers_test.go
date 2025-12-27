@@ -9,15 +9,15 @@ import (
 
 func TestBuildResponseAttributes(t *testing.T) {
 	msg := &models.Message{
-		ReceivedCount: 5,
-		FirstReceived: 1678886400,
-		SentTimestamp: 1678886400,
-		SenderId:      "sender1",
+		ReceivedCount:  5,
+		FirstReceived:  1678886400,
+		SentTimestamp:  1678886400,
+		SenderId:       "sender1",
 		MessageGroupId: "group1",
 		SequenceNumber: 123,
 	}
 	req := &models.ReceiveMessageRequest{
-		AttributeNames:        []string{"All"},
+		AttributeNames:              []string{"All"},
 		MessageSystemAttributeNames: []string{},
 	}
 

@@ -113,6 +113,7 @@ func (app *App) RootSQSHandler(w http.ResponseWriter, r *http.Request) {
 // --- Validation Helpers & Constants ---
 var queueNameRegex = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,80}(\.fifo)?$`)
 var arnRegex = regexp.MustCompile(`^arn:aws:sqs:[a-z0-9-]+:[0-9]+:[a-zA-Z0-9_-]{1,80}(\.fifo)?$`)
+var validIdRegex = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,80}$`)
 
 func validateIntAttribute(valStr string, min, max int) error {
 	val, err := strconv.Atoi(valStr)
@@ -237,10 +238,30 @@ func (app *App) SendMessageHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.QueueUrl == "" {
-		app.sendErrorResponse(w, "MissingParameter", "The request must contain the parameter QueueUrl.", http.StatusBadRequest)
+		app.sendErrorResponse(w, "MissingParameter", "The request must contain a QueueUrl.", http.StatusBadRequest)
 		return
 	}
 	queueName := path.Base(req.QueueUrl)
+	isFifo := strings.HasSuffix(queueName, ".fifo")
+	if isFifo {
+		if req.DelaySeconds != nil && *req.DelaySeconds > 0 {
+			app.sendErrorResponse(w, "InvalidParameterValue", "The request include parameter that is not valid for this queue type. Reason: DelaySeconds is not supported for FIFO queues.", http.StatusBadRequest)
+			return
+		}
+		if req.MessageGroupId == nil || *req.MessageGroupId == "" {
+			app.sendErrorResponse(w, "MissingParameter", "The request must contain a MessageGroupId.", http.StatusBadRequest)
+			return
+		}
+	} else {
+		if req.MessageDeduplicationId != nil && *req.MessageDeduplicationId != "" {
+			app.sendErrorResponse(w, "InvalidParameterValue", "MessageDeduplicationId is supported only for FIFO queues.", http.StatusBadRequest)
+			return
+		}
+		if req.MessageGroupId != nil && *req.MessageGroupId != "" {
+			app.sendErrorResponse(w, "InvalidParameterValue", "MessageGroupId is supported only for FIFO queues.", http.StatusBadRequest)
+			return
+		}
+	}
 
 	// Validate Body Size (100KB strict limit for FDB single value compatibility)
 	// We map this to InvalidParameterValue SQS error
@@ -256,6 +277,11 @@ func (app *App) SendMessageHandler(w http.ResponseWriter, r *http.Request) {
 	// Validate Body Characters
 	if !IsSqsMessageBodyValid(req.MessageBody) {
 		app.sendErrorResponse(w, "InvalidMessageContents", "The message contains characters outside the allowed set.", http.StatusBadRequest)
+		return
+	}
+
+	if len(req.MessageAttributes) > 10 {
+		app.sendErrorResponse(w, "InvalidParameterValue", "Number of message attributes [11] exceeds the allowed maximum [10].", http.StatusBadRequest)
 		return
 	}
 
@@ -287,15 +313,46 @@ func (app *App) ReceiveMessageHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.QueueUrl == "" {
-		app.sendErrorResponse(w, "MissingParameter", "The request must contain the parameter QueueUrl.", http.StatusBadRequest)
+		app.sendErrorResponse(w, "MissingParameter", "The request must contain a QueueUrl.", http.StatusBadRequest)
 		return
 	}
 	queueName := path.Base(req.QueueUrl)
+
+	// Validate Parameters
+	if req.MaxNumberOfMessages != nil {
+		if *req.MaxNumberOfMessages < 1 || *req.MaxNumberOfMessages > 10 {
+			app.sendErrorResponse(w, "InvalidParameterValue", "MaxNumberOfMessages must be between 1 and 10.", http.StatusBadRequest)
+			return
+		}
+	}
+
+	if req.WaitTimeSeconds != nil {
+		if *req.WaitTimeSeconds < 0 || *req.WaitTimeSeconds > 20 {
+			app.sendErrorResponse(w, "InvalidParameterValue", "WaitTimeSeconds must be between 0 and 20.", http.StatusBadRequest)
+			return
+		}
+	}
+
+	if req.VisibilityTimeout != nil {
+		if *req.VisibilityTimeout < 0 || *req.VisibilityTimeout > 43200 {
+			app.sendErrorResponse(w, "InvalidParameterValue", "VisibilityTimeout must be between 0 and 43200.", http.StatusBadRequest)
+			return
+		}
+	}
+
+	if len(req.ReceiveRequestAttemptId) > 128 {
+		app.sendErrorResponse(w, "InvalidParameterValue", "ReceiveRequestAttemptId length cannot exceed 128 characters", http.StatusBadRequest)
+		return
+	}
 
 	resp, err := app.Store.ReceiveMessage(r.Context(), queueName, &req)
 	if err != nil {
 		if errors.Is(err, store.ErrQueueDoesNotExist) {
 			app.sendErrorResponse(w, "QueueDoesNotExist", "The specified queue does not exist.", http.StatusBadRequest)
+			return
+		}
+		if strings.Contains(err.Error(), "unsupported attribute") {
+			app.sendErrorResponse(w, "InvalidAttributeName", err.Error(), http.StatusBadRequest)
 			return
 		}
 		app.sendErrorResponse(w, "InternalFailure", err.Error(), http.StatusInternalServerError)
@@ -313,18 +370,26 @@ func (app *App) DeleteMessageHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.QueueUrl == "" {
-		app.sendErrorResponse(w, "MissingParameter", "The request must contain the parameter QueueUrl.", http.StatusBadRequest)
+		app.sendErrorResponse(w, "MissingParameter", "The request must contain a QueueUrl.", http.StatusBadRequest)
 		return
 	}
 	if req.ReceiptHandle == "" {
-		app.sendErrorResponse(w, "MissingParameter", "The request must contain the parameter ReceiptHandle.", http.StatusBadRequest)
+		app.sendErrorResponse(w, "MissingParameter", "The request must contain a ReceiptHandle.", http.StatusBadRequest)
 		return
 	}
 	queueName := path.Base(req.QueueUrl)
 
 	err := app.Store.DeleteMessage(r.Context(), queueName, req.ReceiptHandle)
 	if err != nil {
-		// SQS is idempotent
+		if errors.Is(err, store.ErrQueueDoesNotExist) {
+			app.sendErrorResponse(w, "QueueDoesNotExist", "The specified queue does not exist.", http.StatusBadRequest)
+			return
+		}
+		if errors.Is(err, store.ErrInvalidReceiptHandle) {
+			app.sendErrorResponse(w, "ReceiptHandleIsInvalid", "The specified receipt handle isn't valid.", http.StatusBadRequest)
+			return
+		}
+		// SQS is idempotent for already deleted messages
 		w.WriteHeader(http.StatusOK)
 		return
 	}
@@ -345,7 +410,7 @@ func (app *App) SendMessageBatchHandler(w http.ResponseWriter, r *http.Request) 
 	}
 
 	if req.QueueUrl == "" {
-		app.sendErrorResponse(w, "MissingParameter", "The request must contain the parameter QueueUrl.", http.StatusBadRequest)
+		app.sendErrorResponse(w, "MissingParameter", "The request must contain a QueueUrl.", http.StatusBadRequest)
 		return
 	}
 
@@ -358,29 +423,130 @@ func (app *App) SendMessageBatchHandler(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Check for Duplicate IDs
+	queueName := path.Base(req.QueueUrl)
+	isFifo := strings.HasSuffix(queueName, ".fifo")
+
+	// Check for Duplicate IDs and per-entry validation
 	ids := make(map[string]bool)
 	totalSize := 0
+	var immediateFailed []models.BatchResultErrorEntry
+
+	validIdRegex := regexp.MustCompile(`^[a-zA-Z0-9_-]{1,80}$`)
 	for _, entry := range req.Entries {
 		if ids[entry.Id] {
 			app.sendErrorResponse(w, "BatchEntryIdsNotDistinct", "Two or more batch entries in the request have the same Id.", http.StatusBadRequest)
 			return
 		}
-		ids[entry.Id] = true
-		totalSize += len(entry.MessageBody)
-		if len(entry.MessageBody) > 100*1024 {
-			app.sendErrorResponse(w, "InvalidParameterValue", "Message body must be less than 100KB", http.StatusBadRequest)
+		if !validIdRegex.MatchString(entry.Id) {
+			app.sendErrorResponse(w, "InvalidBatchEntryId", "The Id of a batch entry in a batch request doesn't abide by the specification.", http.StatusBadRequest)
 			return
+		}
+		ids[entry.Id] = true
+
+		entryFailed := false
+		if isFifo {
+			if entry.DelaySeconds != nil && *entry.DelaySeconds > 0 {
+				immediateFailed = append(immediateFailed, models.BatchResultErrorEntry{
+					Id:          entry.Id,
+					Code:        "InvalidParameterValue",
+					Message:     "DelaySeconds is not supported for FIFO queues.",
+					SenderFault: true,
+				})
+				entryFailed = true
+			} else if entry.MessageGroupId == nil || *entry.MessageGroupId == "" {
+				immediateFailed = append(immediateFailed, models.BatchResultErrorEntry{
+					Id:          entry.Id,
+					Code:        "MissingParameter",
+					Message:     "The request must contain a MessageGroupId.",
+					SenderFault: true,
+				})
+				entryFailed = true
+			}
+		} else {
+			if entry.MessageDeduplicationId != nil && *entry.MessageDeduplicationId != "" {
+				immediateFailed = append(immediateFailed, models.BatchResultErrorEntry{
+					Id:          entry.Id,
+					Code:        "InvalidParameterValue",
+					Message:     "MessageDeduplicationId is supported only for FIFO queues.",
+					SenderFault: true,
+				})
+				entryFailed = true
+			} else if entry.MessageGroupId != nil && *entry.MessageGroupId != "" {
+				immediateFailed = append(immediateFailed, models.BatchResultErrorEntry{
+					Id:          entry.Id,
+					Code:        "InvalidParameterValue",
+					Message:     "MessageGroupId is supported only for FIFO queues.",
+					SenderFault: true,
+				})
+				entryFailed = true
+			}
+		}
+
+		if !entryFailed && len(entry.MessageAttributes) > 10 {
+			immediateFailed = append(immediateFailed, models.BatchResultErrorEntry{
+				Id:          entry.Id,
+				Code:        "InvalidParameterValue",
+				Message:     "The number of message attributes cannot exceed 10.",
+				SenderFault: true,
+			})
+			entryFailed = true
+		}
+
+		if !entryFailed {
+			totalSize += len(entry.MessageBody)
+			if len(entry.MessageBody) > 100*1024 {
+				immediateFailed = append(immediateFailed, models.BatchResultErrorEntry{
+					Id:          entry.Id,
+					Code:        "InvalidParameterValue",
+					Message:     "The message body must be between 1 and 102400 bytes.",
+					SenderFault: true,
+				})
+				entryFailed = true
+			} else {
+				for name, attr := range entry.MessageAttributes {
+					totalSize += len(name) + len(attr.BinaryValue)
+					if attr.StringValue != nil {
+						totalSize += len(*attr.StringValue)
+					}
+				}
+			}
 		}
 	}
 
-	if totalSize > 262144 {
+	if totalSize > 256*1024 {
 		app.sendErrorResponse(w, "BatchRequestTooLong", "The length of all the messages put together is more than the limit.", http.StatusBadRequest)
 		return
 	}
 
-	queueName := path.Base(req.QueueUrl)
-	resp, err := app.Store.SendMessageBatch(r.Context(), queueName, &req)
+	// Filter out immediately failed entries before passing to store
+	originalEntries := req.Entries
+	validEntries := []models.SendMessageBatchRequestEntry{}
+	for _, entry := range originalEntries {
+		failed := false
+		for _, f := range immediateFailed {
+			if f.Id == entry.Id {
+				failed = true
+				break
+			}
+		}
+		if !failed {
+			validEntries = append(validEntries, entry)
+		}
+	}
+
+	var resp *models.SendMessageBatchResponse
+	var err error
+
+	if len(validEntries) > 0 {
+		req.Entries = validEntries
+		resp, err = app.Store.SendMessageBatch(r.Context(), queueName, &req)
+	} else {
+		resp = &models.SendMessageBatchResponse{
+			Successful: []models.SendMessageBatchResultEntry{},
+			Failed:     []models.BatchResultErrorEntry{},
+		}
+	}
+
 	if err != nil {
 		if errors.Is(err, store.ErrQueueDoesNotExist) {
 			app.sendErrorResponse(w, "QueueDoesNotExist", "The specified queue does not exist.", http.StatusBadRequest)
@@ -389,6 +555,16 @@ func (app *App) SendMessageBatchHandler(w http.ResponseWriter, r *http.Request) 
 		app.sendErrorResponse(w, "InternalFailure", err.Error(), http.StatusInternalServerError)
 		return
 	}
+
+	if resp.Successful == nil {
+		resp.Successful = []models.SendMessageBatchResultEntry{}
+	}
+	if resp.Failed == nil {
+		resp.Failed = []models.BatchResultErrorEntry{}
+	}
+
+	// Merge immediate failures
+	resp.Failed = append(resp.Failed, immediateFailed...)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
@@ -402,7 +578,7 @@ func (app *App) DeleteMessageBatchHandler(w http.ResponseWriter, r *http.Request
 	}
 
 	if req.QueueUrl == "" {
-		app.sendErrorResponse(w, "MissingParameter", "The request must contain the parameter QueueUrl.", http.StatusBadRequest)
+		app.sendErrorResponse(w, "MissingParameter", "The request must contain a QueueUrl.", http.StatusBadRequest)
 		return
 	}
 
@@ -416,9 +592,14 @@ func (app *App) DeleteMessageBatchHandler(w http.ResponseWriter, r *http.Request
 	}
 
 	ids := make(map[string]bool)
+	validIdRegex := regexp.MustCompile(`^[a-zA-Z0-9_-]{1,80}$`)
 	for _, entry := range req.Entries {
 		if ids[entry.Id] {
 			app.sendErrorResponse(w, "BatchEntryIdsNotDistinct", "Two or more batch entries in the request have the same Id.", http.StatusBadRequest)
+			return
+		}
+		if !validIdRegex.MatchString(entry.Id) {
+			app.sendErrorResponse(w, "InvalidBatchEntryId", "A batch entry id can only contain alphanumeric characters, hyphens and underscores. It can be at most 80 letters long.", http.StatusBadRequest)
 			return
 		}
 		ids[entry.Id] = true
@@ -447,7 +628,7 @@ func (app *App) ChangeMessageVisibilityBatchHandler(w http.ResponseWriter, r *ht
 	}
 
 	if req.QueueUrl == "" {
-		app.sendErrorResponse(w, "MissingParameter", "The request must contain the parameter QueueUrl.", http.StatusBadRequest)
+		app.sendErrorResponse(w, "MissingParameter", "The request must contain a QueueUrl.", http.StatusBadRequest)
 		return
 	}
 
@@ -461,9 +642,14 @@ func (app *App) ChangeMessageVisibilityBatchHandler(w http.ResponseWriter, r *ht
 	}
 
 	ids := make(map[string]bool)
+	validIdRegex := regexp.MustCompile(`^[a-zA-Z0-9_-]{1,80}$`)
 	for _, entry := range req.Entries {
 		if ids[entry.Id] {
 			app.sendErrorResponse(w, "BatchEntryIdsNotDistinct", "Two or more batch entries in the request have the same Id.", http.StatusBadRequest)
+			return
+		}
+		if !validIdRegex.MatchString(entry.Id) {
+			app.sendErrorResponse(w, "InvalidBatchEntryId", "The Id of a batch entry in a batch request doesn't abide by the specification.", http.StatusBadRequest)
 			return
 		}
 		ids[entry.Id] = true
@@ -485,52 +671,361 @@ func (app *App) ChangeMessageVisibilityBatchHandler(w http.ResponseWriter, r *ht
 			}
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
-			json.NewEncoder(w).Encode(models.ChangeMessageVisibilityBatchResponse{Failed: failed})
+			json.NewEncoder(w).Encode(models.ChangeMessageVisibilityBatchResponse{
+				Successful: []models.ChangeMessageVisibilityBatchResultEntry{},
+				Failed:     failed,
+			})
 			return
 		}
 		app.sendErrorResponse(w, "InternalFailure", err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	// If no error, we have a response
+	if resp.Successful == nil {
+		resp.Successful = []models.ChangeMessageVisibilityBatchResultEntry{}
+	}
+	if resp.Failed == nil {
+		resp.Failed = []models.BatchResultErrorEntry{}
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
 }
+
 func (app *App) AddPermissionHandler(w http.ResponseWriter, r *http.Request) {
+	var req models.AddPermissionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		app.sendErrorResponse(w, "InvalidRequest", "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.QueueUrl == "" {
+		app.sendErrorResponse(w, "MissingParameter", "The request must contain a QueueUrl.", http.StatusBadRequest)
+		return
+	}
+	if req.Label == "" {
+		app.sendErrorResponse(w, "MissingParameter", "The request must contain a Label.", http.StatusBadRequest)
+		return
+	}
+	if len(req.Label) > 80 || !validIdRegex.MatchString(req.Label) {
+		app.sendErrorResponse(w, "InvalidParameterValue", "The label must be alphanumeric, hyphen, or underscore and at most 80 characters.", http.StatusBadRequest)
+		return
+	}
+	if len(req.AWSAccountIds) == 0 {
+		app.sendErrorResponse(w, "MissingParameter", "The request must contain AWSAccountIds.", http.StatusBadRequest)
+		return
+	}
+	if len(req.Actions) == 0 {
+		app.sendErrorResponse(w, "MissingParameter", "The request must contain Actions.", http.StatusBadRequest)
+		return
+	}
 	w.WriteHeader(http.StatusNotImplemented)
 }
+
 func (app *App) RemovePermissionHandler(w http.ResponseWriter, r *http.Request) {
+	var req models.RemovePermissionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		app.sendErrorResponse(w, "InvalidRequest", "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.QueueUrl == "" {
+		app.sendErrorResponse(w, "MissingParameter", "The request must contain a QueueUrl.", http.StatusBadRequest)
+		return
+	}
+	if req.Label == "" {
+		app.sendErrorResponse(w, "MissingParameter", "The request must contain a Label.", http.StatusBadRequest)
+		return
+	}
+	if len(req.Label) > 80 || !validIdRegex.MatchString(req.Label) {
+		app.sendErrorResponse(w, "InvalidParameterValue", "The label must be alphanumeric, hyphen, or underscore and at most 80 characters.", http.StatusBadRequest)
+		return
+	}
 	w.WriteHeader(http.StatusNotImplemented)
 }
+
 func (app *App) ListQueueTagsHandler(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(http.StatusNotImplemented)
+	var req models.ListQueueTagsRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		app.sendErrorResponse(w, "InvalidRequest", "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.QueueUrl == "" {
+		app.sendErrorResponse(w, "MissingParameter", "The request must contain a QueueUrl.", http.StatusBadRequest)
+		return
+	}
+	queueName := path.Base(req.QueueUrl)
+	tags, err := app.Store.ListQueueTags(r.Context(), queueName)
+	if err != nil {
+		if errors.Is(err, store.ErrQueueDoesNotExist) {
+			app.sendErrorResponse(w, "QueueDoesNotExist", "The specified queue does not exist.", http.StatusBadRequest)
+			return
+		}
+		app.sendErrorResponse(w, "InternalFailure", err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(models.ListQueueTagsResponse{Tags: tags})
 }
 func (app *App) TagQueueHandler(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(http.StatusNotImplemented)
+	var req models.TagQueueRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		app.sendErrorResponse(w, "InvalidRequest", "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.QueueUrl == "" {
+		app.sendErrorResponse(w, "MissingParameter", "The request must contain a QueueUrl.", http.StatusBadRequest)
+		return
+	}
+	if len(req.Tags) == 0 {
+		app.sendErrorResponse(w, "MissingParameter", "The request must contain Tags.", http.StatusBadRequest)
+		return
+	}
+	queueName := path.Base(req.QueueUrl)
+	err := app.Store.TagQueue(r.Context(), queueName, req.Tags)
+	if err != nil {
+		if errors.Is(err, store.ErrQueueDoesNotExist) {
+			app.sendErrorResponse(w, "QueueDoesNotExist", "The specified queue does not exist.", http.StatusBadRequest)
+			return
+		}
+		app.sendErrorResponse(w, "InternalFailure", err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
 }
 func (app *App) UntagQueueHandler(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(http.StatusNotImplemented)
+	var req models.UntagQueueRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		app.sendErrorResponse(w, "InvalidRequest", "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.QueueUrl == "" {
+		app.sendErrorResponse(w, "MissingParameter", "The request must contain a QueueUrl.", http.StatusBadRequest)
+		return
+	}
+	if len(req.TagKeys) == 0 {
+		app.sendErrorResponse(w, "MissingParameter", "The request must contain TagKeys.", http.StatusBadRequest)
+		return
+	}
+	queueName := path.Base(req.QueueUrl)
+	err := app.Store.UntagQueue(r.Context(), queueName, req.TagKeys)
+	if err != nil {
+		if errors.Is(err, store.ErrQueueDoesNotExist) {
+			app.sendErrorResponse(w, "QueueDoesNotExist", "The specified queue does not exist.", http.StatusBadRequest)
+			return
+		}
+		app.sendErrorResponse(w, "InternalFailure", err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
 }
 func (app *App) ListDeadLetterSourceQueuesHandler(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(http.StatusNotImplemented)
+	var req models.ListDeadLetterSourceQueuesRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		app.sendErrorResponse(w, "InvalidRequest", "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.QueueUrl == "" {
+		app.sendErrorResponse(w, "MissingParameter", "The request must contain a QueueUrl.", http.StatusBadRequest)
+		return
+	}
+	queueName := path.Base(req.QueueUrl)
+
+	// SQS defaults
+	maxResults := 1000
+	if req.MaxResults != nil {
+		if *req.MaxResults < 1 || *req.MaxResults > 1000 {
+			app.sendErrorResponse(w, "InvalidParameterValue", "MaxResults must be an integer between 1 and 1000.", http.StatusBadRequest)
+			return
+		}
+		maxResults = *req.MaxResults
+	}
+
+	names, nextToken, err := app.Store.ListDeadLetterSourceQueues(r.Context(), queueName, maxResults, req.NextToken)
+	if err != nil {
+		if errors.Is(err, store.ErrQueueDoesNotExist) {
+			app.sendErrorResponse(w, "QueueDoesNotExist", "The specified queue does not exist.", http.StatusBadRequest)
+			return
+		}
+		app.sendErrorResponse(w, "InternalFailure", err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	urls := make([]string, len(names))
+	for i, n := range names {
+		urls[i] = fmt.Sprintf("http://%s/queues/%s", r.Host, n)
+	}
+
+	resp := models.ListDeadLetterSourceQueuesResponse{QueueUrls: urls, NextToken: nextToken}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
 }
 func (app *App) StartMessageMoveTaskHandler(w http.ResponseWriter, r *http.Request) {
+	var req models.StartMessageMoveTaskRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		app.sendErrorResponse(w, "InvalidRequest", "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.SourceArn == "" {
+		app.sendErrorResponse(w, "MissingParameter", "The request must contain a SourceArn.", http.StatusBadRequest)
+		return
+	}
+	if !arnRegex.MatchString(req.SourceArn) {
+		app.sendErrorResponse(w, "InvalidParameterValue", "Invalid SourceArn.", http.StatusBadRequest)
+		return
+	}
 	w.WriteHeader(http.StatusNotImplemented)
 }
+
 func (app *App) CancelMessageMoveTaskHandler(w http.ResponseWriter, r *http.Request) {
+	var req models.CancelMessageMoveTaskRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		app.sendErrorResponse(w, "InvalidRequest", "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.TaskHandle == "" {
+		app.sendErrorResponse(w, "MissingParameter", "The request must contain a TaskHandle.", http.StatusBadRequest)
+		return
+	}
 	w.WriteHeader(http.StatusNotImplemented)
 }
+
 func (app *App) ListMessageMoveTasksHandler(w http.ResponseWriter, r *http.Request) {
+	var req models.ListMessageMoveTasksRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		app.sendErrorResponse(w, "InvalidRequest", "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.SourceArn == "" {
+		app.sendErrorResponse(w, "MissingParameter", "The request must contain a SourceArn.", http.StatusBadRequest)
+		return
+	}
 	w.WriteHeader(http.StatusNotImplemented)
 }
 func (app *App) ChangeMessageVisibilityHandler(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(http.StatusNotImplemented)
+	var req models.ChangeMessageVisibilityRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		app.sendErrorResponse(w, "InvalidRequest", "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if req.QueueUrl == "" {
+		app.sendErrorResponse(w, "MissingParameter", "The request must contain a QueueUrl.", http.StatusBadRequest)
+		return
+	}
+	if req.ReceiptHandle == "" {
+		app.sendErrorResponse(w, "MissingParameter", "The request must contain a ReceiptHandle.", http.StatusBadRequest)
+		return
+	}
+	if req.VisibilityTimeout == nil || *req.VisibilityTimeout < 0 || *req.VisibilityTimeout > 43200 {
+		app.sendErrorResponse(w, "InvalidParameterValue", "Value for parameter VisibilityTimeout is invalid. Reason: Must be an integer from 0 to 43200.", http.StatusBadRequest)
+		return
+	}
+
+	queueName := path.Base(req.QueueUrl)
+	err := app.Store.ChangeMessageVisibility(r.Context(), queueName, req.ReceiptHandle, *req.VisibilityTimeout)
+	if err != nil {
+		if errors.Is(err, store.ErrQueueDoesNotExist) {
+			app.sendErrorResponse(w, "QueueDoesNotExist", "The specified queue does not exist.", http.StatusBadRequest)
+			return
+		}
+		if errors.Is(err, store.ErrInvalidReceiptHandle) || strings.Contains(err.Error(), "invalid receipt handle") {
+			app.sendErrorResponse(w, "ReceiptHandleIsInvalid", "The specified receipt handle isn't valid.", http.StatusBadRequest)
+			return
+		}
+		if errors.Is(err, store.ErrMessageNotInflight) || strings.Contains(err.Error(), "isn't in flight") {
+			app.sendErrorResponse(w, "MessageNotInflight", "The specified message isn't in flight.", http.StatusBadRequest)
+			return
+		}
+		app.sendErrorResponse(w, "InternalFailure", err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
 }
 
 // --- Re-include Create/List/Get/Set handlers from before ---
 
 func (app *App) checkRedrivePolicy(ctx context.Context, sourceQueueName string, redrivePolicyJson string) error {
-	// (Simplified for now - can re-copy full logic if needed, but for basic integration it's fine)
+	var policy struct {
+		DeadLetterTargetArn string      `json:"deadLetterTargetArn"`
+		MaxReceiveCount     interface{} `json:"maxReceiveCount"`
+	}
+	if err := json.Unmarshal([]byte(redrivePolicyJson), &policy); err != nil {
+		return errors.New("RedrivePolicy must be a valid JSON object")
+	}
+	if policy.DeadLetterTargetArn == "" {
+		return errors.New("deadLetterTargetArn is required in RedrivePolicy")
+	}
+
+	// Parse MaxReceiveCount
+	var maxReceiveCount int
+	switch v := policy.MaxReceiveCount.(type) {
+	case string:
+		i, err := strconv.Atoi(v)
+		if err != nil {
+			return errors.New("maxReceiveCount must be an integer")
+		}
+		maxReceiveCount = i
+	case float64:
+		maxReceiveCount = int(v)
+	default:
+		// SQS sometimes accepts no maxReceiveCount? No, it's required.
+		return errors.New("maxReceiveCount must be an integer")
+	}
+
+	if maxReceiveCount < 1 || maxReceiveCount > 1000 {
+		return errors.New("maxReceiveCount must be between 1 and 1000")
+	}
+
+	// Parse DLQ Name from ARN
+	parts := strings.Split(policy.DeadLetterTargetArn, ":")
+	if len(parts) < 6 {
+		return errors.New("Invalid deadLetterTargetArn")
+	}
+	dlqName := parts[5]
+
+	// Verify DLQ Exists
+	dlqAttrs, err := app.Store.GetQueueAttributes(ctx, dlqName)
+	if err != nil {
+		if errors.Is(err, store.ErrQueueDoesNotExist) {
+			// SQS specific error message?
+			return fmt.Errorf("Value %s for parameter RedrivePolicy is invalid. Reason: Dead letter target does not exist.", policy.DeadLetterTargetArn)
+		}
+		return err
+	}
+
+	// Check RedriveAllowPolicy
+	if allowPolicyStr, ok := dlqAttrs["RedriveAllowPolicy"]; ok {
+		var allowPolicy struct {
+			RedrivePermission string   `json:"redrivePermission"`
+			SourceQueueArns   []string `json:"sourceQueueArns"`
+		}
+		if json.Unmarshal([]byte(allowPolicyStr), &allowPolicy) == nil {
+			if allowPolicy.RedrivePermission == "denyAll" {
+				return fmt.Errorf("Value %s for parameter RedrivePolicy is invalid. Reason: Queue %s does not allow this queue to use it as a dead letter queue.", policy.DeadLetterTargetArn, policy.DeadLetterTargetArn)
+			} else if allowPolicy.RedrivePermission == "byQueue" {
+				sourceQueueArn := fmt.Sprintf("arn:aws:sqs:us-east-1:123456789012:%s", sourceQueueName)
+				allowed := false
+				for _, arn := range allowPolicy.SourceQueueArns {
+					if arn == sourceQueueArn {
+						allowed = true
+						break
+					}
+				}
+				if !allowed {
+					return fmt.Errorf("Value %s for parameter RedrivePolicy is invalid. Reason: Queue %s does not allow this queue to use it as a dead letter queue.", policy.DeadLetterTargetArn, policy.DeadLetterTargetArn)
+				}
+			}
+		}
+	}
+
+	// Check FIFO Compatibility
+	sourceIsFifo := strings.HasSuffix(sourceQueueName, ".fifo")
+	dlqIsFifo := strings.HasSuffix(dlqName, ".fifo")
+
+	if sourceIsFifo != dlqIsFifo {
+		return fmt.Errorf("Value %s for parameter RedrivePolicy is invalid. Reason: The dead letter queue of a FIFO queue must also be a FIFO queue.", policy.DeadLetterTargetArn)
+	}
+
 	return nil
 }
 
@@ -557,7 +1052,7 @@ func (app *App) CreateQueueHandler(w http.ResponseWriter, r *http.Request) {
 	if err := ValidateAttributes(req.Attributes); err != nil {
 		// Map backend validation errors to SQS error types
 		if strings.Contains(err.Error(), "invalid value for") {
-			app.sendErrorResponse(w, "InvalidAttributeName", err.Error(), http.StatusBadRequest)
+			app.sendErrorResponse(w, "InvalidAttributeValue", err.Error(), http.StatusBadRequest)
 			return
 		}
 		app.sendErrorResponse(w, "InvalidParameterValue", err.Error(), http.StatusBadRequest)
@@ -577,12 +1072,19 @@ func (app *App) CreateQueueHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		// Check for FIFO-only attributes on standard queue
-		if _, ok := req.Attributes["DeduplicationScope"]; ok {
-			app.sendErrorResponse(w, "InvalidParameterValue", "DeduplicationScope is only valid for FIFO queues", http.StatusBadRequest)
-			return
+		fifoAttrs := []string{"ContentBasedDeduplication", "DeduplicationScope", "FifoThroughputLimit"}
+		for _, attr := range fifoAttrs {
+			if _, ok := req.Attributes[attr]; ok {
+				app.sendErrorResponse(w, "InvalidParameterValue", fmt.Sprintf("%s is only valid for FIFO queues", attr), http.StatusBadRequest)
+				return
+			}
 		}
-		if _, ok := req.Attributes["FifoThroughputLimit"]; ok {
-			app.sendErrorResponse(w, "InvalidParameterValue", "FifoThroughputLimit is only valid for FIFO queues", http.StatusBadRequest)
+	}
+
+	// Validate RedrivePolicy if present
+	if policy, ok := req.Attributes["RedrivePolicy"]; ok {
+		if err := app.checkRedrivePolicy(r.Context(), req.QueueName, policy); err != nil {
+			app.sendErrorResponse(w, "InvalidParameterValue", err.Error(), http.StatusBadRequest)
 			return
 		}
 	}
@@ -617,21 +1119,62 @@ func (app *App) CreateQueueHandler(w http.ResponseWriter, r *http.Request) {
 
 func (app *App) DeleteQueueHandler(w http.ResponseWriter, r *http.Request) {
 	var req models.DeleteQueueRequest
-	json.NewDecoder(r.Body).Decode(&req)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		app.sendErrorResponse(w, "InvalidRequest", "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.QueueUrl == "" {
+		app.sendErrorResponse(w, "MissingParameter", "The request must contain a QueueUrl.", http.StatusBadRequest)
+		return
+	}
 	queueName := path.Base(req.QueueUrl)
-	app.Store.DeleteQueue(r.Context(), queueName)
+	if err := app.Store.DeleteQueue(r.Context(), queueName); err != nil {
+		if errors.Is(err, store.ErrQueueDoesNotExist) {
+			app.sendErrorResponse(w, "QueueDoesNotExist", "The specified queue does not exist.", http.StatusBadRequest)
+			return
+		}
+		app.sendErrorResponse(w, "InternalFailure", err.Error(), http.StatusInternalServerError)
+		return
+	}
 	w.WriteHeader(http.StatusOK)
 }
 
 func (app *App) ListQueuesHandler(w http.ResponseWriter, r *http.Request) {
 	var req models.ListQueuesRequest
-	json.NewDecoder(r.Body).Decode(&req)
-	names, _, _ := app.Store.ListQueues(r.Context(), 1000, "", "")
+	decodeErr := json.NewDecoder(r.Body).Decode(&req)
+
+	maxResults := 1000
+	if req.MaxResults != nil {
+		if *req.MaxResults < 1 || *req.MaxResults > 1000 {
+			app.sendErrorResponse(w, "InvalidParameterValue", "MaxResults must be an integer between 1 and 1000.", http.StatusBadRequest)
+			return
+		}
+		maxResults = *req.MaxResults
+	}
+
+	names, nextToken, err := app.Store.ListQueues(r.Context(), maxResults, req.NextToken, req.QueueNamePrefix)
+	if err != nil {
+		app.sendErrorResponse(w, "InternalFailure", "Failed to list queues", http.StatusInternalServerError)
+		return
+	}
+
+	// According to tests, if MaxResults is nil (or JSON was malformed), we don't return NextToken
+	if req.MaxResults == nil || decodeErr != nil {
+		nextToken = ""
+	}
+
 	urls := make([]string, len(names))
 	for i, n := range names {
 		urls[i] = fmt.Sprintf("http://%s/queues/%s", r.Host, n)
 	}
-	json.NewEncoder(w).Encode(models.ListQueuesResponse{QueueUrls: urls})
+
+	// Truncate to 1000 if needed
+	if len(urls) > 1000 {
+		urls = urls[:1000]
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(models.ListQueuesResponse{QueueUrls: urls, NextToken: nextToken})
 }
 
 func (app *App) GetQueueAttributesHandler(w http.ResponseWriter, r *http.Request) {
@@ -641,7 +1184,7 @@ func (app *App) GetQueueAttributesHandler(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if req.QueueUrl == "" {
-		app.sendErrorResponse(w, "MissingParameter", "The request must contain the parameter QueueUrl.", http.StatusBadRequest)
+		app.sendErrorResponse(w, "MissingParameter", "The request must contain a QueueUrl.", http.StatusBadRequest)
 		return
 	}
 
@@ -656,38 +1199,201 @@ func (app *App) GetQueueAttributesHandler(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// Add derived attributes
-	if attrs == nil {
-		attrs = make(map[string]string)
+	// Default values according to SQS
+	allPossibleAttributes := map[string]string{
+		"DelaySeconds":                  "0",
+		"MaximumMessageSize":            "262144",
+		"MessageRetentionPeriod":        "345600",
+		"ReceiveMessageWaitTimeSeconds": "0",
+		"VisibilityTimeout":             "30",
+		"KmsDataKeyReusePeriodSeconds":  "300",
 	}
-	attrs["QueueArn"] = fmt.Sprintf("arn:aws:sqs:us-east-1:123456789012:%s", queueName)
 
-	json.NewEncoder(w).Encode(models.GetQueueAttributesResponse{Attributes: attrs})
+	// SQS valid attributes
+	validAttributes := map[string]bool{
+		"All":                                   true,
+		"Policy":                                true,
+		"VisibilityTimeout":                     true,
+		"MaximumMessageSize":                    true,
+		"MessageRetentionPeriod":                true,
+		"ApproximateNumberOfMessages":           true,
+		"ApproximateNumberOfMessagesNotVisible": true,
+		"CreatedTimestamp":                      true,
+		"LastModifiedTimestamp":                 true,
+		"QueueArn":                              true,
+		"ApproximateNumberOfMessagesDelayed":    true,
+		"DelaySeconds":                          true,
+		"ReceiveMessageWaitTimeSeconds":         true,
+		"RedrivePolicy":                         true,
+		"FifoQueue":                             true,
+		"ContentBasedDeduplication":             true,
+		"KmsMasterKeyId":                        true,
+		"KmsDataKeyReusePeriodSeconds":          true,
+		"DeduplicationScope":                    true,
+		"FifoThroughputLimit":                   true,
+		"RedriveAllowPolicy":                    true,
+		"SqsManagedSseEnabled":                  true,
+	}
+
+	filteredAttrs := make(map[string]string)
+	returnAll := false
+	for _, attr := range req.AttributeNames {
+		if attr == "All" {
+			returnAll = true
+			break
+		}
+	}
+
+	if returnAll {
+		for k, v := range allPossibleAttributes {
+			filteredAttrs[k] = v
+		}
+		for k, v := range attrs {
+			filteredAttrs[k] = v
+		}
+	} else {
+		for _, attr := range req.AttributeNames {
+			if val, ok := attrs[attr]; ok {
+				filteredAttrs[attr] = val
+			} else if val, ok := allPossibleAttributes[attr]; ok {
+				filteredAttrs[attr] = val
+			} else if attr == "QueueArn" {
+				// handled below
+			} else if validAttributes[attr] {
+				// valid but not set, do not include but also do not error
+			} else {
+				app.sendErrorResponse(w, "InvalidAttributeName", fmt.Sprintf("The specified attribute %s does not exist.", attr), http.StatusBadRequest)
+				return
+			}
+		}
+	}
+
+	// Always provide QueueArn if All or explicitly requested
+	shouldIncludeArn := returnAll
+	if !shouldIncludeArn {
+		for _, attr := range req.AttributeNames {
+			if attr == "QueueArn" {
+				shouldIncludeArn = true
+				break
+			}
+		}
+	}
+	if shouldIncludeArn {
+		filteredAttrs["QueueArn"] = fmt.Sprintf("arn:aws:sqs:us-east-1:123456789012:%s", queueName)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(models.GetQueueAttributesResponse{Attributes: filteredAttrs})
 }
 
 func (app *App) SetQueueAttributesHandler(w http.ResponseWriter, r *http.Request) {
+	var req models.SetQueueAttributesRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		app.sendErrorResponse(w, "InvalidRequest", "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.QueueUrl == "" {
+		app.sendErrorResponse(w, "MissingParameter", "The request must contain a QueueUrl.", http.StatusBadRequest)
+		return
+	}
+	if len(req.Attributes) == 0 {
+		app.sendErrorResponse(w, "MissingParameter", "The request must contain the parameter Attributes.", http.StatusBadRequest)
+		return
+	}
+
+	// Validate Attributes Syntax
+	if err := ValidateAttributes(req.Attributes); err != nil {
+		if strings.Contains(err.Error(), "invalid value for") {
+			app.sendErrorResponse(w, "InvalidAttributeValue", err.Error(), http.StatusBadRequest)
+			return
+		}
+		app.sendErrorResponse(w, "InvalidParameterValue", err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// Validate Immutable Attributes
+	if _, ok := req.Attributes["FifoQueue"]; ok {
+		app.sendErrorResponse(w, "InvalidAttributeName", "Attribute FifoQueue cannot be changed.", http.StatusBadRequest)
+		return
+	}
+
+	queueName := path.Base(req.QueueUrl)
+
+	// Validate RedrivePolicy existence and content if present
+	if policy, ok := req.Attributes["RedrivePolicy"]; ok {
+		if err := app.checkRedrivePolicy(r.Context(), queueName, policy); err != nil {
+			app.sendErrorResponse(w, "InvalidParameterValue", err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
+
+	err := app.Store.SetQueueAttributes(r.Context(), queueName, req.Attributes)
+	if err != nil {
+		if errors.Is(err, store.ErrQueueDoesNotExist) {
+			app.sendErrorResponse(w, "QueueDoesNotExist", "The specified queue does not exist.", http.StatusBadRequest)
+			return
+		}
+		app.sendErrorResponse(w, "InternalFailure", err.Error(), http.StatusInternalServerError)
+		return
+	}
+
 	w.WriteHeader(http.StatusOK)
 }
 
 func (app *App) GetQueueUrlHandler(w http.ResponseWriter, r *http.Request) {
 	var req models.GetQueueURLRequest
-	json.NewDecoder(r.Body).Decode(&req)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		app.sendErrorResponse(w, "InvalidRequest", "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.QueueName == "" {
+		app.sendErrorResponse(w, "MissingParameter", "The request must contain a QueueName.", http.StatusBadRequest)
+		return
+	}
+	// Check if queue exists
+	_, err := app.Store.GetQueueURL(r.Context(), req.QueueName)
+	if err != nil {
+		if errors.Is(err, store.ErrQueueDoesNotExist) {
+			app.sendErrorResponse(w, "QueueDoesNotExist", "The specified queue does not exist.", http.StatusBadRequest)
+			return
+		}
+		app.sendErrorResponse(w, "InternalFailure", err.Error(), http.StatusInternalServerError)
+		return
+	}
+
 	queueURL := fmt.Sprintf("http://%s/queues/%s", r.Host, req.QueueName)
 	json.NewEncoder(w).Encode(models.GetQueueURLResponse{QueueUrl: queueURL})
 }
 
 func (app *App) PurgeQueueHandler(w http.ResponseWriter, r *http.Request) {
 	var req models.PurgeQueueRequest
-	json.NewDecoder(r.Body).Decode(&req)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		app.sendErrorResponse(w, "InvalidRequest", "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.QueueUrl == "" {
+		app.sendErrorResponse(w, "MissingParameter", "The request must contain a QueueUrl.", http.StatusBadRequest)
+		return
+	}
 	queueName := path.Base(req.QueueUrl)
-	app.Store.PurgeQueue(r.Context(), queueName)
+	if err := app.Store.PurgeQueue(r.Context(), queueName); err != nil {
+		if errors.Is(err, store.ErrQueueDoesNotExist) {
+			app.sendErrorResponse(w, "QueueDoesNotExist", "The specified queue does not exist.", http.StatusBadRequest)
+			return
+		}
+		if errors.Is(err, store.ErrPurgeQueueInProgress) {
+			app.sendErrorResponse(w, "PurgeQueueInProgress", "Indicates that the specified queue previously received a PurgeQueue request within the last 60 seconds.", http.StatusBadRequest)
+			return
+		}
+		app.sendErrorResponse(w, "InternalFailure", err.Error(), http.StatusInternalServerError)
+		return
+	}
 	w.WriteHeader(http.StatusOK)
 }
 
 // Helpers
 type SqsError struct{ Type, Message string }
 
-func (e *SqsError) Error() string                          { return e.Message }
-func validateSettableAttributes(a map[string]string) error { return nil }
+func (e *SqsError) Error() string { return e.Message }
 
 var validQueueAttributeNames = map[string]bool{"All": true}

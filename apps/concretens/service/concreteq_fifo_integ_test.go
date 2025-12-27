@@ -104,9 +104,9 @@ func TestIntegration_ConcreteQ_FIFO(t *testing.T) {
 			t.Fatal("Timeout waiting for FIFO message in ConcreteQ")
 		case <-ticker.C:
 			req := qmodels.ReceiveMessageRequest{
-				MaxNumberOfMessages: 10,
-				VisibilityTimeout:   10,
-				WaitTimeSeconds:     0,
+				MaxNumberOfMessages: qmodels.Ptr(10),
+				VisibilityTimeout:   qmodels.Ptr(10),
+				WaitTimeSeconds:     qmodels.Ptr(0),
 				AttributeNames:      []string{"MessageGroupId", "ApproximateReceiveCount"},
 			}
 			resp, err := qs.ReceiveMessage(ctx, queueName, &req)

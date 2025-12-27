@@ -4,3 +4,12 @@ foundationdb-server_7.3.67-1_amd64.deb
 *.out
 trace.*.xml.*
 trace.*.xml
+
+# Test output files
+test_output*.txt
+root_test_*.txt
+test_debug*.txt
+test_list_queues.txt
+test_redrive.txt
+failure.log
+*.test

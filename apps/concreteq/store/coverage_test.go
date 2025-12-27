@@ -78,7 +78,7 @@ func TestFDBStore_Coverage(t *testing.T) {
 
 		// Wait for move to complete
 		require.Eventually(t, func() bool {
-			resp, err := store.ReceiveMessage(ctx, dstQueue, &models.ReceiveMessageRequest{MaxNumberOfMessages: 1})
+			resp, err := store.ReceiveMessage(ctx, dstQueue, &models.ReceiveMessageRequest{MaxNumberOfMessages: models.Ptr(1)})
 			return err == nil && len(resp.Messages) > 0
 		}, 6*time.Second, 200*time.Millisecond)
 
