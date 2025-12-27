@@ -55,7 +55,7 @@ func TestDispatcher_DeliverHTTP(t *testing.T) {
 	}
 
 	// 3. Run Logic
-	d := NewDispatcher(mockStore, 1)
+	d := NewDispatcher(mockStore, 1, "")
 
 	task := &models.DeliveryTask{
 		TaskID:          "task-1",
@@ -82,7 +82,7 @@ func TestDispatcher_DeliverTask_SubNotFound(t *testing.T) {
 			return nil, errors.New("sub not found")
 		},
 	}
-	d := NewDispatcher(mockStore, 1)
+	d := NewDispatcher(mockStore, 1, "")
 
 	task := &models.DeliveryTask{
 		TaskID:          "task-1",
@@ -108,7 +108,7 @@ func TestDispatcher_DeliverTask_MsgNotFound(t *testing.T) {
 			return nil, errors.New("msg not found")
 		},
 	}
-	d := NewDispatcher(mockStore, 1)
+	d := NewDispatcher(mockStore, 1, "")
 
 	task := &models.DeliveryTask{
 		TaskID:          "task-1",
@@ -149,7 +149,7 @@ func TestDispatcher_DeliverHTTP_Failure_Retry(t *testing.T) {
 		},
 	}
 
-	d := NewDispatcher(mockStore, 1)
+	d := NewDispatcher(mockStore, 1, "")
 	task := &models.DeliveryTask{TaskID: "t1", RetryCount: 0}
 
 	d.deliverTask(context.Background(), task)
@@ -184,7 +184,7 @@ func TestDispatcher_UnsupportedProtocol(t *testing.T) {
 			return nil
 		},
 	}
-	d := NewDispatcher(mockStore, 1)
+	d := NewDispatcher(mockStore, 1, "")
 
 	task := &models.DeliveryTask{
 		TaskID:          "task-1",
@@ -250,7 +250,7 @@ func TestDispatcher_PollError(t *testing.T) {
 			return nil, errors.New("poll error")
 		},
 	}
-	d := NewDispatcher(mockStore, 1)
+	d := NewDispatcher(mockStore, 1, "")
 
 	// processTasks should handle error (log it) and return
 	d.processTasks()
@@ -270,7 +270,7 @@ func TestDispatcher_DeleteTask_Error(t *testing.T) {
 		},
 	}
 	// Inject a transport that always succeeds to avoid HTTP error
-	d := NewDispatcher(mockStore, 1)
+	d := NewDispatcher(mockStore, 1, "")
 	d.httpClient.Transport = &MockTransport{
 		RoundTripFunc: func(req *http.Request) (*http.Response, error) {
 			return &http.Response{StatusCode: 200, Body: http.NoBody}, nil
@@ -295,7 +295,7 @@ func TestDispatcher_DeliverHTTP_NetworkError(t *testing.T) {
 			return nil // Expected retry
 		},
 	}
-	d := NewDispatcher(mockStore, 1)
+	d := NewDispatcher(mockStore, 1, "")
 	d.httpClient.Transport = &MockTransport{
 		RoundTripFunc: func(req *http.Request) (*http.Response, error) {
 			return nil, errors.New("network error")
@@ -318,7 +318,7 @@ func TestDispatcher_DeliverSQS_NetworkError(t *testing.T) {
 			return nil // Expected retry
 		},
 	}
-	d := NewDispatcher(mockStore, 1)
+	d := NewDispatcher(mockStore, 1, "")
 	d.httpClient.Transport = &MockTransport{
 		RoundTripFunc: func(req *http.Request) (*http.Response, error) {
 			return nil, errors.New("network error")
@@ -367,7 +367,7 @@ func TestDispatcher_DeliverHTTP_Confirmation(t *testing.T) {
 			return nil
 		},
 	}
-	d := NewDispatcher(mockStore, 1)
+	d := NewDispatcher(mockStore, 1, "")
 
 	// Special MessageID triggers confirmation logic
 	task := &models.DeliveryTask{
@@ -406,7 +406,7 @@ func TestDispatcher_DeliverSQS_Success(t *testing.T) {
 			return nil
 		},
 	}
-	d := NewDispatcher(mockStore, 1)
+	d := NewDispatcher(mockStore, 1, "")
 	d.httpClient.Transport = &MockTransport{
 		RoundTripFunc: func(req *http.Request) (*http.Response, error) {
 			// Verify headers or body if needed
@@ -430,7 +430,7 @@ func TestDispatcher_DeliverSQS_Failure_500(t *testing.T) {
 			return nil // Expected retry
 		},
 	}
-	d := NewDispatcher(mockStore, 1)
+	d := NewDispatcher(mockStore, 1, "")
 	d.httpClient.Transport = &MockTransport{
 		RoundTripFunc: func(req *http.Request) (*http.Response, error) {
 			return &http.Response{
@@ -475,7 +475,7 @@ func TestDispatcher_RawDelivery_HTTP(t *testing.T) {
 			return &models.Message{Message: "raw-body-content", MessageID: msgID}, nil
 		},
 	}
-	d := NewDispatcher(mockStore, 1)
+	d := NewDispatcher(mockStore, 1, "")
 	task := &models.DeliveryTask{TaskID: "t1", MessageID: "m1"}
 
 	d.deliverTask(context.Background(), task)
@@ -512,7 +512,7 @@ func TestDispatcher_RawDelivery_SQS(t *testing.T) {
 			return nil
 		},
 	}
-	d := NewDispatcher(mockStore, 1)
+	d := NewDispatcher(mockStore, 1, "")
 
 	receivedPayload := make(chan string, 1)
 	d.httpClient.Transport = &MockTransport{

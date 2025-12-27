@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/kiroku-inc/kiroku-core/apps/concretens/models"
@@ -26,15 +27,20 @@ type Dispatcher struct {
 	store      Store
 	quit       chan struct{}
 	httpClient *http.Client
+	baseURL    string
 }
 
-func NewDispatcher(store Store, workers int) *Dispatcher {
+func NewDispatcher(store Store, workers int, baseURL string) *Dispatcher {
+	if baseURL == "" {
+		baseURL = "http://localhost:8080"
+	}
 	return &Dispatcher{
 		store: store,
 		quit:  make(chan struct{}),
 		httpClient: &http.Client{
 			Timeout: 10 * time.Second,
 		},
+		baseURL: baseURL,
 	}
 }
 
@@ -115,23 +121,71 @@ func (d *Dispatcher) deliverTask(ctx context.Context, task *models.DeliveryTask)
 	if err != nil {
 		log.Printf("Delivery failed to %s: %v", sub.Endpoint, err)
 
-		const MaxRetries = 5
-		const BaseBackoff = 1 * time.Second
+		// Parse Policies
+		maxRetries := 5
+		baseBackoff := 1 * time.Second
 
-		if task.RetryCount >= MaxRetries {
-			log.Printf("Max retries reached for task %s. Moving to DLQ.", task.TaskID)
-			if err := d.store.MoveToDLQ(ctx, task); err != nil {
-				log.Printf("Error moving task %s to DLQ: %v", task.TaskID, err)
+		if policyJSON, ok := sub.Attributes["DeliveryPolicy"]; ok && policyJSON != "" {
+			var dp struct {
+				Http struct {
+					DefaultHealthyRetryPolicy struct {
+						NumRetries     int `json:"numRetries"`
+						MinDelayTarget int `json:"minDelayTarget"`
+					} `json:"defaultHealthyRetryPolicy"`
+				} `json:"http"`
+			}
+			if err := json.Unmarshal([]byte(policyJSON), &dp); err == nil {
+				if dp.Http.DefaultHealthyRetryPolicy.NumRetries > 0 {
+					maxRetries = dp.Http.DefaultHealthyRetryPolicy.NumRetries
+				}
+				if dp.Http.DefaultHealthyRetryPolicy.MinDelayTarget > 0 {
+					baseBackoff = time.Duration(dp.Http.DefaultHealthyRetryPolicy.MinDelayTarget) * time.Second
+				}
+			}
+		}
+
+		if task.RetryCount >= maxRetries {
+			log.Printf("Max retries (%d) reached for task %s.", maxRetries, task.TaskID)
+
+			// External DLQ Check
+			handled := false
+			if redriveJSON, ok := sub.Attributes["RedrivePolicy"]; ok && redriveJSON != "" {
+				var rp struct {
+					DeadLetterTargetArn string `json:"deadLetterTargetArn"`
+				}
+				if err := json.Unmarshal([]byte(redriveJSON), &rp); err == nil && rp.DeadLetterTargetArn != "" {
+					// Attempt delivery to SQS DLQ
+					parts := strings.Split(rp.DeadLetterTargetArn, ":")
+					if len(parts) > 0 {
+						queueName := parts[len(parts)-1]
+						dlqEndpoint := fmt.Sprintf("%s/queue/%s", d.baseURL, queueName)
+
+						// Use deliverSQS to send to DLQ
+						// Note: deliverSQS uses msg.Message. DLQ usually just sends the body.
+						// Only if Raw?
+						// We'll send generic.
+						if err := d.deliverSQS(ctx, dlqEndpoint, msg, sub); err == nil {
+							// Success -> Delete Task from Source Queue
+							d.store.DeleteDeliveryTask(ctx, task)
+							handled = true
+						} else {
+							log.Printf("Failed to deliver to External DLQ %s: %v", dlqEndpoint, err)
+						}
+					}
+				}
+			}
+
+			if !handled {
+				log.Printf("Moving to Internal DLQ.")
+				if err := d.store.MoveToDLQ(ctx, task); err != nil {
+					log.Printf("Error moving task %s to DLQ: %v", task.TaskID, err)
+				}
 			}
 			return
 		}
 
 		// Exponential Backoff: base * 2^retryCount
-		// RetryCount is 0 initially.
-		// 0: 1s
-		// 1: 2s
-		// 2: 4s
-		backoff := BaseBackoff * (1 << task.RetryCount)
+		backoff := baseBackoff * (1 << task.RetryCount)
 		nextVisible := time.Now().Add(backoff)
 
 		log.Printf("Retrying task %s (count %d) after %v", task.TaskID, task.RetryCount+1, backoff)
@@ -165,7 +219,7 @@ func (d *Dispatcher) deliverHTTP(ctx context.Context, endpoint string, msg *mode
 			TopicArn:         sub.TopicArn,
 			Token:            sub.ConfirmationToken,
 			Message:          msg.Message,
-			SubscribeURL:     fmt.Sprintf("http://localhost:8080/confirmSubscription?topicArn=%s&token=%s", sub.TopicArn, sub.ConfirmationToken), // TODO: Use real host
+			SubscribeURL:     fmt.Sprintf("%s/confirmSubscription?topicArn=%s&token=%s", d.baseURL, sub.TopicArn, sub.ConfirmationToken),
 			SignatureVersion: "1",
 		}
 		payload, err = json.Marshal(confirmPayload)

@@ -30,16 +30,21 @@ func main() {
 	http.HandleFunc("/listTopics", srv.ListTopicsHandler)
 	http.HandleFunc("/listSubscriptions", srv.ListSubscriptionsHandler)
 
-	// Start Dispatcher
-	// Use 10 workers for concurrency
-	dispatcher := service.NewDispatcher(st, 10)
-	dispatcher.Start(context.Background())
-	defer dispatcher.Stop()
-
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"
 	}
+
+	publicURL := os.Getenv("PUBLIC_URL")
+	if publicURL == "" {
+		publicURL = "http://localhost:" + port
+	}
+
+	// Start Dispatcher
+	// Use 10 workers for concurrency
+	dispatcher := service.NewDispatcher(st, 10, publicURL)
+	dispatcher.Start(context.Background())
+	defer dispatcher.Stop()
 
 	log.Printf("Server listening on port %s", port)
 	if err := http.ListenAndServe(":"+port, nil); err != nil {

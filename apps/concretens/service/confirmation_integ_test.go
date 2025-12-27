@@ -49,7 +49,7 @@ func TestIntegration_SubscriptionConfirmation(t *testing.T) {
 	}
 	s.ClearQueue(context.Background())
 
-	d := NewDispatcher(s, 1)
+	d := NewDispatcher(s, 1, "")
 	ctx := context.Background()
 	d.Start(ctx)
 	defer d.Stop()

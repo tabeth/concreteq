@@ -79,7 +79,7 @@ func TestDispatcher_DeliverSQS(t *testing.T) {
 		},
 	}
 
-	d := NewDispatcher(mockStore, 1)
+	d := NewDispatcher(mockStore, 1, "")
 	ctx := context.Background()
 
 	task := &models.DeliveryTask{

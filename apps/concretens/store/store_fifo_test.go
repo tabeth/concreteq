@@ -156,3 +156,64 @@ func TestStore_FIFO_GroupIdRequired(t *testing.T) {
 		t.Error("Expected error when publishing to FIFO without MessageGroupId")
 	}
 }
+func TestStore_FIFO_ContentBasedDeduplication(t *testing.T) {
+	fdbtest.SkipIfFDBUnavailable(t)
+	s, err := NewStore(710)
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+	s.ClearQueue(context.Background())
+	ctx := context.Background()
+
+	// 1. Topic WITH ContentBasedDeduplication
+	attrs := map[string]string{"ContentBasedDeduplication": "true"}
+	topic, _ := s.CreateTopic(ctx, "content-dedup-"+uuid.New().String()+".fifo", attrs)
+	s.Subscribe(ctx, &models.Subscription{TopicArn: topic.TopicArn, Protocol: "sqs", Endpoint: "e"})
+
+	// 2. Publish "A" (No ID) -> Should generate hash
+	msg1 := &models.Message{
+		TopicArn:       topic.TopicArn,
+		Message:        "A",
+		MessageGroupId: "g1",
+	}
+	if err := s.PublishMessage(ctx, msg1); err != nil {
+		t.Fatalf("Publish 1 failed: %v", err)
+	}
+
+	// 3. Publish "A" again (No ID) -> Should be duplicate
+	msg2 := &models.Message{
+		TopicArn:       topic.TopicArn,
+		Message:        "A",
+		MessageGroupId: "g1",
+	}
+	if err := s.PublishMessage(ctx, msg2); err != nil {
+		t.Fatalf("Publish 2 failed: %v", err)
+	}
+
+	// 4. Publish "B" (No ID) -> New hash
+	msg3 := &models.Message{
+		TopicArn:       topic.TopicArn,
+		Message:        "B",
+		MessageGroupId: "g1",
+	}
+	if err := s.PublishMessage(ctx, msg3); err != nil {
+		t.Fatalf("Publish 3 failed: %v", err)
+	}
+
+	// Verify
+	tasks, _ := s.PollDeliveryTasks(ctx, 100)
+	if len(tasks) != 2 {
+		t.Errorf("Expected 2 tasks, got %d", len(tasks))
+	}
+
+	// 5. Topic WITHOUT Attribute
+	topicNoAttr, _ := s.CreateTopic(ctx, "no-dedup-"+uuid.New().String()+".fifo", nil)
+	msgFail := &models.Message{
+		TopicArn:       topicNoAttr.TopicArn,
+		Message:        "Fail",
+		MessageGroupId: "g1",
+	}
+	if err := s.PublishMessage(ctx, msgFail); err == nil {
+		t.Error("Expected error when missing DedupID and ContentBasedDeduplication disabled")
+	}
+}

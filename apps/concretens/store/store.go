@@ -363,9 +363,14 @@ func (s *Store) PublishMessage(ctx context.Context, msg *models.Message) error {
 		}
 		// Deduplication
 		if msg.MessageDeduplicationId == "" {
-			// Simple hash of body
-			h := sha256.Sum256([]byte(msg.Message))
-			msg.MessageDeduplicationId = fmt.Sprintf("%x", h)
+			// Check if ContentBasedDeduplication is enabled
+			if topic.Attributes != nil && topic.Attributes["ContentBasedDeduplication"] == "true" {
+				// Simple hash of body
+				h := sha256.Sum256([]byte(msg.Message))
+				msg.MessageDeduplicationId = fmt.Sprintf("%x", h)
+			} else {
+				return fmt.Errorf("MessageDeduplicationId is required for FIFO topics unless ContentBasedDeduplication is enabled")
+			}
 		}
 
 		// Check Dedup Store
@@ -421,9 +426,35 @@ func (s *Store) PublishMessage(ctx context.Context, msg *models.Message) error {
 
 			// Check Filter Policy
 			if sub.FilterPolicy != "" {
-				matches, err := filter.Matches(sub.FilterPolicy, msg.MessageAttributes)
+				// Parse Scope
+				scope := "MessageAttributes"
+				if sub.Attributes != nil {
+					if val, ok := sub.Attributes["FilterPolicyScope"]; ok && val == "MessageBody" {
+						scope = "MessageBody"
+					}
+					// fmt.Printf("[DEBUG] Sub: %s Attributes: %v Scope detected: %s\n", sub.SubscriptionArn, sub.Attributes, scope)
+				} else {
+					// fmt.Printf("[DEBUG] Sub: %s Attributes is NIL\n", sub.SubscriptionArn)
+				}
+
+				var dataToMatch interface{}
+				if scope == "MessageBody" {
+					var bodyMap map[string]interface{}
+					if err := json.Unmarshal([]byte(msg.Message), &bodyMap); err != nil {
+						// Body is not valid JSON, cannot match MessageBody policy.
+						// SNS behavior: drop message for this sub or no-match.
+						continue
+					}
+					dataToMatch = bodyMap
+				} else {
+					dataToMatch = msg.MessageAttributes
+				}
+
+				// fmt.Printf("[DEBUG] Matching Policy: %s against Data: %+v\n", sub.FilterPolicy, dataToMatch)
+
+				matches, err := filter.Matches(sub.FilterPolicy, dataToMatch)
 				if err != nil {
-					// Log error? Skip?
+					// Log error?
 					continue
 				}
 				if !matches {
@@ -435,7 +466,7 @@ func (s *Store) PublishMessage(ctx context.Context, msg *models.Message) error {
 				TaskID:          uuid.New().String(),
 				SubscriptionArn: sub.SubscriptionArn,
 				MessageID:       msg.MessageID,
-				VisibleAfter:    time.Now(),
+				VisibleAfter:    time.Now().Add(-1 * time.Millisecond), // Ensure visible immediately
 				RetryCount:      0,
 			}
 			taskData, _ := json.Marshal(task)
@@ -454,10 +485,14 @@ func (s *Store) PollDeliveryTasks(ctx context.Context, limit int) ([]*models.Del
 	tasks, err := s.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
 		now := time.Now().UnixNano()
 
-		startKey := s.subDir.Pack(tuple.Tuple{"queue", 0})
-		endKey := s.subDir.Pack(tuple.Tuple{"queue", now + 1})
+		// Use Prefix Scan on "queue" and filter by timestamp
+		// This avoids potential Tuple type mismatch on range boundaries
+		prefix := s.subDir.Pack(tuple.Tuple{"queue"})
+		r, err := fdb.PrefixRange(prefix)
+		if err != nil {
+			return nil, err
+		}
 
-		r := fdb.KeyRange{Begin: startKey, End: endKey}
 		iter := tr.GetRange(r, fdb.RangeOptions{Limit: limit}).Iterator()
 
 		var claimedTasks []*models.DeliveryTask
@@ -465,6 +500,37 @@ func (s *Store) PollDeliveryTasks(ctx context.Context, limit int) ([]*models.Del
 			kv, err := iter.Get()
 			if err != nil {
 				return nil, err
+			}
+
+			// Validate Timestamp from Key
+			t, err := s.subDir.Unpack(kv.Key)
+			if err != nil {
+				continue
+			}
+			// t should be ("queue", timestamp, taskID)
+			if len(t) < 3 {
+				continue
+			}
+
+			tsVal, ok := t[1].(int64)
+			if !ok {
+				// Try converting from other types if needed, or skip
+				// Safe way: cast to number
+				switch v := t[1].(type) {
+				case int:
+					tsVal = int64(v)
+				case int64:
+					tsVal = v
+				case uint64:
+					tsVal = int64(v)
+				default:
+					continue
+				}
+			}
+
+			// If timestamp is in future, stop (since keys are ordered)
+			if tsVal > now {
+				break
 			}
 
 			// 1. Decode task

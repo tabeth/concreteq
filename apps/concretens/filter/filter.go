@@ -3,55 +3,93 @@ package filter
 import (
 	"encoding/json"
 	"fmt"
+	"reflect"
 )
 
-// Policy represents a subscription filter policy.
-// It maps attribute names to a list of allowed values.
-// Only string matching is supported for now.
-type Policy map[string][]string
-
-// Matches checks if the given message attributes match the filter policy.
-// Returns true if the attributes satisfy the policy, or if the policy is empty/invalid.
-//
-// Logic:
-//  1. If policy is empty, match.
-//  2. For every key in policy, the attribute must exist in msgAttributes.
-//  3. For every key in policy, the specific attribute value must be one of the allowed values in policy (exact match).
-//     If the policy value list is empty, it effectively matches nothing (unless we define exists logic).
-//     Let's assume standard SNS behavior: OR within the list of values.
-func Matches(policyJSON string, msgAttributes map[string]string) (bool, error) {
+// Matches checks if the given message (attributes or body map) matches the filter policy.
+// policyJSON: The SNS Filter Policy JSON.
+// messageData: The data to match against. Can be map[string]string (attributes) or map[string]interface{} (body).
+func Matches(policyJSON string, messageData interface{}) (bool, error) {
 	if policyJSON == "" || policyJSON == "{}" {
 		return true, nil
 	}
 
-	var policy Policy
+	var policy map[string]interface{}
 	if err := json.Unmarshal([]byte(policyJSON), &policy); err != nil {
-		// Invalid policy is treated as no-match or error?
-		// SNS might reject subscription on creation if invalid.
-		// Use match=false for runtime safety.
 		return false, fmt.Errorf("invalid filter policy json: %w", err)
 	}
 
-	for key, allowedValues := range policy {
-		val, exists := msgAttributes[key]
-		if !exists {
-			// Attribute missing but required by policy -> No Match
-			return false, nil
-		}
+	// Normalize messageData to map[string]interface{}
+	var data map[string]interface{}
 
-		// Check if val is in allowedValues
-		match := false
-		for _, allowed := range allowedValues {
-			if val == allowed {
-				match = true
-				break
-			}
+	switch v := messageData.(type) {
+	case map[string]interface{}:
+		data = v
+	case map[string]string:
+		data = make(map[string]interface{})
+		for k, val := range v {
+			data[k] = val
 		}
-
-		if !match {
-			return false, nil
-		}
+	default:
+		return false, fmt.Errorf("unsupported message data type: %T", messageData)
 	}
 
-	return true, nil
+	return matchRecursive(policy, data), nil
+}
+
+func matchRecursive(policy map[string]interface{}, data map[string]interface{}) bool {
+	for key, policyVal := range policy {
+		dataVal, exists := data[key]
+		if !exists {
+			// Key missing in data -> No match (unless we support 'exists': false logic later)
+			return false
+		}
+
+		// SNS Policy handling:
+		// 1. If policyVal is a list [a, b], it means OR. dataVal must match one of them.
+		// 2. If policyVal is a map, recurse (dataVal must be a map too).
+		// 3. Simple equality not strictly standard SNS (SNS wraps everything in lists usually),
+		//    but standard implementations might allow direct values.
+		//    However, safe to assume standard SNS JSON syntax: always list for leaf values, object for nesting.
+
+		switch pVal := policyVal.(type) {
+		case map[string]interface{}:
+			// Nested matching
+			dMap, ok := dataVal.(map[string]interface{})
+			if !ok {
+				// Structure mismatch: policy expects object, data has leaf
+				return false
+			}
+			if !matchRecursive(pVal, dMap) {
+				return false
+			}
+
+		case []interface{}:
+			// Leaf node (OR logic)
+			// dataVal must match one of the elements in pVal
+			matchedAny := false
+			for _, allowed := range pVal {
+				if matchValue(allowed, dataVal) {
+					matchedAny = true
+					break
+				}
+			}
+			if !matchedAny {
+				return false
+			}
+
+		default:
+			// If user sends raw value in policy (non-standard but possible in custom implementations)
+			if !matchValue(pVal, dataVal) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func matchValue(policyVal interface{}, dataVal interface{}) bool {
+	// Exact match check with type leniency if needed, but strict is safer.
+	// JSON unmarshal makes numbers float64.
+	return reflect.DeepEqual(policyVal, dataVal)
 }

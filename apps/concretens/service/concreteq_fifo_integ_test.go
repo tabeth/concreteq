@@ -44,7 +44,7 @@ func TestIntegration_ConcreteQ_FIFO(t *testing.T) {
 	}
 	nss.ClearQueue(context.Background())
 
-	dispatcher := NewDispatcher(nss, 1)
+	dispatcher := NewDispatcher(nss, 1, "")
 	dispatcher.Start(context.Background())
 	defer dispatcher.Stop()
 
@@ -63,7 +63,9 @@ func TestIntegration_ConcreteQ_FIFO(t *testing.T) {
 
 	// 4. Create FIFO Topic in Concretens
 	topicName := "fifo-topic-" + uuid.New().String() + ".fifo"
-	topic, _ := nss.CreateTopic(ctx, topicName, nil)
+	topic, _ := nss.CreateTopic(ctx, topicName, map[string]string{
+		"ContentBasedDeduplication": "true",
+	})
 	if !topic.FifoTopic {
 		t.Fatal("Topic should be FIFO")
 	}

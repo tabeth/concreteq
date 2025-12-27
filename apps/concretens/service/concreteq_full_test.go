@@ -48,7 +48,7 @@ func TestIntegration_ConcreteQ_Full(t *testing.T) {
 	nss.ClearQueue(context.Background())
 
 	// Dispatcher with 1 worker
-	dispatcher := NewDispatcher(nss, 1)
+	dispatcher := NewDispatcher(nss, 1, "")
 	dispatcher.Start(context.Background())
 	defer dispatcher.Stop()
 
