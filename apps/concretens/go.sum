@@ -1,0 +1,4 @@
+github.com/apple/foundationdb/bindings/go v0.0.0-20250501205732-f0ed69ea389a h1:3Ho3R3JAPU/fbtgFuYsZTBGgISoDqB0FxN5XabpzaEE=
+github.com/apple/foundationdb/bindings/go v0.0.0-20250501205732-f0ed69ea389a/go.mod h1:OMVSB21p9+xQUIqlGizHPZfjK+SHws1ht+ZytVDoz9U=
+github.com/google/uuid v1.6.0 h1:NIvaJDMOsjHA8n1jAhLSgzrAzy1Hgr+hNrb57e+94F0=
+github.com/google/uuid v1.6.0/go.mod h1:TIyPZe4MgqvfeYDBFedMoGGpEw/LqOeaOT+nhxU+yHo=

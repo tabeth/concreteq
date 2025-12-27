@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 
+	"github.com/tabeth/concreteq/server"
 	"github.com/tabeth/concreteq/store"
 
 	"github.com/go-chi/chi/v5"
@@ -37,7 +38,7 @@ func main() {
 	// The App struct is a container for the application's dependencies, like the data store.
 	// This is a form of dependency injection, making the handlers easier to test
 	// by allowing a mock store to be injected during tests.
-	app := &App{
+	app := &server.App{
 		Store: fdbStore,
 	}
 

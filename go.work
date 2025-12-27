@@ -4,6 +4,7 @@ use (
 	./apps/concretedb
 	./apps/concreteq
 	./apps/concretesql
+	./apps/concretens
 	./libs/fdb
 	./libs/kms
 	./apps/concretesql/benchmark/ycsb
