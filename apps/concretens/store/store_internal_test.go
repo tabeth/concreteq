@@ -49,20 +49,20 @@ func TestStore_TransactErrors(t *testing.T) {
 	}
 
 	// GetTopic
-	_, err = s.GetTopic(ctx, "arn:fail")
+	_, err = s.GetTopic(ctx, "arn:concretens:topic:valid-topic")
 	if err != mockErr {
 		t.Errorf("GetTopic: expected mock error, got %v", err)
 	}
 
 	// Subscribe
-	sub := &models.Subscription{TopicArn: "arn:t", Protocol: "p", Endpoint: "e"}
+	sub := &models.Subscription{TopicArn: "arn:concretens:topic:valid-topic", Protocol: "sqs", Endpoint: "e"}
 	_, err = s.Subscribe(ctx, sub)
 	if err != mockErr {
 		t.Errorf("Subscribe: expected mock error, got %v", err)
 	}
 
 	// PublishMessage
-	msg := &models.Message{TopicArn: "arn:t", Message: "m"}
+	msg := &models.Message{TopicArn: "arn:concretens:topic:valid-topic", Message: "m"}
 	err = s.PublishMessage(ctx, msg)
 	if err != mockErr {
 		t.Errorf("PublishMessage: expected mock error, got %v", err)
@@ -82,19 +82,20 @@ func TestStore_TransactErrors(t *testing.T) {
 	}
 
 	// GetSubscription
-	_, err = s.GetSubscription(ctx, "arn:s")
+	_, err = s.GetSubscription(ctx, "arn:concretens:topic:valid-topic:valid-uuid")
 	if err != mockErr {
 		t.Errorf("GetSubscription: expected mock error, got %v", err)
 	}
 
 	// GetMessage
-	_, err = s.GetMessage(ctx, "arn:t", "id")
+	// GetMessage likely validates Topic ARN too
+	_, err = s.GetMessage(ctx, "arn:concretens:topic:valid-topic", "id")
 	if err != mockErr {
 		t.Errorf("GetMessage: expected mock error, got %v", err)
 	}
 
 	// ListSubscriptionsByTopic
-	_, err = s.ListSubscriptionsByTopic(ctx, "arn:t")
+	_, err = s.ListSubscriptionsByTopic(ctx, "arn:concretens:topic:valid-topic")
 	if err != mockErr {
 		t.Errorf("ListSubscriptionsByTopic: expected mock error, got %v", err)
 	}

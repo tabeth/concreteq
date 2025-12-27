@@ -48,6 +48,35 @@ func TestStore_Validation(t *testing.T) {
 	if err == nil {
 		t.Error("Expected error for message > 256KB")
 	}
+
+	// 4. ARN Validation (Topics)
+	invalidArns := []string{"invalid", "arn:bad", "arn:concretens:topic:", "arn:concretens:topic:bad name"}
+	for _, arn := range invalidArns {
+		_, err := s.GetTopic(ctx, arn)
+		if err == nil {
+			t.Errorf("Expected error for invalid Topic ARN '%s'", arn)
+		}
+	}
+
+	// 5. ARN Validation (Subscriptions)
+	invalidSubArns := []string{"invalid", "arn:bad", "arn:concretens:topic:valid:bad-sub", "arn:concretens:topic:valid:invalid"}
+	// Valid has 4 parts: arn:concretens:topic:[topic]:[uuid]
+	// "arn:concretens:topic:valid:bad-sub" might technically pass regex if it matches `:[a-zA-Z0-9-]+$`.
+	// Regex: `^arn:concretens:topic:[a-zA-Z0-9._-]{1,256}:[a-zA-Z0-9-]+$`
+	// If topic is `valid`, then `arn:concretens:topic:valid:bad-sub` IS VALID if `bad-sub` is valid uuid-like string.
+	// I should use really bad strings.
+	invalidSubArns = []string{
+		"invalid",
+		"arn:concretens:topic:valid:", // missing ID
+		"arn:concretens:topic:valid:bad space",
+	}
+
+	for _, arn := range invalidSubArns {
+		err := s.DeleteSubscription(ctx, arn)
+		if err == nil {
+			t.Errorf("Expected error for invalid Subscription ARN '%s'", arn)
+		}
+	}
 }
 
 func TestStore_SystemAttributes(t *testing.T) {

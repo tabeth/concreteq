@@ -76,7 +76,25 @@ func NewStore(apiVersion int) (*Store, error) {
 	}, nil
 }
 
-var topicNameRegex = regexp.MustCompile(`^[a-zA-Z0-9._-]{1,256}$`)
+var (
+	topicNameRegex = regexp.MustCompile(`^[a-zA-Z0-9._-]{1,256}$`)
+	topicArnRegex  = regexp.MustCompile(`^arn:concretens:topic:[a-zA-Z0-9._-]{1,256}$`)
+	subArnRegex    = regexp.MustCompile(`^arn:concretens:topic:[a-zA-Z0-9._-]{1,256}:[a-zA-Z0-9-]+$`)
+)
+
+func validateTopicARN(arn string) error {
+	if !topicArnRegex.MatchString(arn) {
+		return fmt.Errorf("InvalidParameter: Topic ARN must match validation pattern")
+	}
+	return nil
+}
+
+func validateSubscriptionARN(arn string) error {
+	if !subArnRegex.MatchString(arn) {
+		return fmt.Errorf("InvalidParameter: Subscription ARN must match validation pattern")
+	}
+	return nil
+}
 
 func (s *Store) CreateTopic(ctx context.Context, name string, attributes map[string]string) (*models.Topic, error) {
 	if !topicNameRegex.MatchString(name) {
@@ -203,6 +221,9 @@ func (s *Store) SetTopicAttributes(ctx context.Context, topicArn string, attribu
 }
 
 func (s *Store) GetTopic(ctx context.Context, topicArn string) (*models.Topic, error) {
+	if err := validateTopicARN(topicArn); err != nil {
+		return nil, err
+	}
 	result, err := s.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
 		key := s.topicDir.Pack(tuple.Tuple{topicArn})
 		return tr.Get(key).Get()
@@ -225,6 +246,9 @@ func (s *Store) GetTopic(ctx context.Context, topicArn string) (*models.Topic, e
 }
 
 func (s *Store) Subscribe(ctx context.Context, sub *models.Subscription) (*models.Subscription, error) {
+	if err := validateTopicARN(sub.TopicArn); err != nil {
+		return nil, err
+	}
 	// 1. Validate Topic Exists
 	topic, err := s.GetTopic(ctx, sub.TopicArn)
 	if err != nil {
@@ -378,6 +402,9 @@ func (s *Store) ListSubscriptionsByTopic(ctx context.Context, topicArn string) (
 
 func (s *Store) PublishMessage(ctx context.Context, msg *models.Message) error {
 	// 1. Validate Topic
+	if err := validateTopicARN(msg.TopicArn); err != nil {
+		return err
+	}
 	topic, err := s.GetTopic(ctx, msg.TopicArn)
 	if err != nil {
 		return err
@@ -646,6 +673,8 @@ func (s *Store) PublishBatch(ctx context.Context, req *models.PublishBatchReques
 	return response, nil
 }
 
+// DeleteDeliveryTask removes a task from the queue (ack).
+// PublishBatch publishes multiple messages.
 func (s *Store) DeleteDeliveryTask(ctx context.Context, task *models.DeliveryTask) error {
 
 	_, err := s.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
