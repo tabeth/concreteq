@@ -125,7 +125,7 @@ func validateIntAttribute(valStr string, min, max int) error {
 	return nil
 }
 
-func validateAttributes(attributes map[string]string) error {
+func ValidateAttributes(attributes map[string]string) error {
 	for key, val := range attributes {
 		var err error
 		switch key {
@@ -210,18 +210,50 @@ func validateAttributes(attributes map[string]string) error {
 	return nil
 }
 
+// IsSqsMessageBodyValid checks if the message body contains only allowed SQS characters.
+// Allowed: #x9 | #xA | #xD | #x20 to #xD7FF | #xE000 to #xFFFD | #x10000 to #x10FFFF
+func IsSqsMessageBodyValid(body string) bool {
+	for _, r := range body {
+		if (r == 0x9 || r == 0xA || r == 0xD) ||
+			(r >= 0x20 && r <= 0xD7FF) ||
+			(r >= 0xE000 && r <= 0xFFFD) ||
+			(r >= 0x10000 && r <= 0x10FFFF) {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
 // --- Implementation of Handlers (Including Message Ops) ---
 
 func (app *App) SendMessageHandler(w http.ResponseWriter, r *http.Request) {
-	// Minimal stub implementation for handlers not fully ported in previous step
-	// Wait, we need full implementation for the test to pass.
-	// I'll assume standard implementation based on store interface.
+	// Limit body size before decoding
+	r.Body = http.MaxBytesReader(w, r.Body, 262144) // 256KB cap for read
+
 	var req models.SendMessageRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		app.sendErrorResponse(w, "InvalidRequest", "Invalid request body", http.StatusBadRequest)
+		app.sendErrorResponse(w, "InvalidParameterValue", "The message body must be between 1 and 262144 bytes long.", http.StatusBadRequest)
 		return
 	}
 	queueName := path.Base(req.QueueUrl)
+
+	// Validate Body Size (100KB strict limit for FDB single value compatibility)
+	// We map this to InvalidParameterValue SQS error
+	if len(req.MessageBody) == 0 {
+		app.sendErrorResponse(w, "InvalidParameterValue", "The message body must be between 1 and 262144 bytes long.", http.StatusBadRequest)
+		return
+	}
+	if len(req.MessageBody) > 100*1024 { // 100KB Limit
+		app.sendErrorResponse(w, "InvalidParameterValue", "The message body must be between 1 and 262144 bytes long (ConcreteQ Limit: 100KB).", http.StatusBadRequest)
+		return
+	}
+
+	// Validate Body Characters
+	if !IsSqsMessageBodyValid(req.MessageBody) {
+		app.sendErrorResponse(w, "InvalidMessageContents", "The message contains characters outside the allowed set.", http.StatusBadRequest)
+		return
+	}
 
 	// Store expects store.Message, models.SendMessageResponse comes from... store?
 	// Let's check store interface. It returns *models.SendMessageResponse.
@@ -230,6 +262,10 @@ func (app *App) SendMessageHandler(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if errors.Is(err, store.ErrQueueDoesNotExist) {
 			app.sendErrorResponse(w, "QueueDoesNotExist", "The specified queue does not exist.", http.StatusBadRequest)
+			return
+		}
+		if strings.Contains(err.Error(), "unsupported") { // DelaySeconds/FIFO mismatch etc
+			app.sendErrorResponse(w, "InvalidParameterValue", err.Error(), http.StatusBadRequest)
 			return
 		}
 		app.sendErrorResponse(w, "InternalFailure", err.Error(), http.StatusInternalServerError)
@@ -279,19 +315,164 @@ func (app *App) DeleteMessageHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-// ... (Implement other handlers identically or as needed for integration)
-// For the purpose of "concreteq-concretens work functions", we primarily need:
-// CreateQueue, SendMessage, ReceiveMessage (to verify delivery).
-// I will include stubs for others to satisfy compiler.
-
 func (app *App) SendMessageBatchHandler(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(http.StatusNotImplemented)
+	var req models.SendMessageBatchRequest
+	// SQS total payload limit 256KB
+	r.Body = http.MaxBytesReader(w, r.Body, 262144)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err.Error() == "http: request body too large" {
+			app.sendErrorResponse(w, "BatchRequestTooLong", "The length of all the messages put together is more than the limit.", http.StatusBadRequest)
+			return
+		}
+		app.sendErrorResponse(w, "InvalidRequest", "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if len(req.Entries) == 0 {
+		app.sendErrorResponse(w, "EmptyBatchRequest", "The batch request doesn't contain any entries.", http.StatusBadRequest)
+		return
+	}
+	if len(req.Entries) > 10 {
+		app.sendErrorResponse(w, "TooManyEntriesInBatchRequest", "The batch request contains more entries than permissible.", http.StatusBadRequest)
+		return
+	}
+
+	// Check for Duplicate IDs
+	ids := make(map[string]bool)
+	totalSize := 0
+	for _, entry := range req.Entries {
+		if ids[entry.Id] {
+			app.sendErrorResponse(w, "BatchEntryIdsNotDistinct", "Two or more batch entries in the request have the same Id.", http.StatusBadRequest)
+			return
+		}
+		ids[entry.Id] = true
+		totalSize += len(entry.MessageBody)
+		if len(entry.MessageBody) > 100*1024 {
+			app.sendErrorResponse(w, "InvalidParameterValue", "Message body must be less than 100KB", http.StatusBadRequest)
+			return
+		}
+	}
+
+	if totalSize > 262144 {
+		app.sendErrorResponse(w, "BatchRequestTooLong", "The length of all the messages put together is more than the limit.", http.StatusBadRequest)
+		return
+	}
+
+	queueName := path.Base(req.QueueUrl)
+	resp, err := app.Store.SendMessageBatch(r.Context(), queueName, &req)
+	if err != nil {
+		if errors.Is(err, store.ErrQueueDoesNotExist) {
+			app.sendErrorResponse(w, "QueueDoesNotExist", "The specified queue does not exist.", http.StatusBadRequest)
+			return
+		}
+		app.sendErrorResponse(w, "InternalFailure", err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
 }
+
 func (app *App) DeleteMessageBatchHandler(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(http.StatusNotImplemented)
+	var req models.DeleteMessageBatchRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		app.sendErrorResponse(w, "InvalidRequest", "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if len(req.Entries) == 0 {
+		app.sendErrorResponse(w, "EmptyBatchRequest", "The batch request doesn't contain any entries.", http.StatusBadRequest)
+		return
+	}
+	if len(req.Entries) > 10 {
+		app.sendErrorResponse(w, "TooManyEntriesInBatchRequest", "The batch request contains more entries than permissible.", http.StatusBadRequest)
+		return
+	}
+
+	ids := make(map[string]bool)
+	for _, entry := range req.Entries {
+		if ids[entry.Id] {
+			app.sendErrorResponse(w, "BatchEntryIdsNotDistinct", "Two or more batch entries in the request have the same Id.", http.StatusBadRequest)
+			return
+		}
+		ids[entry.Id] = true
+	}
+
+	queueName := path.Base(req.QueueUrl)
+	resp, err := app.Store.DeleteMessageBatch(r.Context(), queueName, req.Entries)
+	if err != nil {
+		if errors.Is(err, store.ErrQueueDoesNotExist) {
+			app.sendErrorResponse(w, "QueueDoesNotExist", "The specified queue does not exist.", http.StatusBadRequest)
+			return
+		}
+		app.sendErrorResponse(w, "InternalFailure", err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
 }
+
 func (app *App) ChangeMessageVisibilityBatchHandler(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(http.StatusNotImplemented)
+	var req models.ChangeMessageVisibilityBatchRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		app.sendErrorResponse(w, "InvalidRequest", "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if len(req.Entries) == 0 {
+		app.sendErrorResponse(w, "EmptyBatchRequest", "The batch request doesn't contain any entries.", http.StatusBadRequest)
+		return
+	}
+	if len(req.Entries) > 10 {
+		app.sendErrorResponse(w, "TooManyEntriesInBatchRequest", "The batch request contains more entries than permissible.", http.StatusBadRequest)
+		return
+	}
+
+	ids := make(map[string]bool)
+	for _, entry := range req.Entries {
+		if ids[entry.Id] {
+			app.sendErrorResponse(w, "BatchEntryIdsNotDistinct", "Two or more batch entries in the request have the same Id.", http.StatusBadRequest)
+			return
+		}
+		ids[entry.Id] = true
+	}
+
+	queueName := path.Base(req.QueueUrl)
+	resp, err := app.Store.ChangeMessageVisibilityBatch(r.Context(), queueName, req.Entries)
+	if err != nil {
+		if errors.Is(err, store.ErrQueueDoesNotExist) {
+			app.sendErrorResponse(w, "QueueDoesNotExist", "queue does not exist", http.StatusOK) // SQS Batch returns 200 with failed entries usually? But if queue missing, maybe 400? Spec says 200 with error entries for batch. But tests expect 200 with Failed entry.
+			// However, Store returns error only if totally failed?
+			// Let's assume Store handles partials and returns error for catastrophic failure.
+			// But check test "Full batch failure due to non-existent queue".
+			// It expects [{"Id":"1","Code":"QueueDoesNotExist"}] in Failed list.
+			// So wrapper should probably catch ErrQueueDoesNotExist and format it as batch failure?
+			// OR Store should return a Response with failures.
+			// If store returns err, it's failed.
+			// The test expects: "Successful":[],"Failed":[{"Id":"1","Code":"QueueDoesNotExist"...}]
+			// So we should construct that response here if error is QueueDoesNotExist.
+			if errors.Is(err, store.ErrQueueDoesNotExist) {
+				failed := make([]models.BatchResultErrorEntry, len(req.Entries))
+				for i, e := range req.Entries {
+					failed[i] = models.BatchResultErrorEntry{
+						Id:          e.Id,
+						Code:        "QueueDoesNotExist",
+						Message:     "queue does not exist",
+						SenderFault: false,
+					}
+				}
+				json.NewEncoder(w).Encode(models.ChangeMessageVisibilityBatchResponse{Failed: failed})
+				return
+			}
+			app.sendErrorResponse(w, "InternalFailure", err.Error(), http.StatusInternalServerError)
+			return
+		}
+	} // end if err != nil
+
+	// If no error, we have a response
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
 }
 func (app *App) AddPermissionHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNotImplemented)
@@ -337,6 +518,42 @@ func (app *App) CreateQueueHandler(w http.ResponseWriter, r *http.Request) {
 		app.sendErrorResponse(w, "InvalidRequest", "Invalid request body", http.StatusBadRequest)
 		return
 	}
+
+	// Validate Queue Name
+	if len(req.QueueName) == 0 || len(req.QueueName) > 80 {
+		app.sendErrorResponse(w, "InvalidParameterValue", "Invalid queue name: Can only include alphanumeric characters, hyphens, and underscores. 1 to 80 in length.", http.StatusBadRequest)
+		return
+	}
+	for _, char := range req.QueueName {
+		if !((char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') || (char >= '0' && char <= '9') || char == '-' || char == '_') {
+			app.sendErrorResponse(w, "InvalidParameterValue", "Invalid queue name: Can only include alphanumeric characters, hyphens, and underscores. 1 to 80 in length.", http.StatusBadRequest)
+			return
+		}
+	}
+
+	// Validate Attributes
+	if err := ValidateAttributes(req.Attributes); err != nil {
+		// Map backend validation errors to SQS error types
+		if strings.Contains(err.Error(), "invalid value for") {
+			app.sendErrorResponse(w, "InvalidAttributeName", err.Error(), http.StatusBadRequest)
+			return
+		}
+		app.sendErrorResponse(w, "InvalidParameterValue", err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// FIFO Validation
+	isFifo := strings.HasSuffix(req.QueueName, ".fifo")
+	isFifoAttr := req.Attributes["FifoQueue"] == "true"
+	if isFifo && !isFifoAttr {
+		app.sendErrorResponse(w, "InvalidParameterValue", "Queue name ends in .fifo but FifoQueue attribute is not 'true'", http.StatusBadRequest)
+		return
+	}
+	if !isFifo && isFifoAttr {
+		app.sendErrorResponse(w, "InvalidParameterValue", "FifoQueue attribute is 'true' but queue name does not end in .fifo", http.StatusBadRequest)
+		return
+	}
+
 	existingAttributes, err := app.Store.CreateQueue(r.Context(), req.QueueName, req.Attributes, req.Tags)
 	if err != nil {
 		app.sendErrorResponse(w, "InternalFailure", "Failed to create queue", http.StatusInternalServerError)
@@ -349,7 +566,15 @@ func (app *App) CreateQueueHandler(w http.ResponseWriter, r *http.Request) {
 	queueURL := fmt.Sprintf("%s://%s/queues/%s", scheme, r.Host, req.QueueName)
 	resp := models.CreateQueueResponse{QueueURL: queueURL}
 	w.Header().Set("Content-Type", "application/json")
+
 	if existingAttributes != nil {
+		// Check if attributes match
+		for k, v := range req.Attributes {
+			if existingVal, ok := existingAttributes[k]; ok && existingVal != v {
+				app.sendErrorResponse(w, "QueueNameExists", "A queue with this name already exists with different attributes.", http.StatusBadRequest)
+				return
+			}
+		}
 		w.WriteHeader(http.StatusOK)
 	} else {
 		w.WriteHeader(http.StatusCreated)

@@ -21,6 +21,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tabeth/concreteq/models"
+	"github.com/tabeth/concreteq/server"
 	"github.com/tabeth/concreteq/store"
 	"github.com/tabeth/kiroku-core/libs/fdb/fdbtest"
 )
@@ -62,7 +63,7 @@ func setupIntegrationTest(t *testing.T) (*testApp, func()) {
 	require.NoError(t, err)
 
 	// --- Server Setup ---
-	app := &App{
+	app := &server.App{
 		Store: fdbStore,
 	}
 
@@ -859,6 +860,73 @@ func TestIntegration_NewFeatures(t *testing.T) {
 				t.Fatal("Timeout waiting for receiver to return")
 			}
 		})
+	})
+
+	t.Run("MessageRetention", func(t *testing.T) {
+		queueName := "retention-queue"
+		// Direct store create to bypass server validation min 60s
+		// Set retention to 1 second
+		attr := map[string]string{"MessageRetentionPeriod": "1"}
+		_, err := app.store.CreateQueue(t.Context(), queueName, attr, nil)
+		require.NoError(t, err)
+
+		// Send Message
+		_, err = app.store.SendMessage(t.Context(), queueName, &models.SendMessageRequest{MessageBody: "expired"})
+		require.NoError(t, err)
+
+		// Wait 2s
+		time.Sleep(2 * time.Second)
+
+		// Receive -> Should be empty
+		resp, err := app.store.ReceiveMessage(t.Context(), queueName, &models.ReceiveMessageRequest{MaxNumberOfMessages: 1})
+		require.NoError(t, err)
+		assert.Empty(t, resp.Messages)
+	})
+
+	t.Run("MessageSizeLimit", func(t *testing.T) {
+		// Test via HTTP to verify Server validation
+		queueName := "limit-queue"
+		createBody := fmt.Sprintf(`{"QueueName": "%s"}`, queueName)
+		http.Post(app.baseURL+"/", "application/json", strings.NewReader(createBody))
+
+		largeBody := strings.Repeat("a", 100*1024+1)
+		sendBody := fmt.Sprintf(`{"QueueUrl": "%s/queues/%s", "MessageBody": "%s"}`, app.baseURL, queueName, largeBody)
+
+		req, _ := http.NewRequest("POST", app.baseURL+"/", strings.NewReader(sendBody))
+		req.Header.Set("X-Amz-Target", "AmazonSQS.SendMessage")
+		resp, err := http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		defer resp.Body.Close()
+
+		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+
+		var errResp models.ErrorResponse
+		json.NewDecoder(resp.Body).Decode(&errResp)
+		assert.Equal(t, "InvalidParameterValue", errResp.Type)
+		assert.Contains(t, errResp.Message, "100KB")
+	})
+
+	t.Run("BatchSizeLimit", func(t *testing.T) {
+		queueName := "limit-queue" // reuse queue
+
+		// Create 11 entries
+		var entries []string
+		for i := 0; i < 11; i++ {
+			entries = append(entries, fmt.Sprintf(`{"Id": "%d", "MessageBody": "msg"}`, i))
+		}
+		batchBody := fmt.Sprintf(`{"QueueUrl": "%s/queues/%s", "Entries": [%s]}`, app.baseURL, queueName, strings.Join(entries, ","))
+
+		req, _ := http.NewRequest("POST", app.baseURL+"/", strings.NewReader(batchBody))
+		req.Header.Set("X-Amz-Target", "AmazonSQS.SendMessageBatch")
+		resp, err := http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		defer resp.Body.Close()
+
+		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+
+		var errResp models.ErrorResponse
+		json.NewDecoder(resp.Body).Decode(&errResp)
+		assert.Equal(t, "TooManyEntriesInBatchRequest", errResp.Type)
 	})
 }
 

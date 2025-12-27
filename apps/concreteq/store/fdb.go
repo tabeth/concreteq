@@ -1111,6 +1111,13 @@ func (s *FDBStore) receiveStandardMessages(ctx context.Context, tr fdb.Transacti
 			}
 		}
 	}
+	// Parse MessageRetentionPeriod
+	var retentionPeriod int64 = 345600 // Default 4 days
+	if val, ok := queueAttributes["MessageRetentionPeriod"]; ok {
+		if v, err := strconv.ParseInt(val, 10, 64); err == nil {
+			retentionPeriod = v
+		}
+	}
 
 	var receivedMessages []models.ResponseMessage
 	now := time.Now().Unix()
@@ -1149,6 +1156,14 @@ func (s *FDBStore) receiveStandardMessages(ctx context.Context, tr fdb.Transacti
 			}
 			var msg models.Message
 			if err := json.Unmarshal(msgBytes, &msg); err != nil {
+				continue
+			}
+
+			// Check for Message Retention
+			if (now - msg.SentTimestamp) > retentionPeriod {
+				// Expired: Delete message and index entry
+				tr.Clear(messagesDir.Pack(tuple.Tuple{messageID}))
+				tr.Clear(kv.Key)
 				continue
 			}
 
@@ -1329,6 +1344,13 @@ func (s *FDBStore) receiveFifoMessages(ctx context.Context, tr fdb.Transaction, 
 			}
 		}
 	}
+	// Parse MessageRetentionPeriod
+	var retentionPeriod int64 = 345600 // Default 4 days
+	if val, ok := queueAttributes["MessageRetentionPeriod"]; ok {
+		if v, err := strconv.ParseInt(val, 10, 64); err == nil {
+			retentionPeriod = v
+		}
+	}
 
 	now := time.Now().Unix()
 
@@ -1446,6 +1468,14 @@ func (s *FDBStore) receiveFifoMessages(ctx context.Context, tr fdb.Transaction, 
 		}
 		var msg models.Message
 		if err := json.Unmarshal(msgBytes, &msg); err != nil {
+			continue
+		}
+
+		// Check for Message Retention
+		if (now - msg.SentTimestamp) > retentionPeriod {
+			// Expired: Delete message and index entry
+			tr.Clear(messagesDir.Pack(tuple.Tuple{messageID}))
+			tr.Clear(kv.Key)
 			continue
 		}
 

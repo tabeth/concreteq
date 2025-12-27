@@ -13,6 +13,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/tabeth/concreteq/models"
+	"github.com/tabeth/concreteq/server"
 	"github.com/tabeth/concreteq/store"
 	"github.com/tabeth/kiroku-core/libs/fdb/fdbtest"
 )
@@ -45,14 +46,14 @@ import (
    - Regex Fuzzing for ARNs, Queue Names.
 */
 
-func setupHandlerTest(t *testing.T) (*App, *store.FDBStore) {
+func setupHandlerTest(t *testing.T) (*server.App, *store.FDBStore) {
 	// Use a real isolated FDB store for robust verification
 	fdbtest.SkipIfFDBUnavailable(t)
 	s, err := store.NewFDBStoreAtPath("handler_verification_" + randomString(10))
 	if err != nil {
 		t.Skip("FDB not available")
 	}
-	app := &App{Store: s}
+	app := &server.App{Store: s}
 	return app, s
 }
 
@@ -100,7 +101,7 @@ func TestProperty_CreateQueue_NameValidation(t *testing.T) {
 	}
 }
 
-func verifyCreateQueueFails(app *App, name string) bool {
+func verifyCreateQueueFails(app *server.App, name string) bool {
 	reqBody, _ := json.Marshal(models.CreateQueueRequest{QueueName: name})
 	req := httptest.NewRequest("POST", "/", bytes.NewReader(reqBody))
 	req.Header.Set("X-Amz-Target", "AmazonSQS.CreateQueue")
@@ -616,7 +617,7 @@ func TestFuzz_SendMessage_Body(t *testing.T) {
 			return w.Code == http.StatusBadRequest
 		}
 		// 3. Invalid characters -> 400
-		if !isSqsMessageBodyValid(body) {
+		if !server.IsSqsMessageBodyValid(body) {
 			return w.Code == http.StatusBadRequest
 		}
 

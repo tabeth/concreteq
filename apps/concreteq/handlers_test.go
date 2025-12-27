@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/tabeth/concreteq/models"
+	"github.com/tabeth/concreteq/server"
 	"github.com/tabeth/concreteq/store"
 
 	"github.com/go-chi/chi/v5"
@@ -128,7 +129,7 @@ func TestCreateQueueHandler(t *testing.T) {
 			mockStore := new(MockStore)
 			tc.mockSetup(mockStore)
 
-			app := &App{Store: mockStore}
+			app := &server.App{Store: mockStore}
 			r := chi.NewRouter()
 			app.RegisterSQSHandlers(r)
 
@@ -240,7 +241,7 @@ func TestTaggingHandlers(t *testing.T) {
 			mockStore := new(MockStore)
 			tc.mockSetup(mockStore)
 
-			app := &App{Store: mockStore}
+			app := &server.App{Store: mockStore}
 			r := chi.NewRouter()
 			app.RegisterSQSHandlers(r)
 
@@ -328,7 +329,7 @@ func TestSetQueueAttributesHandler(t *testing.T) {
 			mockStore := new(MockStore)
 			tc.mockSetup(mockStore)
 
-			app := &App{Store: mockStore}
+			app := &server.App{Store: mockStore}
 			r := chi.NewRouter()
 			app.RegisterSQSHandlers(r)
 
@@ -387,7 +388,7 @@ func TestGetQueueUrlHandler(t *testing.T) {
 			mockStore := new(MockStore)
 			tc.mockSetup(mockStore)
 
-			app := &App{Store: mockStore}
+			app := &server.App{Store: mockStore}
 			r := chi.NewRouter()
 			app.RegisterSQSHandlers(r)
 
@@ -486,7 +487,7 @@ func TestChangeMessageVisibilityBatchHandler(t *testing.T) {
 			mockStore := new(MockStore)
 			tc.mockSetup(mockStore)
 
-			app := &App{Store: mockStore}
+			app := &server.App{Store: mockStore}
 			r := chi.NewRouter()
 			app.RegisterSQSHandlers(r)
 
@@ -513,7 +514,7 @@ func TestUnimplementedHandlers(t *testing.T) {
 	for _, target := range unimplementedTargets {
 		t.Run(target, func(t *testing.T) {
 			mockStore := new(MockStore)
-			app := &App{Store: mockStore}
+			app := &server.App{Store: mockStore}
 			r := chi.NewRouter()
 			app.RegisterSQSHandlers(r)
 
@@ -641,7 +642,7 @@ func TestGetQueueAttributesHandler(t *testing.T) {
 			mockStore := new(MockStore)
 			tc.mockSetup(mockStore)
 
-			app := &App{Store: mockStore}
+			app := &server.App{Store: mockStore}
 			r := chi.NewRouter()
 			app.RegisterSQSHandlers(r)
 
@@ -731,7 +732,7 @@ func TestDeleteMessageBatchHandler(t *testing.T) {
 			mockStore := new(MockStore)
 			tc.mockSetup(mockStore)
 
-			app := &App{Store: mockStore}
+			app := &server.App{Store: mockStore}
 			r := chi.NewRouter()
 			app.RegisterSQSHandlers(r)
 
@@ -862,7 +863,7 @@ func TestSendMessageBatchHandler(t *testing.T) {
 			mockStore := new(MockStore)
 			tc.mockSetup(mockStore)
 
-			app := &App{Store: mockStore}
+			app := &server.App{Store: mockStore}
 			r := chi.NewRouter()
 			app.RegisterSQSHandlers(r)
 
@@ -939,7 +940,7 @@ func TestDeleteMessageHandler(t *testing.T) {
 			mockStore := new(MockStore)
 			tc.mockSetup(mockStore)
 
-			app := &App{Store: mockStore}
+			app := &server.App{Store: mockStore}
 			r := chi.NewRouter()
 			app.RegisterSQSHandlers(r)
 
@@ -1062,7 +1063,7 @@ func TestReceiveMessageHandler(t *testing.T) {
 			mockStore := new(MockStore)
 			tc.mockSetup(mockStore)
 
-			app := &App{Store: mockStore}
+			app := &server.App{Store: mockStore}
 			r := chi.NewRouter()
 			app.RegisterSQSHandlers(r)
 
@@ -1150,7 +1151,7 @@ func TestPurgeQueueHandler(t *testing.T) {
 			mockStore := new(MockStore)
 			tc.mockSetup(mockStore)
 
-			app := &App{Store: mockStore}
+			app := &server.App{Store: mockStore}
 			r := chi.NewRouter()
 			app.RegisterSQSHandlers(r)
 
@@ -1228,7 +1229,7 @@ func TestDeleteQueueHandler(t *testing.T) {
 			mockStore := new(MockStore)
 			tc.mockSetup(mockStore)
 
-			app := &App{Store: mockStore}
+			app := &server.App{Store: mockStore}
 			r := chi.NewRouter()
 			app.RegisterSQSHandlers(r)
 
@@ -1340,7 +1341,7 @@ func TestListQueuesHandler(t *testing.T) {
 			mockStore := new(MockStore)
 			tc.mockSetup(mockStore)
 
-			app := &App{Store: mockStore}
+			app := &server.App{Store: mockStore}
 			r := chi.NewRouter()
 			app.RegisterSQSHandlers(r)
 
@@ -1503,7 +1504,7 @@ func TestSendMessageHandler(t *testing.T) {
 			mockStore := new(MockStore)
 			tc.mockSetup(mockStore)
 
-			app := &App{Store: mockStore}
+			app := &server.App{Store: mockStore}
 			r := chi.NewRouter()
 			app.RegisterSQSHandlers(r)
 
@@ -1621,7 +1622,7 @@ func TestChangeMessageVisibilityHandler(t *testing.T) {
 			mockStore := new(MockStore)
 			tc.mockSetup(mockStore)
 
-			app := &App{Store: mockStore}
+			app := &server.App{Store: mockStore}
 			r := chi.NewRouter()
 			app.RegisterSQSHandlers(r)
 
@@ -1696,7 +1697,7 @@ func TestListDeadLetterSourceQueuesHandler(t *testing.T) {
 			mockStore := new(MockStore)
 			tc.mockSetup(mockStore)
 
-			app := &App{Store: mockStore}
+			app := &server.App{Store: mockStore}
 			r := chi.NewRouter()
 			app.RegisterSQSHandlers(r)
 
@@ -1815,13 +1816,13 @@ func TestValidateAttributes(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := validateAttributes(tt.attributes)
+			err := server.ValidateAttributes(tt.attributes)
 			if (err != nil) != tt.wantErr {
-				t.Errorf("validateAttributes() error = %v, wantErr %v", err, tt.wantErr)
+				t.Errorf("server.ValidateAttributes() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
 			if tt.wantErr && err != nil && !strings.Contains(err.Error(), tt.errContains) {
-				t.Errorf("validateAttributes() error = %v, want error containing %v", err, tt.errContains)
+				t.Errorf("server.ValidateAttributes() error = %v, want error containing %v", err, tt.errContains)
 			}
 		})
 	}
