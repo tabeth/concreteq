@@ -42,6 +42,7 @@ type Store struct {
 	topicDir directory.DirectorySubspace
 	subDir   directory.DirectorySubspace
 	dedupDir directory.DirectorySubspace // Subspace for deduplication
+	tagDir   directory.DirectorySubspace // Subspace for tags
 }
 
 // openDBFunc is a variable to allow mocking in tests
@@ -67,12 +68,17 @@ func NewStore(apiVersion int) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
+	tagDir, err := directory.CreateOrOpen(db, []string{"concretens", "tags"}, nil)
+	if err != nil {
+		return nil, err
+	}
 
 	return &Store{
 		db:       &RealTransactor{db: db},
 		topicDir: topicDir,
 		subDir:   subDir,
 		dedupDir: dedupDir,
+		tagDir:   tagDir,
 	}, nil
 }
 
@@ -758,6 +764,9 @@ func (s *Store) ClearQueue(ctx context.Context) error {
 }
 
 func (s *Store) GetSubscription(ctx context.Context, subscriptionArn string) (*models.Subscription, error) {
+	if err := validateSubscriptionARN(subscriptionArn); err != nil {
+		return nil, err
+	}
 	sub, err := s.db.ReadTransact(func(rtr fdb.ReadTransaction) (interface{}, error) {
 		subKey := s.subDir.Pack(tuple.Tuple{subscriptionArn})
 		data, err := rtr.Get(subKey).Get()
@@ -905,6 +914,9 @@ func (s *Store) DeleteTopic(ctx context.Context, topicArn string) error {
 
 // DeleteSubscription deletes a subscription.
 func (s *Store) DeleteSubscription(ctx context.Context, subscriptionArn string) error {
+	if err := validateSubscriptionARN(subscriptionArn); err != nil {
+		return err
+	}
 	// We need the topicArn to delete the index.
 	sub, err := s.GetSubscription(ctx, subscriptionArn)
 	if err != nil {
@@ -1007,4 +1019,95 @@ func (s *Store) ListSubscriptions(ctx context.Context) ([]*models.Subscription, 
 		return nil, err
 	}
 	return subs.([]*models.Subscription), nil
+}
+
+// TagResource adds tags to a resource (topic or subscription).
+func (s *Store) TagResource(ctx context.Context, resourceArn string, tags []models.Tag) error {
+	// Validate ARN
+	if err := validateTopicARN(resourceArn); err != nil {
+		if err := validateSubscriptionARN(resourceArn); err != nil {
+			return fmt.Errorf("InvalidParameter: Resource ARN not valid topic or subscription ARN")
+		}
+	}
+
+	_, err := s.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
+		// Key: tagDir + resourceArn + tagKey -> tagValue
+		for _, tag := range tags {
+			key := s.tagDir.Pack(tuple.Tuple{resourceArn, tag.Key})
+			tr.Set(key, []byte(tag.Value))
+		}
+		return nil, nil
+	})
+	return err
+}
+
+// UntagResource removes tags from a resource.
+func (s *Store) UntagResource(ctx context.Context, resourceArn string, tagKeys []string) error {
+	// Validate ARN
+	if err := validateTopicARN(resourceArn); err != nil {
+		if err := validateSubscriptionARN(resourceArn); err != nil {
+			return fmt.Errorf("InvalidParameter: Resource ARN not valid topic or subscription ARN")
+		}
+	}
+
+	_, err := s.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
+		for _, tagKey := range tagKeys {
+			key := s.tagDir.Pack(tuple.Tuple{resourceArn, tagKey})
+			tr.Clear(key)
+		}
+		return nil, nil
+	})
+	return err
+}
+
+// ListTagsForResource lists all tags for a resource.
+func (s *Store) ListTagsForResource(ctx context.Context, resourceArn string) ([]models.Tag, error) {
+	// Validate ARN
+	if err := validateTopicARN(resourceArn); err != nil {
+		if err := validateSubscriptionARN(resourceArn); err != nil {
+			return nil, fmt.Errorf("InvalidParameter: Resource ARN not valid topic or subscription ARN")
+		}
+	}
+
+	result, err := s.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
+		// Range scan for tags under resourceArn
+		// Standard tuple prefix scan works because resourceArn is the first element
+		prefix := s.tagDir.Pack(tuple.Tuple{resourceArn})
+		r, err := fdb.PrefixRange(prefix)
+		if err != nil {
+			return nil, err
+		}
+
+		kvs, err := tr.GetRange(r, fdb.RangeOptions{}).GetSliceWithError()
+		if err != nil {
+			return nil, err
+		}
+
+		var tags []models.Tag
+		for _, kv := range kvs {
+			// Key is: tagDir + resourceArn + tagKey
+			// Unpack to get tagKey
+			t, err := s.tagDir.Unpack(kv.Key)
+			if err != nil {
+				continue
+			}
+			// t should be (resourceArn, tagKey)
+			if len(t) < 2 {
+				continue
+			}
+			tagKey, ok := t[1].(string)
+			if !ok {
+				continue
+			}
+			tags = append(tags, models.Tag{
+				Key:   tagKey,
+				Value: string(kv.Value),
+			})
+		}
+		return tags, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return result.([]models.Tag), nil
 }

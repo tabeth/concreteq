@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/kiroku-inc/kiroku-core/apps/concretens/models"
 	"github.com/tabeth/kiroku-core/libs/fdb/fdbtest"
@@ -22,7 +23,7 @@ func TestStore_FIFO_StrictOrdering_Serial(t *testing.T) {
 		t.Fatalf("Failed to create store: %v", err)
 	}
 	ctx := context.Background()
-	topicName := "fifo-serial.fifo"
+	topicName := fmt.Sprintf("fifo-serial-%d.fifo", time.Now().UnixNano())
 	topic, err := s.CreateTopic(ctx, topicName, map[string]string{"ContentBasedDeduplication": "true"})
 	if err != nil {
 		t.Fatalf("CreateTopic failed: %v", err)
@@ -36,6 +37,15 @@ func TestStore_FIFO_StrictOrdering_Serial(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("Subscribe failed: %v", err)
+	}
+
+	// Verify Subscription Exists
+	subs, err := s.ListSubscriptionsByTopic(ctx, topic.TopicArn)
+	if err != nil {
+		t.Fatalf("ListSubscriptionsByTopic failed: %v", err)
+	}
+	if len(subs) != 1 {
+		t.Fatalf("Expected 1 subscription, got %d. TopicArn: %s", len(subs), topic.TopicArn)
 	}
 
 	// Publish Serially
@@ -57,25 +67,25 @@ func TestStore_FIFO_StrictOrdering_Serial(t *testing.T) {
 	// So `tasks` slice IS ordered by key.
 	// We check if `tasks` order matches receipt order.
 
-	// Retrieve all
+	// Retrieve all with timeout
+	timeout := time.After(5 * time.Second)
 	var allTasks []*models.DeliveryTask
+
 	for len(allTasks) < numMessages {
+		select {
+		case <-timeout:
+			t.Fatalf("Timeout waiting for tasks. Got %d/%d", len(allTasks), numMessages)
+		default:
+		}
+
 		tasks, err := s.PollDeliveryTasks(ctx, 100)
 		if err != nil {
 			t.Fatalf("Poll failed: %v", err)
 		}
 		if len(tasks) == 0 {
-			break
+			time.Sleep(10 * time.Millisecond)
+			continue
 		}
-		// Since Poll locks tasks (re-inserts with future timestamp), we might get duplicates if we don't ack?
-		// Poll extends visibility. So they disappear from "Visible Now" view.
-		// Wait, `PollDeliveryTasks` output order?
-		// Iteration over range -> Ordered.
-
-		// For verification, we just collect them.
-
-		// Note: Poll extends visibility by deleting and re-inserting with new timestamp.
-		// So subsequent polls won't see them. safe.
 		allTasks = append(allTasks, tasks...)
 	}
 

@@ -23,6 +23,9 @@ type Store interface {
 	GetSubscriptionAttributes(ctx context.Context, subArn string) (map[string]string, error)
 	SetSubscriptionAttributes(ctx context.Context, subArn string, attributes map[string]string) error
 	PublishBatch(ctx context.Context, req *models.PublishBatchRequest) (*models.PublishBatchResponse, error)
+	TagResource(ctx context.Context, resourceArn string, tags []models.Tag) error
+	UntagResource(ctx context.Context, resourceArn string, tagKeys []string) error
+	ListTagsForResource(ctx context.Context, resourceArn string) ([]models.Tag, error)
 }
 
 type Server struct {
@@ -341,6 +344,69 @@ func (s *Server) PublishBatchHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
+}
+
+func (s *Server) TagResourceHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req models.TagResourceRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request", http.StatusBadRequest)
+		return
+	}
+
+	if err := s.store.TagResource(r.Context(), req.ResourceArn, req.Tags); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+}
+
+func (s *Server) UntagResourceHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req models.UntagResourceRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request", http.StatusBadRequest)
+		return
+	}
+
+	if err := s.store.UntagResource(r.Context(), req.ResourceArn, req.TagKeys); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+}
+
+func (s *Server) ListTagsForResourceHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req models.ListTagsForResourceRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request", http.StatusBadRequest)
+		return
+	}
+
+	tags, err := s.store.ListTagsForResource(r.Context(), req.ResourceArn)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	resp := models.ListTagsForResourceResponse{Tags: tags}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
 }

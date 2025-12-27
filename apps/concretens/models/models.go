@@ -104,3 +104,31 @@ type Message struct {
 	MessageDeduplicationId string            `json:"messageDeduplicationId,omitempty"` // FIFO
 	SequenceNumber         string            `json:"sequenceNumber,omitempty"`         // FIFO: Simulated
 }
+
+// Tag represents a key-value pair.
+type Tag struct {
+	Key   string `json:"key"`
+	Value string `json:"value"`
+}
+
+// TagResourceRequest represents a request to add tags to a resource.
+type TagResourceRequest struct {
+	ResourceArn string `json:"resourceArn"`
+	Tags        []Tag  `json:"tags"`
+}
+
+// UntagResourceRequest represents a request to remove tags from a resource.
+type UntagResourceRequest struct {
+	ResourceArn string   `json:"resourceArn"`
+	TagKeys     []string `json:"tagKeys"`
+}
+
+// ListTagsForResourceRequest represents a request to list tags for a resource.
+type ListTagsForResourceRequest struct {
+	ResourceArn string `json:"resourceArn"`
+}
+
+// ListTagsForResourceResponse represents the response containing tags.
+type ListTagsForResourceResponse struct {
+	Tags []Tag `json:"tags"`
+}

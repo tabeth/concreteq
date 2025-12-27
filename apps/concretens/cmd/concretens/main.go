@@ -29,7 +29,10 @@ func main() {
 	http.HandleFunc("/deleteSubscription", srv.DeleteSubscriptionHandler)
 	http.HandleFunc("/listTopics", srv.ListTopicsHandler)
 	http.HandleFunc("/listSubscriptions", srv.ListSubscriptionsHandler)
-	http.HandleFunc("/publishBatch", srv.PublishBatchHandler) // Not standard SNS action, but consistent with rest
+	http.HandleFunc("/publishBatch", srv.PublishBatchHandler)
+	http.HandleFunc("/tagResource", srv.TagResourceHandler)
+	http.HandleFunc("/untagResource", srv.UntagResourceHandler)
+	http.HandleFunc("/listTagsForResource", srv.ListTagsForResourceHandler)
 
 	port := os.Getenv("PORT")
 	if port == "" {

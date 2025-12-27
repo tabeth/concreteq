@@ -362,6 +362,9 @@ type MockStore struct {
 	SetSubscriptionAttributesFunc func(ctx context.Context, subArn string, attributes map[string]string) error
 	ConfirmSubscriptionFunc       func(ctx context.Context, topicArn, token string) (*models.Subscription, error)
 	PublishBatchFunc              func(ctx context.Context, req *models.PublishBatchRequest) (*models.PublishBatchResponse, error)
+	TagResourceFunc               func(ctx context.Context, resourceArn string, tags []models.Tag) error
+	UntagResourceFunc             func(ctx context.Context, resourceArn string, tagKeys []string) error
+	ListTagsForResourceFunc       func(ctx context.Context, resourceArn string) ([]models.Tag, error)
 }
 
 func (m *MockStore) CreateTopic(ctx context.Context, name string, attributes map[string]string) (*models.Topic, error) {
@@ -465,6 +468,27 @@ func (m *MockStore) SetSubscriptionAttributes(ctx context.Context, subArn string
 func (m *MockStore) PublishBatch(ctx context.Context, req *models.PublishBatchRequest) (*models.PublishBatchResponse, error) {
 	if m.PublishBatchFunc != nil {
 		return m.PublishBatchFunc(ctx, req)
+	}
+	return &models.PublishBatchResponse{}, nil
+}
+
+func (m *MockStore) TagResource(ctx context.Context, resourceArn string, tags []models.Tag) error {
+	if m.TagResourceFunc != nil {
+		return m.TagResourceFunc(ctx, resourceArn, tags)
+	}
+	return nil
+}
+
+func (m *MockStore) UntagResource(ctx context.Context, resourceArn string, tagKeys []string) error {
+	if m.UntagResourceFunc != nil {
+		return m.UntagResourceFunc(ctx, resourceArn, tagKeys)
+	}
+	return nil
+}
+
+func (m *MockStore) ListTagsForResource(ctx context.Context, resourceArn string) ([]models.Tag, error) {
+	if m.ListTagsForResourceFunc != nil {
+		return m.ListTagsForResourceFunc(ctx, resourceArn)
 	}
 	return nil, nil
 }
