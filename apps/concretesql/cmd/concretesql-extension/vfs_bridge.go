@@ -55,7 +55,6 @@ func toSQLiteError(err error) C.int {
 		return 101 // SQLITE_DONE (sometimes used for EOF?) Or SQLITE_IOERR_SHORT_READ
 		// SQLite expects Read to return SQLITE_IOERR_SHORT_READ if not enough data
 		// But our ReadAt wraps to strict size.
-		return 10 // SQLITE_IOERR
 	}
 	// Simple mapping
 	return 10 // SQLITE_IOERR
@@ -98,6 +97,7 @@ func go_vfs_open(name *C.char, fileOut *unsafe.Pointer, flags C.int, outFlags *C
 
 	// We pass ID as void*
 	// safe because int fits in pointer (usually, Cgo Handle pattern is better but simple map ID works)
+	// nolint:unsafeptr // Intentional casting for C callback context
 	*fileOut = unsafe.Pointer(uintptr(id))
 
 	if outFlags != nil {
@@ -220,10 +220,9 @@ func go_file_read(p unsafe.Pointer, buf unsafe.Pointer, iAmt C.int, iOfst C.long
 		// Let's memset the rest.
 		// Actually safer to zero the whole things if err?
 		// n is what we read.
-		offset := uintptr(buf) + uintptr(n)
 		rem := int(iAmt) - n
 		if rem > 0 {
-			C.memset(unsafe.Pointer(offset), 0, C.size_t(rem))
+			C.memset(unsafe.Pointer(uintptr(buf)+uintptr(n)), 0, C.size_t(rem))
 		}
 		return 2 // SQLITE_IOERR_SHORT_READ
 	}

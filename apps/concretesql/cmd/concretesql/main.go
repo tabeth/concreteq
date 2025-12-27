@@ -116,6 +116,9 @@ func handleDotCommand(db *sql.DB, cmd string) {
 		fmt.Println(".tables     List tables")
 		fmt.Println(".schema     Show schema")
 		fmt.Println(".quit       Exit program")
+		fmt.Println(".tables     List tables")
+		fmt.Println(".schema     Show schema")
+		fmt.Println(".quit/exit  Exit program")
 		fmt.Println(".help       Show this help")
 	default:
 		fmt.Printf("Unknown command: %s\n", parts[0])
@@ -125,6 +128,13 @@ func handleDotCommand(db *sql.DB, cmd string) {
 func executeQuery(db *sql.DB, query string) {
 	// Simple heuristic: SELECT vs others
 	q := strings.ToUpper(strings.TrimSpace(query))
+
+	// Handle non-dot exit
+	if q == "EXIT" || q == "QUIT" {
+		fmt.Println("Bye!")
+		os.Exit(0)
+	}
+
 	if strings.HasPrefix(q, "SELECT") || strings.HasPrefix(q, "PRAGMA") {
 		rows, err := db.Query(query)
 		if err != nil {

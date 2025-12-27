@@ -44,10 +44,16 @@ go get github.com/tabeth/concretesql
 ConcreteSQL provides a standalone binary that works like the standard `sqlite3` shell but talks directly to FoundationDB without needing `LD_PRELOAD`.
 
 ### Building the CLI
+**Critical**: You must build with `-tags sqlite_json` to enable JSON support needed for Kiroku.
 
 ```bash
 cd cmd/concretesql
-go build -o concretesql
+go build -tags sqlite_json -o concretesql
+```
+
+Or simply use the Makefile in the root:
+```bash
+make build
 ```
 
 ### Running the Shell
@@ -65,7 +71,14 @@ id  val
 1   hello FDB
 concretesql> .tables
 foo
-concretesql> .quit
+concretesql> exit
+```
+
+### Dump Command
+You can export the distributed database to a local SQLite file using the `dump` command:
+
+```bash
+./concretesql dump <db_name> <output_file.sqlite>
 ```
 
 ### Loadable Extension (C-Shared)
