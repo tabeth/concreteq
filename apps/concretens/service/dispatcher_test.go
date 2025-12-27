@@ -444,3 +444,99 @@ func TestDispatcher_DeliverSQS_Failure_500(t *testing.T) {
 	task := &models.DeliveryTask{TaskID: "t1", MessageID: "m1"}
 	d.deliverTask(context.Background(), task)
 }
+
+func TestDispatcher_RawDelivery_HTTP(t *testing.T) {
+	receivedBody := make(chan string, 1)
+	receivedContentType := make(chan string, 1)
+
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		receivedBody <- string(body)
+		receivedContentType <- r.Header.Get("Content-Type")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer mockServer.Close()
+
+	mockStore := &MockDispatcherStore{
+		GetSubscriptionFunc: func(ctx context.Context, subArn string) (*models.Subscription, error) {
+			return &models.Subscription{
+				Protocol:    "http",
+				Endpoint:    mockServer.URL,
+				RawDelivery: true,
+			}, nil
+		},
+		RescheduleDeliveryTaskFunc: func(ctx context.Context, task *models.DeliveryTask, nextVisible time.Time) error {
+			return nil
+		},
+		DeleteDeliveryTaskFunc: func(ctx context.Context, task *models.DeliveryTask) error {
+			return nil
+		},
+		GetMessageFunc: func(ctx context.Context, topicArn, msgID string) (*models.Message, error) {
+			return &models.Message{Message: "raw-body-content", MessageID: msgID}, nil
+		},
+	}
+	d := NewDispatcher(mockStore, 1)
+	task := &models.DeliveryTask{TaskID: "t1", MessageID: "m1"}
+
+	d.deliverTask(context.Background(), task)
+
+	select {
+	case body := <-receivedBody:
+		if body != "raw-body-content" {
+			t.Errorf("Expected raw body 'raw-body-content', got '%s'", body)
+		}
+	case <-time.After(1 * time.Second):
+		t.Error("Timeout waiting for HTTP request")
+	}
+
+	ct := <-receivedContentType
+	if ct != "text/plain" {
+		t.Errorf("Expected Content-Type text/plain, got %s", ct)
+	}
+}
+
+func TestDispatcher_RawDelivery_SQS(t *testing.T) {
+	// Mock Transport to inspect payload
+	mockStore := &MockDispatcherStore{
+		GetSubscriptionFunc: func(ctx context.Context, subArn string) (*models.Subscription, error) {
+			return &models.Subscription{
+				Protocol:    "sqs",
+				Endpoint:    "http://sqs.url",
+				RawDelivery: true,
+			}, nil
+		},
+		GetMessageFunc: func(ctx context.Context, topicArn, msgID string) (*models.Message, error) {
+			return &models.Message{Message: "raw-sqs-body", MessageID: msgID}, nil
+		},
+		DeleteDeliveryTaskFunc: func(ctx context.Context, task *models.DeliveryTask) error {
+			return nil
+		},
+	}
+	d := NewDispatcher(mockStore, 1)
+
+	receivedPayload := make(chan string, 1)
+	d.httpClient.Transport = &MockTransport{
+		RoundTripFunc: func(req *http.Request) (*http.Response, error) {
+			body, _ := io.ReadAll(req.Body)
+			receivedPayload <- string(body)
+			return &http.Response{StatusCode: 200, Body: http.NoBody}, nil
+		},
+	}
+
+	task := &models.DeliveryTask{TaskID: "t1", MessageID: "m1"}
+	d.deliverTask(context.Background(), task)
+
+	select {
+	case p := <-receivedPayload:
+		// Decode SQS payload
+		var payload struct {
+			MessageBody string
+		}
+		json.Unmarshal([]byte(p), &payload)
+		if payload.MessageBody != "raw-sqs-body" {
+			t.Errorf("Expected raw SQS body 'raw-sqs-body', got '%s'", payload.MessageBody)
+		}
+	case <-time.After(1 * time.Second):
+		t.Error("Timeout waiting for SQS request")
+	}
+}

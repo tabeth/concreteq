@@ -96,6 +96,53 @@ func (s *Store) CreateTopic(ctx context.Context, name string, attributes map[str
 	return topic, nil
 }
 
+func (s *Store) GetTopicAttributes(ctx context.Context, topicArn string) (map[string]string, error) {
+	topic, err := s.GetTopic(ctx, topicArn)
+	if err != nil {
+		return nil, err
+	}
+	// Return copy of attributes
+	attrs := make(map[string]string)
+	for k, v := range topic.Attributes {
+		attrs[k] = v
+	}
+	return attrs, nil
+}
+
+func (s *Store) SetTopicAttributes(ctx context.Context, topicArn string, attributes map[string]string) error {
+	_, err := s.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
+		key := s.topicDir.Pack(tuple.Tuple{topicArn})
+		data, err := tr.Get(key).Get()
+		if err != nil {
+			return nil, err
+		}
+		if len(data) == 0 {
+			return nil, fmt.Errorf("topic not found")
+		}
+
+		var topic models.Topic
+		if err := json.Unmarshal(data, &topic); err != nil {
+			return nil, err
+		}
+
+		// Update attributes
+		if topic.Attributes == nil {
+			topic.Attributes = make(map[string]string)
+		}
+		for k, v := range attributes {
+			topic.Attributes[k] = v
+		}
+
+		updatedData, err := json.Marshal(topic)
+		if err != nil {
+			return nil, err
+		}
+		tr.Set(key, updatedData)
+		return nil, nil
+	})
+	return err
+}
+
 func (s *Store) GetTopic(ctx context.Context, topicArn string) (*models.Topic, error) {
 	result, err := s.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
 		key := s.topicDir.Pack(tuple.Tuple{topicArn})
@@ -522,6 +569,69 @@ func (s *Store) GetSubscription(ctx context.Context, subscriptionArn string) (*m
 		return nil, err
 	}
 	return sub.(*models.Subscription), nil
+}
+
+func (s *Store) GetSubscriptionAttributes(ctx context.Context, subArn string) (map[string]string, error) {
+	sub, err := s.GetSubscription(ctx, subArn)
+	if err != nil {
+		return nil, err
+	}
+	// Copy attributes
+	attrs := make(map[string]string)
+	for k, v := range sub.Attributes {
+		attrs[k] = v
+	}
+	// Add System Attributes
+	attrs["ConfirmationWasAuthenticated"] = "true" // Mock
+	attrs["DeliveryPolicy"] = "{}"                 // Mock
+	attrs["EffectiveDeliveryPolicy"] = "{}"        // Mock
+
+	// Add RawDelivery flag as attribute for parity?
+	if sub.RawDelivery {
+		attrs["RawMessageDelivery"] = "true"
+	} else {
+		attrs["RawMessageDelivery"] = "false"
+	}
+
+	return attrs, nil
+}
+
+func (s *Store) SetSubscriptionAttributes(ctx context.Context, subArn string, attributes map[string]string) error {
+	_, err := s.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
+		subKey := s.subDir.Pack(tuple.Tuple{subArn})
+		data, err := tr.Get(subKey).Get()
+		if err != nil {
+			return nil, err
+		}
+		if len(data) == 0 {
+			return nil, fmt.Errorf("subscription not found")
+		}
+
+		var sub models.Subscription
+		if err := json.Unmarshal(data, &sub); err != nil {
+			return nil, err
+		}
+
+		if sub.Attributes == nil {
+			sub.Attributes = make(map[string]string)
+		}
+
+		for k, v := range attributes {
+			// Handle special attributes
+			if k == "RawMessageDelivery" {
+				sub.RawDelivery = (v == "true")
+			}
+			sub.Attributes[k] = v
+		}
+
+		updatedData, err := json.Marshal(sub)
+		if err != nil {
+			return nil, err
+		}
+		tr.Set(subKey, updatedData)
+		return nil, nil
+	})
+	return err
 }
 
 func (s *Store) GetMessage(ctx context.Context, topicArn, messageID string) (*models.Message, error) {

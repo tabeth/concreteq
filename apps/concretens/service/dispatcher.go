@@ -105,8 +105,8 @@ func (d *Dispatcher) deliverTask(ctx context.Context, task *models.DeliveryTask)
 	switch sub.Protocol {
 	case "http", "https":
 		err = d.deliverHTTP(ctx, sub.Endpoint, msg, sub, isConfirmation)
-	case "sqs", "concreteq":
-		err = d.deliverSQS(ctx, sub.Endpoint, msg)
+	case "sqs":
+		err = d.deliverSQS(ctx, sub.Endpoint, msg, sub)
 	default:
 		log.Printf("Unsupported protocol: %s", sub.Protocol)
 		// Delete task for unsupported protocols to avoid loop
@@ -152,7 +152,7 @@ func (d *Dispatcher) deliverHTTP(ctx context.Context, endpoint string, msg *mode
 	var err error
 
 	if isConfirmation {
-		// SubscriptionConfirmation Format
+		// SubscriptionConfirmation Format (Always JSON)
 		confirmPayload := struct {
 			Type             string
 			TopicArn         string
@@ -169,8 +169,11 @@ func (d *Dispatcher) deliverHTTP(ctx context.Context, endpoint string, msg *mode
 			SignatureVersion: "1",
 		}
 		payload, err = json.Marshal(confirmPayload)
+	} else if sub.RawDelivery {
+		// Raw Delivery: Just the message body
+		payload = []byte(msg.Message)
 	} else {
-		// Notification Format
+		// Notification Format (JSON Envelope)
 		notificationPayload := struct {
 			Type      string
 			MessageId string
@@ -191,21 +194,24 @@ func (d *Dispatcher) deliverHTTP(ctx context.Context, endpoint string, msg *mode
 		return err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", endpoint, bytes.NewBuffer(payload))
+	req, err := http.NewRequestWithContext(ctx, "POST", endpoint, bytes.NewReader(payload))
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Content-Type", "application/json")
 
-	// Add SNS headers parity (x-amz-sns-message-type, etc.)
-	// Add SNS headers parity (x-amz-sns-message-type, etc.)
-	msgType := "Notification"
+	// Set Headers
+	req.Header.Set("x-amz-sns-message-type", "Notification")
 	if isConfirmation {
-		msgType = "SubscriptionConfirmation"
+		req.Header.Set("x-amz-sns-message-type", "SubscriptionConfirmation")
+	} else if sub.RawDelivery {
+		// For Raw Delivery, what headers? usually text/plain or implied
+		req.Header.Set("Content-Type", "text/plain")
+	} else {
+		req.Header.Set("Content-Type", "application/json")
 	}
-	req.Header.Set("x-amz-sns-message-type", msgType)
 	req.Header.Set("x-amz-sns-message-id", msg.MessageID)
 	req.Header.Set("x-amz-sns-topic-arn", msg.TopicArn)
+	req.Header.Set("x-amz-sns-subscription-arn", sub.SubscriptionArn)
 
 	resp, err := d.httpClient.Do(req)
 	if err != nil {
@@ -219,11 +225,31 @@ func (d *Dispatcher) deliverHTTP(ctx context.Context, endpoint string, msg *mode
 	return nil
 }
 
-func (d *Dispatcher) deliverSQS(ctx context.Context, endpoint string, msg *models.Message) error {
+func (d *Dispatcher) deliverSQS(ctx context.Context, endpoint string, msg *models.Message, sub *models.Subscription) error {
 	// Protocol: AWS SQS JSON (via X-Amz-Target)
 	type MessageAttributeValue struct {
 		DataType    string  `json:"DataType"`
 		StringValue *string `json:"StringValue,omitempty"`
+	}
+
+	body := msg.Message
+	if !sub.RawDelivery {
+		// If NOT raw delivery, wrap in SNS JSON
+		notificationPayload := struct {
+			Type      string
+			MessageId string
+			TopicArn  string
+			Message   string
+			Timestamp time.Time
+		}{
+			Type:      "Notification",
+			MessageId: msg.MessageID,
+			TopicArn:  msg.TopicArn,
+			Message:   msg.Message,
+			Timestamp: msg.PublishedTime,
+		}
+		b, _ := json.Marshal(notificationPayload)
+		body = string(b)
 	}
 
 	payload := struct {
@@ -232,7 +258,7 @@ func (d *Dispatcher) deliverSQS(ctx context.Context, endpoint string, msg *model
 		MessageAttributes map[string]MessageAttributeValue `json:"MessageAttributes,omitempty"`
 	}{
 		QueueUrl:    endpoint,
-		MessageBody: msg.Message,
+		MessageBody: body,
 	}
 
 	if len(msg.MessageAttributes) > 0 {
@@ -269,6 +295,6 @@ func (d *Dispatcher) deliverSQS(ctx context.Context, endpoint string, msg *model
 		return nil
 	}
 
-	body, _ := io.ReadAll(resp.Body)
-	return fmt.Errorf("sqs error %s: %s", resp.Status, string(body))
+	respBody, _ := io.ReadAll(resp.Body)
+	return fmt.Errorf("sqs error %s: %s", resp.Status, string(respBody))
 }

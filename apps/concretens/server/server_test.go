@@ -206,6 +206,10 @@ func TestHandlers_DeepCoverage(t *testing.T) {
 		{"/listTopics", "GET", s.ListTopicsHandler},
 		{"/listSubscriptions", "GET", s.ListSubscriptionsHandler},
 		{"/confirmSubscription", "GET", s.ConfirmSubscriptionHandler},
+		{"/getTopicAttributes", "POST", s.GetTopicAttributesHandler},
+		{"/setTopicAttributes", "POST", s.SetTopicAttributesHandler},
+		{"/getSubscriptionAttributes", "POST", s.GetSubscriptionAttributesHandler},
+		{"/setSubscriptionAttributes", "POST", s.SetSubscriptionAttributesHandler},
 	}
 
 	for _, ep := range endpoints {
@@ -232,6 +236,10 @@ func TestHandlers_DeepCoverage(t *testing.T) {
 		{"/publish", s.PublishHandler},
 		{"/deleteTopic", s.DeleteTopicHandler},
 		{"/deleteSubscription", s.DeleteSubscriptionHandler},
+		{"/getTopicAttributes", s.GetTopicAttributesHandler},
+		{"/setTopicAttributes", s.SetTopicAttributesHandler},
+		{"/getSubscriptionAttributes", s.GetSubscriptionAttributesHandler},
+		{"/setSubscriptionAttributes", s.SetSubscriptionAttributesHandler},
 	}
 
 	for _, ep := range postEndpoints {
@@ -251,20 +259,28 @@ func TestHandlers_DeepCoverage(t *testing.T) {
 		SubscribeFunc: func(ctx context.Context, sub *models.Subscription) (*models.Subscription, error) {
 			return nil, context.DeadlineExceeded
 		},
-		PublishMessageFunc:     func(ctx context.Context, msg *models.Message) error { return context.DeadlineExceeded },
-		DeleteTopicFunc:        func(ctx context.Context, arn string) error { return context.DeadlineExceeded },
-		DeleteSubscriptionFunc: func(ctx context.Context, arn string) error { return context.DeadlineExceeded },
-		ListTopicsFunc:         func(ctx context.Context) ([]*models.Topic, error) { return nil, context.DeadlineExceeded },
-		ListSubscriptionsFunc:  func(ctx context.Context) ([]*models.Subscription, error) { return nil, context.DeadlineExceeded },
+		PublishMessageFunc:            func(ctx context.Context, msg *models.Message) error { return context.DeadlineExceeded },
+		DeleteTopicFunc:               func(ctx context.Context, arn string) error { return context.DeadlineExceeded },
+		DeleteSubscriptionFunc:        func(ctx context.Context, arn string) error { return context.DeadlineExceeded },
+		ListTopicsFunc:                func(ctx context.Context) ([]*models.Topic, error) { return nil, context.DeadlineExceeded },
+		ListSubscriptionsFunc:         func(ctx context.Context) ([]*models.Subscription, error) { return nil, context.DeadlineExceeded },
+		GetTopicAttributesFunc:        func(ctx context.Context, arn string) (map[string]string, error) { return nil, context.DeadlineExceeded },
+		SetTopicAttributesFunc:        func(ctx context.Context, arn string, attrs map[string]string) error { return context.DeadlineExceeded },
+		GetSubscriptionAttributesFunc: func(ctx context.Context, arn string) (map[string]string, error) { return nil, context.DeadlineExceeded },
+		SetSubscriptionAttributesFunc: func(ctx context.Context, arn string, attrs map[string]string) error { return context.DeadlineExceeded },
 	}
 	sErr := NewServer(errStore)
 
 	validJSON := map[string]string{
-		"/createTopic":        `{"Name": "t"}`,
-		"/subscribe":          `{"TopicArn": "a"}`,
-		"/publish":            `{"TopicArn": "a"}`,
-		"/deleteTopic":        `{"topicArn": "a"}`,
-		"/deleteSubscription": `{"subscriptionArn": "a"}`,
+		"/createTopic":               `{"Name": "t"}`,
+		"/subscribe":                 `{"TopicArn": "a"}`,
+		"/publish":                   `{"TopicArn": "a"}`,
+		"/deleteTopic":               `{"topicArn": "a"}`,
+		"/deleteSubscription":        `{"subscriptionArn": "a"}`,
+		"/getTopicAttributes":        `{"topicArn": "a"}`,
+		"/setTopicAttributes":        `{"topicArn": "a"}`,
+		"/getSubscriptionAttributes": `{"subscriptionArn": "a"}`,
+		"/setSubscriptionAttributes": `{"subscriptionArn": "a"}`,
 	}
 
 	for path, jsonStr := range validJSON {
@@ -284,6 +300,19 @@ func TestHandlers_DeepCoverage(t *testing.T) {
 		}
 		if path == "/deleteSubscription" {
 			sErr.DeleteSubscriptionHandler(w, req)
+		}
+		// New handlers dispatch
+		if path == "/getTopicAttributes" {
+			sErr.GetTopicAttributesHandler(w, req)
+		}
+		if path == "/setTopicAttributes" {
+			sErr.SetTopicAttributesHandler(w, req)
+		}
+		if path == "/getSubscriptionAttributes" {
+			sErr.GetSubscriptionAttributesHandler(w, req)
+		}
+		if path == "/setSubscriptionAttributes" {
+			sErr.SetSubscriptionAttributesHandler(w, req)
 		}
 
 		if w.Result().StatusCode != http.StatusInternalServerError {
@@ -309,16 +338,41 @@ func TestHandlers_DeepCoverage(t *testing.T) {
 
 // MockStore
 type MockStore struct {
-	CreateTopicFunc         func(ctx context.Context, name string, attrs map[string]string) (*models.Topic, error)
-	GetTopicFunc            func(ctx context.Context, topicArn string) (*models.Topic, error)
-	GetMessageFunc          func(ctx context.Context, topicArn, messageID string) (*models.Message, error)
-	SubscribeFunc           func(ctx context.Context, sub *models.Subscription) (*models.Subscription, error)
-	PublishMessageFunc      func(ctx context.Context, msg *models.Message) error
-	DeleteTopicFunc         func(ctx context.Context, arn string) error
-	DeleteSubscriptionFunc  func(ctx context.Context, arn string) error
-	ListTopicsFunc          func(ctx context.Context) ([]*models.Topic, error)
-	ListSubscriptionsFunc   func(ctx context.Context) ([]*models.Subscription, error)
-	ConfirmSubscriptionFunc func(ctx context.Context, topicArn, token string) (*models.Subscription, error)
+	CreateTopicFunc               func(ctx context.Context, name string, attrs map[string]string) (*models.Topic, error)
+	GetTopicFunc                  func(ctx context.Context, topicArn string) (*models.Topic, error)
+	GetMessageFunc                func(ctx context.Context, topicArn, messageID string) (*models.Message, error)
+	SubscribeFunc                 func(ctx context.Context, sub *models.Subscription) (*models.Subscription, error)
+	PublishMessageFunc            func(ctx context.Context, msg *models.Message) error
+	DeleteTopicFunc               func(ctx context.Context, arn string) error
+	DeleteSubscriptionFunc        func(ctx context.Context, arn string) error
+	ListTopicsFunc                func(ctx context.Context) ([]*models.Topic, error)
+	ListSubscriptionsFunc         func(ctx context.Context) ([]*models.Subscription, error)
+	GetTopicAttributesFunc        func(ctx context.Context, topicArn string) (map[string]string, error)
+	SetTopicAttributesFunc        func(ctx context.Context, topicArn string, attributes map[string]string) error
+	GetSubscriptionAttributesFunc func(ctx context.Context, subArn string) (map[string]string, error)
+	SetSubscriptionAttributesFunc func(ctx context.Context, subArn string, attributes map[string]string) error
+	ConfirmSubscriptionFunc       func(ctx context.Context, topicArn, token string) (*models.Subscription, error)
+}
+
+func (m *MockStore) CreateTopic(ctx context.Context, name string, attributes map[string]string) (*models.Topic, error) {
+	if m.CreateTopicFunc != nil {
+		return m.CreateTopicFunc(ctx, name, attributes)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) GetTopic(ctx context.Context, topicArn string) (*models.Topic, error) {
+	if m.GetTopicFunc != nil {
+		return m.GetTopicFunc(ctx, topicArn)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) GetMessage(ctx context.Context, topicArn, messageID string) (*models.Message, error) {
+	if m.GetMessageFunc != nil {
+		return m.GetMessageFunc(ctx, topicArn, messageID)
+	}
+	return nil, nil
 }
 
 func (m *MockStore) ConfirmSubscription(ctx context.Context, topicArn, token string) (*models.Subscription, error) {
@@ -327,57 +381,145 @@ func (m *MockStore) ConfirmSubscription(ctx context.Context, topicArn, token str
 	}
 	return nil, nil
 }
-func (m *MockStore) CreateTopic(ctx context.Context, name string, attrs map[string]string) (*models.Topic, error) {
-	if m.CreateTopicFunc != nil {
-		return m.CreateTopicFunc(ctx, name, attrs)
-	}
-	return nil, nil
-}
-func (m *MockStore) GetTopic(ctx context.Context, topicArn string) (*models.Topic, error) {
-	if m.GetTopicFunc != nil {
-		return m.GetTopicFunc(ctx, topicArn)
-	}
-	return nil, nil
-}
+
 func (m *MockStore) Subscribe(ctx context.Context, sub *models.Subscription) (*models.Subscription, error) {
 	if m.SubscribeFunc != nil {
 		return m.SubscribeFunc(ctx, sub)
 	}
 	return nil, nil
 }
+
 func (m *MockStore) PublishMessage(ctx context.Context, msg *models.Message) error {
 	if m.PublishMessageFunc != nil {
 		return m.PublishMessageFunc(ctx, msg)
 	}
 	return nil
 }
-func (m *MockStore) GetMessage(ctx context.Context, topicArn, messageID string) (*models.Message, error) {
-	if m.GetMessageFunc != nil {
-		return m.GetMessageFunc(ctx, topicArn, messageID)
-	}
-	return nil, nil
-}
-func (m *MockStore) DeleteTopic(ctx context.Context, arn string) error {
+
+func (m *MockStore) DeleteTopic(ctx context.Context, topicArn string) error {
 	if m.DeleteTopicFunc != nil {
-		return m.DeleteTopicFunc(ctx, arn)
+		return m.DeleteTopicFunc(ctx, topicArn)
 	}
 	return nil
 }
-func (m *MockStore) DeleteSubscription(ctx context.Context, arn string) error {
+
+func (m *MockStore) DeleteSubscription(ctx context.Context, subscriptionArn string) error {
 	if m.DeleteSubscriptionFunc != nil {
-		return m.DeleteSubscriptionFunc(ctx, arn)
+		return m.DeleteSubscriptionFunc(ctx, subscriptionArn)
 	}
 	return nil
 }
+
 func (m *MockStore) ListTopics(ctx context.Context) ([]*models.Topic, error) {
 	if m.ListTopicsFunc != nil {
 		return m.ListTopicsFunc(ctx)
 	}
 	return nil, nil
 }
+
 func (m *MockStore) ListSubscriptions(ctx context.Context) ([]*models.Subscription, error) {
 	if m.ListSubscriptionsFunc != nil {
 		return m.ListSubscriptionsFunc(ctx)
 	}
 	return nil, nil
+}
+
+func (m *MockStore) GetTopicAttributes(ctx context.Context, topicArn string) (map[string]string, error) {
+	if m.GetTopicAttributesFunc != nil {
+		return m.GetTopicAttributesFunc(ctx, topicArn)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) SetTopicAttributes(ctx context.Context, topicArn string, attributes map[string]string) error {
+	if m.SetTopicAttributesFunc != nil {
+		return m.SetTopicAttributesFunc(ctx, topicArn, attributes)
+	}
+	return nil
+}
+
+func (m *MockStore) GetSubscriptionAttributes(ctx context.Context, subArn string) (map[string]string, error) {
+	if m.GetSubscriptionAttributesFunc != nil {
+		return m.GetSubscriptionAttributesFunc(ctx, subArn)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) SetSubscriptionAttributes(ctx context.Context, subArn string, attributes map[string]string) error {
+	if m.SetSubscriptionAttributesFunc != nil {
+		return m.SetSubscriptionAttributesFunc(ctx, subArn, attributes)
+	}
+	return nil
+}
+
+func TestGetTopicAttributesHandler(t *testing.T) {
+	mockStore := &MockStore{
+		GetTopicAttributesFunc: func(ctx context.Context, topicArn string) (map[string]string, error) {
+			return map[string]string{"foo": "bar"}, nil
+		},
+	}
+	s := NewServer(mockStore)
+	payload := `{"topicArn": "arn:t"}`
+	req := httptest.NewRequest("POST", "/getTopicAttributes", bytes.NewBufferString(payload))
+	w := httptest.NewRecorder()
+	s.GetTopicAttributesHandler(w, req)
+	if w.Result().StatusCode != http.StatusOK {
+		t.Errorf("Expected OK, got %v", w.Result().Status)
+	}
+	var resp map[string]map[string]string
+	json.NewDecoder(w.Result().Body).Decode(&resp)
+	if resp["Attributes"]["foo"] != "bar" {
+		t.Errorf("Expected foo=bar")
+	}
+}
+
+func TestSetTopicAttributesHandler(t *testing.T) {
+	mockStore := &MockStore{
+		SetTopicAttributesFunc: func(ctx context.Context, topicArn string, attrs map[string]string) error {
+			if attrs["foo"] != "bar" {
+				return context.DeadlineExceeded // Mock error if no match
+			}
+			return nil
+		},
+	}
+	s := NewServer(mockStore)
+	payload := `{"topicArn": "arn:t", "attributes": {"foo": "bar"}}`
+	req := httptest.NewRequest("POST", "/setTopicAttributes", bytes.NewBufferString(payload))
+	w := httptest.NewRecorder()
+	s.SetTopicAttributesHandler(w, req)
+	if w.Result().StatusCode != http.StatusOK {
+		t.Errorf("Expected OK, got %v", w.Result().Status)
+	}
+}
+
+func TestGetSubscriptionAttributesHandler(t *testing.T) {
+	mockStore := &MockStore{
+		GetSubscriptionAttributesFunc: func(ctx context.Context, subArn string) (map[string]string, error) {
+			return map[string]string{"foo": "bar"}, nil
+		},
+	}
+	s := NewServer(mockStore)
+	payload := `{"subscriptionArn": "arn:s"}`
+	req := httptest.NewRequest("POST", "/getSubscriptionAttributes", bytes.NewBufferString(payload))
+	w := httptest.NewRecorder()
+	s.GetSubscriptionAttributesHandler(w, req)
+	if w.Result().StatusCode != http.StatusOK {
+		t.Errorf("Expected OK, got %v", w.Result().Status)
+	}
+}
+
+func TestSetSubscriptionAttributesHandler(t *testing.T) {
+	mockStore := &MockStore{
+		SetSubscriptionAttributesFunc: func(ctx context.Context, subArn string, attrs map[string]string) error {
+			return nil
+		},
+	}
+	s := NewServer(mockStore)
+	payload := `{"subscriptionArn": "arn:s", "attributeName": "RawMessageDelivery", "attributeValue": "true"}`
+	req := httptest.NewRequest("POST", "/setSubscriptionAttributes", bytes.NewBufferString(payload))
+	w := httptest.NewRecorder()
+	s.SetSubscriptionAttributesHandler(w, req)
+	if w.Result().StatusCode != http.StatusOK {
+		t.Errorf("Expected OK, got %v", w.Result().Status)
+	}
 }

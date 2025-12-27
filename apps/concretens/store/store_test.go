@@ -747,3 +747,174 @@ func TestStore_BadKey(t *testing.T) {
 	// We can't strictly check len(subs) == 0 because other tests might have left data.
 	// But we verified it didn't panic.
 }
+
+func TestStore_TopicAttributes(t *testing.T) {
+	fdbtest.SkipIfFDBUnavailable(t)
+	s, err := NewStore(710)
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+	ctx := context.Background()
+
+	// 1. Create Topic
+	topic, _ := s.CreateTopic(ctx, "attr-topic", map[string]string{"init": "val"})
+
+	// 2. Get Attributes
+	attrs, err := s.GetTopicAttributes(ctx, topic.TopicArn)
+	if err != nil {
+		t.Fatalf("GetTopicAttributes failed: %v", err)
+	}
+	if attrs["init"] != "val" {
+		t.Errorf("Expected init=val, got %v", attrs)
+	}
+
+	// 3. Set Attributes
+	newAttrs := map[string]string{
+		"init":  "new-val",
+		"added": "added-val",
+	}
+	err = s.SetTopicAttributes(ctx, topic.TopicArn, newAttrs)
+	if err != nil {
+		t.Fatalf("SetTopicAttributes failed: %v", err)
+	}
+
+	// 4. Verify Update
+	updatedAttrs, err := s.GetTopicAttributes(ctx, topic.TopicArn)
+	if err != nil {
+		t.Fatalf("GetTopicAttributes failed: %v", err)
+	}
+	if updatedAttrs["init"] != "new-val" {
+		t.Errorf("Expected init=new-val, got %s", updatedAttrs["init"])
+	}
+	if updatedAttrs["added"] != "added-val" {
+		t.Errorf("Expected added=added-val, got %s", updatedAttrs["added"])
+	}
+}
+
+func TestStore_SubscriptionAttributes(t *testing.T) {
+	fdbtest.SkipIfFDBUnavailable(t)
+	s, err := NewStore(710)
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+	ctx := context.Background()
+
+	// 1. Setup Topic & Sub
+	topic, _ := s.CreateTopic(ctx, "sub-attr-topic", nil)
+	sub := &models.Subscription{
+		TopicArn: topic.TopicArn,
+		Protocol: "sqs",
+		Endpoint: "e1",
+	}
+	createdSub, _ := s.Subscribe(ctx, sub)
+
+	// 2. Set Attributes (RawMessageDelivery)
+	err = s.SetSubscriptionAttributes(ctx, createdSub.SubscriptionArn, map[string]string{
+		"RawMessageDelivery": "true",
+		"Custom":             "custom-val",
+	})
+	if err != nil {
+		t.Fatalf("SetSubscriptionAttributes failed: %v", err)
+	}
+
+	// 3. Get Attributes & Verify
+	attrs, err := s.GetSubscriptionAttributes(ctx, createdSub.SubscriptionArn)
+	if err != nil {
+		t.Fatalf("GetSubscriptionAttributes failed: %v", err)
+	}
+	if attrs["RawMessageDelivery"] != "true" {
+		t.Errorf("Expected RawMessageDelivery=true, got %s", attrs["RawMessageDelivery"])
+	}
+	if attrs["Custom"] != "custom-val" {
+		t.Errorf("Expected Custom=custom-val, got %s", attrs["Custom"])
+	}
+
+	// 4. Verify struct update (RawDelivery field)
+	fetchedSub, _ := s.GetSubscription(ctx, createdSub.SubscriptionArn)
+	if !fetchedSub.RawDelivery {
+		t.Error("Expected RawDelivery field to be true in struct")
+	}
+}
+
+func TestStore_Attributes_ErrorPaths(t *testing.T) {
+	fdbtest.SkipIfFDBUnavailable(t)
+	s, err := NewStore(710)
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+	ctx := context.Background()
+
+	// 1. Get/Set Attributes on Non-Existent Topic
+	_, err = s.GetTopicAttributes(ctx, "arn:concretens:topic:missing")
+	if err == nil {
+		t.Error("Expected error for missing topic attributes, got nil")
+	}
+	err = s.SetTopicAttributes(ctx, "arn:concretens:topic:missing", map[string]string{"foo": "bar"})
+	if err == nil {
+		t.Error("Expected error for missing topic set attributes, got nil")
+	}
+
+	// 2. Get/Set Attributes on Non-Existent Subscription
+	_, err = s.GetSubscriptionAttributes(ctx, "arn:concretens:topic:t1:sub:missing")
+	if err == nil {
+		t.Error("Expected error for missing sub attributes, got nil")
+	}
+	err = s.SetSubscriptionAttributes(ctx, "arn:concretens:topic:t1:sub:missing", map[string]string{"foo": "bar"})
+	if err == nil {
+		t.Error("Expected error for missing sub set attributes, got nil")
+	}
+}
+
+func TestStore_Attributes_CorruptedData(t *testing.T) {
+	fdbtest.SkipIfFDBUnavailable(t)
+	s, err := NewStore(710)
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+	ctx := context.Background()
+
+	// 1. Corrupted Topic for SetAttributes
+	topicArn := "arn:concretens:topic:corrupt"
+	_, err = s.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
+		tr.Set(s.topicDir.Pack(tuple.Tuple{topicArn}), []byte("{invalid-json"))
+		return nil, nil
+	})
+	if err != nil {
+		t.Fatalf("Failed to inject corrupt topic: %v", err)
+	}
+
+	err = s.SetTopicAttributes(ctx, topicArn, map[string]string{"a": "b"})
+	if err == nil {
+		t.Error("Expected error for SetTopicAttributes on corrupt data, got nil")
+	}
+
+	// 2. Corrupted Topic for ListTopics
+	// ListTopics swallows errors for corrupted entries (skips them), so we expect NO error.
+	topics, err := s.ListTopics(ctx)
+	if err != nil {
+		t.Errorf("Expected nil error for ListTopics with corrupt data, got %v", err)
+	}
+	// Verify corrupted topic is not in the list (if we could check arn, but we only have name/arn in struct)
+	// Just ensuring it doesn't panic or error is enough for coverage.
+	// Check that we don't see a topic with empty arn or something if it partially decoded (it won't).
+	for _, tpc := range topics {
+		if tpc.TopicArn == topicArn {
+			t.Error("Expected corrupted topic to be skipped")
+		}
+	}
+
+	// 3. Corrupted Sub for SetAttributes
+	subArn := "arn:concretens:topic:t:sub:corrupt"
+	_, err = s.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
+		tr.Set(s.subDir.Pack(tuple.Tuple{subArn}), []byte("{invalid-json"))
+		return nil, nil
+	})
+	if err != nil {
+		t.Fatalf("Failed to inject corrupt sub: %v", err)
+	}
+
+	err = s.SetSubscriptionAttributes(ctx, subArn, map[string]string{"a": "b"})
+	if err == nil {
+		t.Error("Expected error for SetSubscriptionAttributes on corrupt data, got nil")
+	}
+}

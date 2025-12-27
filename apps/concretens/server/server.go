@@ -18,6 +18,10 @@ type Store interface {
 	DeleteSubscription(ctx context.Context, subscriptionArn string) error
 	ListTopics(ctx context.Context) ([]*models.Topic, error)
 	ListSubscriptions(ctx context.Context) ([]*models.Subscription, error)
+	GetTopicAttributes(ctx context.Context, topicArn string) (map[string]string, error)
+	SetTopicAttributes(ctx context.Context, topicArn string, attributes map[string]string) error
+	GetSubscriptionAttributes(ctx context.Context, subArn string) (map[string]string, error)
+	SetSubscriptionAttributes(ctx context.Context, subArn string, attributes map[string]string) error
 }
 
 type Server struct {
@@ -205,4 +209,113 @@ func (s *Server) ListSubscriptionsHandler(w http.ResponseWriter, r *http.Request
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(subs)
+}
+
+func (s *Server) GetTopicAttributesHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost { // SNS uses POST for GetTopicAttributes usually? Or GET? AWS uses POST with Action=GetTopicAttributes. Here we simplify.
+		// Let's assume POST for consistency with others if we want body, but GET is better for attributes.
+		// But if we follow simple REST: GET /topic/attributes?arn=...
+		// Let's stick to POST as per existing handlers for now, or match AWS Action style if we were doing that.
+		// Existing handlers use POST and body.
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		TopicArn string `json:"topicArn"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request", http.StatusBadRequest)
+		return
+	}
+	attrs, err := s.store.GetTopicAttributes(r.Context(), req.TopicArn)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]map[string]string{"Attributes": attrs})
+}
+
+func (s *Server) SetTopicAttributesHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		TopicArn       string `json:"topicArn"`
+		AttributeName  string `json:"attributeName"` // AWS allows one at a time usually, but our store supports map.
+		AttributeValue string `json:"attributeValue"`
+		// Or a map?
+		Attributes map[string]string `json:"attributes"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request", http.StatusBadRequest)
+		return
+	}
+
+	// Support both single (AWS style) and bulk (our style)
+	attrs := req.Attributes
+	if attrs == nil {
+		attrs = make(map[string]string)
+	}
+	if req.AttributeName != "" {
+		attrs[req.AttributeName] = req.AttributeValue
+	}
+
+	if err := s.store.SetTopicAttributes(r.Context(), req.TopicArn, attrs); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
+func (s *Server) GetSubscriptionAttributesHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		SubscriptionArn string `json:"subscriptionArn"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request", http.StatusBadRequest)
+		return
+	}
+	attrs, err := s.store.GetSubscriptionAttributes(r.Context(), req.SubscriptionArn)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]map[string]string{"Attributes": attrs})
+}
+
+func (s *Server) SetSubscriptionAttributesHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		SubscriptionArn string            `json:"subscriptionArn"`
+		AttributeName   string            `json:"attributeName"`
+		AttributeValue  string            `json:"attributeValue"`
+		Attributes      map[string]string `json:"attributes"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request", http.StatusBadRequest)
+		return
+	}
+	attrs := req.Attributes
+	if attrs == nil {
+		attrs = make(map[string]string)
+	}
+	if req.AttributeName != "" {
+		attrs[req.AttributeName] = req.AttributeValue
+	}
+
+	if err := s.store.SetSubscriptionAttributes(r.Context(), req.SubscriptionArn, attrs); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
 }
