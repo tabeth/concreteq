@@ -253,12 +253,16 @@ func (d *Dispatcher) deliverSQS(ctx context.Context, endpoint string, msg *model
 	}
 
 	payload := struct {
-		QueueUrl          string                           `json:"QueueUrl"`
-		MessageBody       string                           `json:"MessageBody"`
-		MessageAttributes map[string]MessageAttributeValue `json:"MessageAttributes,omitempty"`
+		QueueUrl               string                           `json:"QueueUrl"`
+		MessageBody            string                           `json:"MessageBody"`
+		MessageAttributes      map[string]MessageAttributeValue `json:"MessageAttributes,omitempty"`
+		MessageGroupId         string                           `json:"MessageGroupId,omitempty"`
+		MessageDeduplicationId string                           `json:"MessageDeduplicationId,omitempty"`
 	}{
-		QueueUrl:    endpoint,
-		MessageBody: body,
+		QueueUrl:               endpoint,
+		MessageBody:            body,
+		MessageGroupId:         msg.MessageGroupId,
+		MessageDeduplicationId: msg.MessageDeduplicationId,
 	}
 
 	if len(msg.MessageAttributes) > 0 {

@@ -2,8 +2,10 @@ package store
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
@@ -38,6 +40,7 @@ type Store struct {
 	db       Transactor
 	topicDir directory.DirectorySubspace
 	subDir   directory.DirectorySubspace
+	dedupDir directory.DirectorySubspace // Subspace for deduplication
 }
 
 // openDBFunc is a variable to allow mocking in tests
@@ -59,32 +62,61 @@ func NewStore(apiVersion int) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
+	dedupDir, err := directory.CreateOrOpen(db, []string{"concretens", "dedup"}, nil)
+	if err != nil {
+		return nil, err
+	}
 
 	return &Store{
 		db:       &RealTransactor{db: db},
 		topicDir: topicDir,
 		subDir:   subDir,
+		dedupDir: dedupDir,
 	}, nil
 }
 
 func (s *Store) CreateTopic(ctx context.Context, name string, attributes map[string]string) (*models.Topic, error) {
+	// 1. Validation for FIFO
+	isFifo := false
+	if strings.HasSuffix(name, ".fifo") {
+		isFifo = true
+		if attributes == nil {
+			attributes = make(map[string]string)
+		}
+		attributes["FifoTopic"] = "true"
+	}
+	if attributes != nil && attributes["FifoTopic"] == "true" && !strings.HasSuffix(name, ".fifo") {
+		return nil, fmt.Errorf("FIFO topics must end with .fifo")
+	}
+
+	// 2. ID Generation
 	topicArn := fmt.Sprintf("arn:concretens:topic:%s", name)
+
 	topic := &models.Topic{
 		TopicArn:    topicArn,
 		Name:        name,
 		Attributes:  attributes,
 		CreatedTime: time.Now(),
+		FifoTopic:   isFifo,
 	}
 
-	data, err := json.Marshal(topic)
-	if err != nil {
-		return nil, err
-	}
-
-	_, err = s.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
-		// key: topicDir + topicArn
-		// value: json-encoded topic
+	// ... (Transaction)
+	_, err := s.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
+		// Check exists
 		key := s.topicDir.Pack(tuple.Tuple{topicArn})
+		existing, err := tr.Get(key).Get()
+		if err != nil {
+			return nil, err
+		}
+		if len(existing) > 0 {
+			// Idempotent return if same?
+			return nil, nil // Or return existing?
+		}
+
+		data, err := json.Marshal(topic)
+		if err != nil {
+			return nil, err
+		}
 		tr.Set(key, data)
 		return nil, nil
 	})
@@ -166,48 +198,46 @@ func (s *Store) GetTopic(ctx context.Context, topicArn string) (*models.Topic, e
 }
 
 func (s *Store) Subscribe(ctx context.Context, sub *models.Subscription) (*models.Subscription, error) {
-	// Generate Subscription ARN
+	// 1. Validate Topic Exists
+	topic, err := s.GetTopic(ctx, sub.TopicArn)
+	if err != nil {
+		return nil, err
+	}
+
+	// 2. FIFO Restriction
+	if topic.FifoTopic && sub.Protocol != "sqs" {
+		return nil, fmt.Errorf("FIFO topics only support sqs protocol")
+	}
+
+	// 3. ID Generation
 	subID := uuid.New().String()
-	subscriptionArn := fmt.Sprintf("%s:%s", sub.TopicArn, subID)
+	sub.SubscriptionArn = fmt.Sprintf("%s:%s", sub.TopicArn, subID)
 
-	// Determine Status and Token
-	status := "Active"
-	token := ""
+	// Default Status for non-http
 	if sub.Protocol == "http" || sub.Protocol == "https" {
-		status = "PendingConfirmation"
-		token = uuid.New().String()
+		sub.Status = "PendingConfirmation"
+		sub.ConfirmationToken = uuid.New().String()
+	} else {
+		sub.Status = "Active"
 	}
 
-	newSub := &models.Subscription{
-		SubscriptionArn:   subscriptionArn,
-		TopicArn:          sub.TopicArn,
-		Protocol:          sub.Protocol,
-		Endpoint:          sub.Endpoint,
-		FilterPolicy:      sub.FilterPolicy,
-		Status:            status,
-		ConfirmationToken: token,
-		RawDelivery:       sub.RawDelivery,
-	}
-
-	_, err := s.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
-		data, err := json.Marshal(newSub)
+	_, err = s.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
+		key := s.subDir.Pack(tuple.Tuple{sub.SubscriptionArn})
+		data, err := json.Marshal(sub)
 		if err != nil {
 			return nil, err
 		}
-
-		// Save Subscription: subDir + subArn
-		subKey := s.subDir.Pack(tuple.Tuple{subscriptionArn})
-		tr.Set(subKey, data)
+		tr.Set(key, data)
 
 		// Index by Topic: topicDir + topicArn + "subs" + subArn
-		idxKey := s.topicDir.Pack(tuple.Tuple{"subs", sub.TopicArn, subscriptionArn})
+		idxKey := s.topicDir.Pack(tuple.Tuple{"subs", sub.TopicArn, sub.SubscriptionArn})
 		tr.Set(idxKey, []byte{})
 
 		// If pending confirmation, enqueue a confirmation task
-		if status == "PendingConfirmation" {
+		if sub.Status == "PendingConfirmation" {
 			task := models.DeliveryTask{
 				TaskID:          uuid.New().String(),
-				SubscriptionArn: subscriptionArn,
+				SubscriptionArn: sub.SubscriptionArn,
 				MessageID:       "CONFIRMATION_REQUEST", // Special ID or similar mechanism
 				VisibleAfter:    time.Now().Add(-1 * time.Millisecond),
 				RetryCount:      0,
@@ -223,7 +253,7 @@ func (s *Store) Subscribe(ctx context.Context, sub *models.Subscription) (*model
 	if err != nil {
 		return nil, err
 	}
-	return newSub, nil
+	return sub, nil
 }
 
 // ConfirmSubscription activates a pending subscription if the token matches.
@@ -320,6 +350,46 @@ func (s *Store) ListSubscriptionsByTopic(ctx context.Context, topicArn string) (
 }
 
 func (s *Store) PublishMessage(ctx context.Context, msg *models.Message) error {
+	// 1. Validate Topic
+	topic, err := s.GetTopic(ctx, msg.TopicArn)
+	if err != nil {
+		return err
+	}
+
+	// 2. FIFO Logic
+	if topic.FifoTopic {
+		if msg.MessageGroupId == "" {
+			return fmt.Errorf("MessageGroupId is required for FIFO topics")
+		}
+		// Deduplication
+		if msg.MessageDeduplicationId == "" {
+			// Simple hash of body
+			h := sha256.Sum256([]byte(msg.Message))
+			msg.MessageDeduplicationId = fmt.Sprintf("%x", h)
+		}
+
+		// Check Dedup Store
+		dedupKey := s.dedupDir.Pack(tuple.Tuple{msg.TopicArn, msg.MessageDeduplicationId})
+
+		isDuplicate, err := s.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
+			existing, err := tr.Get(dedupKey).Get()
+			if err != nil {
+				return false, err
+			}
+			if len(existing) > 0 {
+				return true, nil // Duplicate
+			}
+			tr.Set(dedupKey, []byte(time.Now().Format(time.RFC3339)))
+			return false, nil
+		})
+		if err != nil {
+			return err
+		}
+		if isDuplicate.(bool) {
+			return nil
+		}
+	}
+
 	if msg.MessageID == "" {
 		msg.MessageID = uuid.New().String()
 	}
@@ -327,88 +397,51 @@ func (s *Store) PublishMessage(ctx context.Context, msg *models.Message) error {
 		msg.PublishedTime = time.Now()
 	}
 
-	data, err := json.Marshal(msg)
-	if err != nil {
-		return err
-	}
-
 	_, err = s.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
-		// 1. Store message: topicDir + topicArn + "messages" + messageID
-		key := s.topicDir.Pack(tuple.Tuple{"messages", msg.TopicArn, msg.MessageID})
-		tr.Set(key, data)
+		// Save Message
+		msgKey := s.topicDir.Pack(tuple.Tuple{"messages", msg.TopicArn, msg.MessageID})
+		data, err := json.Marshal(msg)
+		if err != nil {
+			return nil, err
+		}
+		tr.Set(msgKey, data)
 
-		// 2. Fanout: Find all subscriptions for this topic
-		prefix := s.topicDir.Pack(tuple.Tuple{"subs", msg.TopicArn})
-		r, err := fdb.PrefixRange(prefix)
+		// Fanout to Subscriptions
+		// ... (Same as before)
+		subs, err := s.ListSubscriptionsByTopic(ctx, msg.TopicArn)
 		if err != nil {
 			return nil, err
 		}
 
-		iter := tr.GetRange(r, fdb.RangeOptions{}).Iterator()
-		for iter.Advance() {
-			kv, err := iter.Get()
-			if err != nil {
-				return nil, err
-			}
-
-			// Unpack to get subscriptionArn
-			t, err := s.topicDir.Unpack(kv.Key)
-			if err != nil {
-				return nil, err
-			}
-			if len(t) < 3 {
-				continue
-			}
-			subscriptionArn := t[2].(string)
-
-			// Retrieve Subscription to check Filter Policy
-			subKey := s.subDir.Pack(tuple.Tuple{subscriptionArn})
-			subData := tr.Get(subKey).MustGet()
-
-			if len(subData) == 0 {
-				continue
-			}
-
-			var sub models.Subscription
-			if err := json.Unmarshal(subData, &sub); err != nil {
-				continue
-			}
-
+		for _, sub := range subs {
+			// Check Status
 			if sub.Status != "Active" {
 				continue
 			}
 
-			if sub.Status != "Active" {
-				continue
+			// Check Filter Policy
+			if sub.FilterPolicy != "" {
+				matches, err := filter.Matches(sub.FilterPolicy, msg.MessageAttributes)
+				if err != nil {
+					// Log error? Skip?
+					continue
+				}
+				if !matches {
+					continue
+				}
 			}
 
-			// Apply Filter Policy
-			match, err := filter.Matches(sub.FilterPolicy, msg.MessageAttributes)
-			if err != nil {
-				// On error (invalid policy), safeguard by not matching
-				continue
-			}
-			if !match {
-				continue
-			}
-
-			// Create Delivery Task
 			task := models.DeliveryTask{
 				TaskID:          uuid.New().String(),
-				SubscriptionArn: subscriptionArn,
+				SubscriptionArn: sub.SubscriptionArn,
 				MessageID:       msg.MessageID,
-				VisibleAfter:    time.Now().Add(-1 * time.Millisecond),
+				VisibleAfter:    time.Now(),
 				RetryCount:      0,
 			}
-			taskData, err := json.Marshal(task)
-			if err != nil {
-				return nil, err
-			}
-
-			// Enqueue Task
-			// Key: (visibleAfterUnixNano, taskID)
-			taskKey := s.subDir.Pack(tuple.Tuple{"queue", task.VisibleAfter.UnixNano(), task.TaskID})
-			tr.Set(taskKey, taskData)
+			taskData, _ := json.Marshal(task)
+			// Queue Key: queue + Timestamp + TaskID
+			queueKey := s.subDir.Pack(tuple.Tuple{"queue", task.VisibleAfter.UnixNano(), task.TaskID})
+			tr.Set(queueKey, taskData)
 		}
 
 		return nil, nil

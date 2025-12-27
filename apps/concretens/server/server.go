@@ -92,10 +92,12 @@ func (s *Server) PublishHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	msg := &models.Message{
-		TopicArn:          req.TopicArn,
-		Message:           req.Message,
-		Subject:           req.Subject,
-		MessageAttributes: req.MessageAttributes,
+		TopicArn:               req.TopicArn,
+		Message:                req.Message,
+		Subject:                req.Subject,
+		MessageAttributes:      req.MessageAttributes,
+		MessageGroupId:         req.MessageGroupId,
+		MessageDeduplicationId: req.MessageDeduplicationId,
 	}
 
 	if err := s.store.PublishMessage(r.Context(), msg); err != nil {

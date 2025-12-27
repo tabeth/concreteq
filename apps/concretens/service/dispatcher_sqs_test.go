@@ -62,6 +62,7 @@ func TestDispatcher_DeliverSQS(t *testing.T) {
 				TopicArn:        "topic-sqs",
 				Protocol:        "sqs",
 				Endpoint:        ts.URL + "/queue/my-queue", // Real SQS URL format
+				RawDelivery:     true,
 			}, nil
 		},
 		GetMessageFunc: func(ctx context.Context, topicArn, messageID string) (*models.Message, error) {

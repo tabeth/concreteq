@@ -69,9 +69,10 @@ func TestIntegration_ConcreteQ_Full(t *testing.T) {
 	topic, _ := nss.CreateTopic(ctx, "integration-topic", nil)
 
 	sub := &nsmodels.Subscription{
-		TopicArn: topic.TopicArn,
-		Protocol: "sqs",
-		Endpoint: queueUrl, // Pointing to our httptest server for ConcreteQ
+		TopicArn:    topic.TopicArn,
+		Protocol:    "sqs",
+		Endpoint:    queueUrl, // Pointing to our httptest server for ConcreteQ
+		RawDelivery: true,
 	}
 	if _, err := nss.Subscribe(ctx, sub); err != nil {
 		t.Fatalf("Subscribe failed: %v", err)

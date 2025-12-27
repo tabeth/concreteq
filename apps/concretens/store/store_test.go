@@ -656,7 +656,6 @@ func TestStore_InconsistentState(t *testing.T) {
 	ctx := context.Background()
 
 	// Inject Index Entry for missing subscription
-	// Index Key: topicDir + "subs" + topicArn + subArn
 	topicArn := "arn:concretens:topic:inconsistent"
 	subArn := "arn:concretens:topic:inconsistent:sub-missing"
 
@@ -688,8 +687,12 @@ func TestStore_PublishMessage_CorruptedSub(t *testing.T) {
 	ctx := context.Background()
 
 	// 1. Manually setup Topic, Sub (Corrupted), and Index
-	topicArn := "arn:concretens:topic:corrupt-sub"
-	subArn := "arn:concretens:topic:corrupt-sub:sub-corrupt"
+	// 1. Create Topic (Now required for Publish check)
+	// CreateTopic generates ARN from Name.
+	tName := "corrupt-sub-" + uuid.New().String()
+	topic, _ := s.CreateTopic(ctx, tName, nil)
+	topicArn := topic.TopicArn
+	subArn := topicArn + ":sub-corrupt"
 
 	_, err = s.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
 		// Sub Data (Invalid JSON)
@@ -757,7 +760,8 @@ func TestStore_TopicAttributes(t *testing.T) {
 	ctx := context.Background()
 
 	// 1. Create Topic
-	topic, _ := s.CreateTopic(ctx, "attr-topic", map[string]string{"init": "val"})
+	// 1. Create Topic
+	topic, _ := s.CreateTopic(ctx, "attr-topic-"+uuid.New().String(), map[string]string{"init": "val"})
 
 	// 2. Get Attributes
 	attrs, err := s.GetTopicAttributes(ctx, topic.TopicArn)

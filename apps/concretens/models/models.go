@@ -10,6 +10,7 @@ type Topic struct {
 	Name        string            `json:"name"`
 	Attributes  map[string]string `json:"attributes"`
 	CreatedTime time.Time         `json:"createdTime"`
+	FifoTopic   bool              `json:"fifoTopic"` // Parity: derived from attributes or name
 }
 
 // Subscription represents a subscription to a topic.
@@ -29,16 +30,19 @@ type Subscription struct {
 
 // PublishRequest represents a request to publish a message.
 type PublishRequest struct {
-	TopicArn          string            `json:"topicArn"`
-	Message           string            `json:"message"`
-	Subject           string            `json:"subject,omitempty"`
-	MessageStructure  string            `json:"messageStructure,omitempty"`
-	MessageAttributes map[string]string `json:"messageAttributes,omitempty"`
+	TopicArn               string            `json:"topicArn"`
+	Message                string            `json:"message"`
+	Subject                string            `json:"subject,omitempty"`
+	MessageStructure       string            `json:"messageStructure,omitempty"`
+	MessageAttributes      map[string]string `json:"messageAttributes,omitempty"`
+	MessageGroupId         string            `json:"messageGroupId,omitempty"`         // FIFO
+	MessageDeduplicationId string            `json:"messageDeduplicationId,omitempty"` // FIFO
 }
 
 // PublishResponse represents the response after publishing.
 type PublishResponse struct {
-	MessageId string `json:"messageId"`
+	MessageId      string `json:"messageId"`
+	SequenceNumber string `json:"sequenceNumber,omitempty"` // FIFO
 }
 
 // DeliveryTask represents a task to deliver a message to a subscriber.
@@ -52,10 +56,13 @@ type DeliveryTask struct {
 
 // Message represents a persisted message.
 type Message struct {
-	MessageID         string            `json:"messageId"`
-	TopicArn          string            `json:"topicArn"`
-	Message           string            `json:"message"`
-	Subject           string            `json:"subject,omitempty"`
-	MessageAttributes map[string]string `json:"messageAttributes,omitempty"`
-	PublishedTime     time.Time         `json:"publishedTime"`
+	MessageID              string            `json:"messageId"`
+	TopicArn               string            `json:"topicArn"`
+	Message                string            `json:"message"`
+	Subject                string            `json:"subject,omitempty"`
+	MessageAttributes      map[string]string `json:"messageAttributes,omitempty"`
+	PublishedTime          time.Time         `json:"publishedTime"`
+	MessageGroupId         string            `json:"messageGroupId,omitempty"`         // FIFO
+	MessageDeduplicationId string            `json:"messageDeduplicationId,omitempty"` // FIFO
+	SequenceNumber         string            `json:"sequenceNumber,omitempty"`         // FIFO: Simulated
 }
