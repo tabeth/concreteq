@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"database/sql"
 	"flag"
 	"fmt"
@@ -10,7 +11,10 @@ import (
 	"strings"
 	"text/tabwriter"
 
+	"github.com/apple/foundationdb/bindings/go/src/fdb/tuple"
 	_ "github.com/tabeth/concretesql/driver"
+	"github.com/tabeth/concretesql/store"
+	"github.com/tabeth/kiroku-core/libs/fdb"
 )
 
 func main() {
@@ -20,8 +24,19 @@ func main() {
 
 	args := flag.Args()
 	if len(args) < 1 {
-		fmt.Println("Usage: concretesql <db-name>")
+		fmt.Println("Usage: concretesql <db-name> OR concretesql dump <db-name> <output-file>")
 		os.Exit(1)
+	}
+
+	if args[0] == "dump" {
+		if len(args) != 3 {
+			fmt.Println("Usage: concretesql dump <db-name> <output-file>")
+			os.Exit(1)
+		}
+		if err := runDump(args[1], args[2]); err != nil {
+			log.Fatalf("Dump failed: %v", err)
+		}
+		return
 	}
 
 	dbName := args[0]
@@ -177,4 +192,37 @@ func executeQuery(db *sql.DB, query string) {
 			// fmt.Printf("Affected rows: %d\n", aff)
 		}
 	}
+}
+
+func runDump(dbName, outputFile string) error {
+	// Initialize FDB
+	database, err := fdb.OpenDB(620)
+	if err != nil {
+		return fmt.Errorf("failed to open FDB: %w", err)
+	}
+
+	// Logic matches vfs.FDBVFS.Open prefix generation: ("concretesql", dbName)
+	prefix := tuple.Tuple{"concretesql", dbName}
+	ps := store.NewPageStore(database, prefix, store.DefaultConfig())
+
+	f, err := os.Create(outputFile)
+	if err != nil {
+		return fmt.Errorf("failed to create output file: %w", err)
+	}
+	defer f.Close()
+
+	fmt.Printf("Dumping database '%s' to '%s'...\n", dbName, outputFile)
+
+	// Use buffered writer for performance
+	bw := bufio.NewWriter(f)
+	if err := ps.DumpToWriter(context.Background(), bw); err != nil {
+		return err
+	}
+
+	if err := bw.Flush(); err != nil {
+		return fmt.Errorf("failed to flush buffer: %w", err)
+	}
+
+	fmt.Println("Dump complete.")
+	return nil
 }

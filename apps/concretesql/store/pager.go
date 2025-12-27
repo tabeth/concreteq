@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
+	"io"
+	"sync"
 	"time"
 
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
@@ -506,4 +509,132 @@ func (ps *PageStore) SetPageSize(ctx context.Context, pageSize int) error {
 		return nil, nil
 	})
 	return err
+}
+
+// DumpToWriter writes the entire database content to the provided writer.
+// It effectively creates a snapshot of the database at the current version.
+// It iterates through all pages and writes them sequentially.
+// Sparse pages (never written) are filled with zeros.
+func (ps *PageStore) DumpToWriter(ctx context.Context, w io.Writer) error {
+	state, err := ps.CurrentVersion(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get current version: %w", err)
+	}
+
+	if state.Size == 0 {
+		return nil
+	}
+
+	totalPages := int(state.Size / int64(state.PageSize))
+	if state.Size%int64(state.PageSize) != 0 {
+		totalPages++
+	}
+
+	// We use a worker pool to fetch pages concurrently to improve throughput.
+	// But we must write them sequentially to the writer.
+	// So we'll fetch in batches/windows.
+
+	concurrency := 10 // Number of concurrent reads
+	pageChan := make(chan int, concurrency)
+	resultChan := make(chan struct {
+		pageID int
+		data   []byte
+		err    error
+	}, concurrency)
+
+	var wg sync.WaitGroup
+
+	// Worker pool
+	for i := 0; i < concurrency; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for pageID := range pageChan {
+				// Read page at snapshot version
+				data, err := ps.ReadPage(ctx, state.Version, pageID)
+				resultChan <- struct {
+					pageID int
+					data   []byte
+					err    error
+				}{pageID, data, err}
+			}
+		}()
+	}
+
+	// Feeder and Collector
+	go func() {
+		for i := 1; i <= totalPages; i++ {
+			pageChan <- i
+		}
+		close(pageChan)
+		wg.Wait()
+		close(resultChan)
+	}()
+
+	// We need to re-order results because they might arrive out of order.
+	// Since we want to stream to Writer, we'll store them in a buffer map until the "next needed" page arrives.
+	pending := make(map[int][]byte)
+	nextPage := 1
+
+	// Loop until we extract all results
+	// Wait, reading from resultChan doesn't guarantee order.
+	// We need to match totalItems.
+	// Since concurrency is limited, the pending map won't grow too large (max ~concurrency * pageSize).
+
+	// We need to process exactly totalPages results.
+	for i := 0; i < totalPages; i++ {
+		res := <-resultChan
+		if res.err != nil {
+			return fmt.Errorf("failed to read page %d: %w", res.pageID, res.err)
+		}
+		pending[res.pageID] = res.data
+
+		// Try to drain pending buffer in order
+		for {
+			data, ok := pending[nextPage]
+			if !ok {
+				break
+			}
+			delete(pending, nextPage)
+
+			// Write data
+			if data == nil {
+				// Sparse page, write zeros
+				if _, err := w.Write(make([]byte, state.PageSize)); err != nil {
+					return fmt.Errorf("failed to write zeros for page %d: %w", nextPage, err)
+				}
+			} else {
+				// Write actual data.
+				// Note: data might be smaller than PageSize if it's the last page,
+				// or if it was a partial write? SQLite usually writes full pages.
+				// But ReadPage returns exactly what was stored.
+				// If stored < PageSize, we should pad?
+				// SQLite VFS writes default to PageSize (4096).
+				// Let's assume we pad to PageSize for correctness of the file structure,
+				// except maybe the very last chunk?
+				// Actually, a valid SQLite file size is multiple of page size (mostly).
+				// Let's write what we got, but if it's nil we write full PageSize zeros.
+				// If it is non-nil but short, we write it as is?
+				// If we look at `WritePages`, we assume it writes full pages.
+				// Let's rely on stored data.
+				if len(data) < state.PageSize && int64(nextPage*state.PageSize) < state.Size {
+					// This is not the last page, but data is short? accessing the middle of file?
+					// This shouldn't happen for valid SQLite DB pages.
+					// But if it does, we should probably pad with zeros to maintain offset.
+					padding := make([]byte, state.PageSize-len(data))
+					data = append(data, padding...)
+				} else if len(data) > state.PageSize {
+					// Should not happen if config is correct.
+					data = data[:state.PageSize]
+				}
+
+				if _, err := w.Write(data); err != nil {
+					return fmt.Errorf("failed to write data for page %d: %w", nextPage, err)
+				}
+			}
+			nextPage++
+		}
+	}
+
+	return nil
 }
