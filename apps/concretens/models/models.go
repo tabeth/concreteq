@@ -45,6 +45,44 @@ type PublishResponse struct {
 	SequenceNumber string `json:"sequenceNumber,omitempty"` // FIFO
 }
 
+// PublishBatchRequestEntry represents a single message in a batch.
+type PublishBatchRequestEntry struct {
+	Id                     string            `json:"id"`
+	Message                string            `json:"message"`
+	Subject                string            `json:"subject,omitempty"`
+	MessageStructure       string            `json:"messageStructure,omitempty"`
+	MessageAttributes      map[string]string `json:"messageAttributes,omitempty"`
+	MessageGroupId         string            `json:"messageGroupId,omitempty"`
+	MessageDeduplicationId string            `json:"messageDeduplicationId,omitempty"`
+}
+
+// PublishBatchRequest represents a batch publication request.
+type PublishBatchRequest struct {
+	TopicArn                   string                     `json:"topicArn"`
+	PublishBatchRequestEntries []PublishBatchRequestEntry `json:"publishBatchRequestEntries"`
+}
+
+// PublishBatchResultEntry represents success.
+type PublishBatchResultEntry struct {
+	Id             string `json:"id"`
+	MessageId      string `json:"messageId"`
+	SequenceNumber string `json:"sequenceNumber,omitempty"`
+}
+
+// BatchResultErrorEntry represents failure.
+type BatchResultErrorEntry struct {
+	Id          string `json:"id"`
+	Code        string `json:"code"`
+	Message     string `json:"message"`
+	SenderFault bool   `json:"senderFault"`
+}
+
+// PublishBatchResponse represents the response.
+type PublishBatchResponse struct {
+	Successful []PublishBatchResultEntry `json:"successful"`
+	Failed     []BatchResultErrorEntry   `json:"failed"`
+}
+
 // DeliveryTask represents a task to deliver a message to a subscriber.
 type DeliveryTask struct {
 	TaskID          string    `json:"taskId"`

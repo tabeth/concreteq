@@ -210,6 +210,7 @@ func TestHandlers_DeepCoverage(t *testing.T) {
 		{"/setTopicAttributes", "POST", s.SetTopicAttributesHandler},
 		{"/getSubscriptionAttributes", "POST", s.GetSubscriptionAttributesHandler},
 		{"/setSubscriptionAttributes", "POST", s.SetSubscriptionAttributesHandler},
+		{"/publishBatch", "POST", s.PublishBatchHandler},
 	}
 
 	for _, ep := range endpoints {
@@ -240,6 +241,7 @@ func TestHandlers_DeepCoverage(t *testing.T) {
 		{"/setTopicAttributes", s.SetTopicAttributesHandler},
 		{"/getSubscriptionAttributes", s.GetSubscriptionAttributesHandler},
 		{"/setSubscriptionAttributes", s.SetSubscriptionAttributesHandler},
+		{"/publishBatch", s.PublishBatchHandler},
 	}
 
 	for _, ep := range postEndpoints {
@@ -268,6 +270,9 @@ func TestHandlers_DeepCoverage(t *testing.T) {
 		SetTopicAttributesFunc:        func(ctx context.Context, arn string, attrs map[string]string) error { return context.DeadlineExceeded },
 		GetSubscriptionAttributesFunc: func(ctx context.Context, arn string) (map[string]string, error) { return nil, context.DeadlineExceeded },
 		SetSubscriptionAttributesFunc: func(ctx context.Context, arn string, attrs map[string]string) error { return context.DeadlineExceeded },
+		PublishBatchFunc: func(ctx context.Context, req *models.PublishBatchRequest) (*models.PublishBatchResponse, error) {
+			return nil, context.DeadlineExceeded
+		},
 	}
 	sErr := NewServer(errStore)
 
@@ -281,6 +286,7 @@ func TestHandlers_DeepCoverage(t *testing.T) {
 		"/setTopicAttributes":        `{"topicArn": "a"}`,
 		"/getSubscriptionAttributes": `{"subscriptionArn": "a"}`,
 		"/setSubscriptionAttributes": `{"subscriptionArn": "a"}`,
+		"/publishBatch":              `{"topicArn": "a"}`,
 	}
 
 	for path, jsonStr := range validJSON {
@@ -313,6 +319,9 @@ func TestHandlers_DeepCoverage(t *testing.T) {
 		}
 		if path == "/setSubscriptionAttributes" {
 			sErr.SetSubscriptionAttributesHandler(w, req)
+		}
+		if path == "/publishBatch" {
+			sErr.PublishBatchHandler(w, req)
 		}
 
 		if w.Result().StatusCode != http.StatusInternalServerError {
@@ -352,6 +361,7 @@ type MockStore struct {
 	GetSubscriptionAttributesFunc func(ctx context.Context, subArn string) (map[string]string, error)
 	SetSubscriptionAttributesFunc func(ctx context.Context, subArn string, attributes map[string]string) error
 	ConfirmSubscriptionFunc       func(ctx context.Context, topicArn, token string) (*models.Subscription, error)
+	PublishBatchFunc              func(ctx context.Context, req *models.PublishBatchRequest) (*models.PublishBatchResponse, error)
 }
 
 func (m *MockStore) CreateTopic(ctx context.Context, name string, attributes map[string]string) (*models.Topic, error) {
@@ -450,6 +460,13 @@ func (m *MockStore) SetSubscriptionAttributes(ctx context.Context, subArn string
 		return m.SetSubscriptionAttributesFunc(ctx, subArn, attributes)
 	}
 	return nil
+}
+
+func (m *MockStore) PublishBatch(ctx context.Context, req *models.PublishBatchRequest) (*models.PublishBatchResponse, error) {
+	if m.PublishBatchFunc != nil {
+		return m.PublishBatchFunc(ctx, req)
+	}
+	return nil, nil
 }
 
 func TestGetTopicAttributesHandler(t *testing.T) {

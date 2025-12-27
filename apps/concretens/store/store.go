@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -75,7 +76,13 @@ func NewStore(apiVersion int) (*Store, error) {
 	}, nil
 }
 
+var topicNameRegex = regexp.MustCompile(`^[a-zA-Z0-9._-]{1,256}$`)
+
 func (s *Store) CreateTopic(ctx context.Context, name string, attributes map[string]string) (*models.Topic, error) {
+	if !topicNameRegex.MatchString(name) {
+		return nil, fmt.Errorf("InvalidParameter: Topic name must match pattern %s", topicNameRegex.String())
+	}
+
 	// 1. Validation for FIFO
 	isFifo := false
 	if strings.HasSuffix(name, ".fifo") {
@@ -138,6 +145,26 @@ func (s *Store) GetTopicAttributes(ctx context.Context, topicArn string) (map[st
 	for k, v := range topic.Attributes {
 		attrs[k] = v
 	}
+	attrs["TopicArn"] = topic.TopicArn
+	attrs["Owner"] = "kiroku" // Dummy
+
+	// Calculate Stats
+	subs, err := s.ListSubscriptionsByTopic(ctx, topicArn)
+	if err == nil {
+		confirmed := 0
+		pending := 0
+		for _, sub := range subs {
+			if sub.Status == "Active" || sub.Status == "Confirmed" { // Active is normal, Confirmed for parity check
+				confirmed++
+			} else {
+				pending++
+			}
+		}
+		attrs["SubscriptionsConfirmed"] = fmt.Sprintf("%d", confirmed)
+		attrs["SubscriptionsPending"] = fmt.Sprintf("%d", pending)
+		attrs["SubscriptionsDeleted"] = "0"
+	}
+
 	return attrs, nil
 }
 
@@ -356,6 +383,12 @@ func (s *Store) PublishMessage(ctx context.Context, msg *models.Message) error {
 		return err
 	}
 
+	// Validate Message Size (256KB limit)
+	const MaxMessageSize = 256 * 1024
+	if len(msg.Message) > MaxMessageSize {
+		return fmt.Errorf("InvalidParameter: Message size exceeds the limit of 256KB")
+	}
+
 	// 2. FIFO Logic
 	if topic.FifoTopic {
 		if msg.MessageGroupId == "" {
@@ -567,7 +600,54 @@ func (s *Store) PollDeliveryTasks(ctx context.Context, limit int) ([]*models.Del
 }
 
 // DeleteDeliveryTask removes a task from the queue (ack).
+// PublishBatch publishes multiple messages.
+func (s *Store) PublishBatch(ctx context.Context, req *models.PublishBatchRequest) (*models.PublishBatchResponse, error) {
+	// 1. Validation
+	if len(req.PublishBatchRequestEntries) == 0 {
+		return nil, fmt.Errorf("EmptyBatchRequest")
+	}
+	// Limit is 10 in SNS
+	if len(req.PublishBatchRequestEntries) > 10 {
+		return nil, fmt.Errorf("BatchEntryIdsNotDistinct: Limit is 10")
+	}
+
+	response := &models.PublishBatchResponse{
+		Successful: []models.PublishBatchResultEntry{},
+		Failed:     []models.BatchResultErrorEntry{},
+	}
+
+	for _, entry := range req.PublishBatchRequestEntries {
+		msg := &models.Message{
+			TopicArn:               req.TopicArn,
+			Message:                entry.Message,
+			Subject:                entry.Subject,
+			MessageAttributes:      entry.MessageAttributes,
+			MessageGroupId:         entry.MessageGroupId,
+			MessageDeduplicationId: entry.MessageDeduplicationId,
+			PublishedTime:          time.Now(),
+		}
+
+		if err := s.PublishMessage(ctx, msg); err != nil {
+			response.Failed = append(response.Failed, models.BatchResultErrorEntry{
+				Id:          entry.Id,
+				Code:        "InternalFailure",
+				Message:     err.Error(),
+				SenderFault: true, // Assuming client error if verify fails
+			})
+		} else {
+			response.Successful = append(response.Successful, models.PublishBatchResultEntry{
+				Id:             entry.Id,
+				MessageId:      msg.MessageID,
+				SequenceNumber: msg.SequenceNumber,
+			})
+		}
+	}
+
+	return response, nil
+}
+
 func (s *Store) DeleteDeliveryTask(ctx context.Context, task *models.DeliveryTask) error {
+
 	_, err := s.db.Transact(func(tr fdb.Transaction) (interface{}, error) {
 		// Key: "queue", VisibleAfter, TaskID
 		key := s.subDir.Pack(tuple.Tuple{"queue", task.VisibleAfter.UnixNano(), task.TaskID})

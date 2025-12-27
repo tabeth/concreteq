@@ -22,6 +22,7 @@ type Store interface {
 	SetTopicAttributes(ctx context.Context, topicArn string, attributes map[string]string) error
 	GetSubscriptionAttributes(ctx context.Context, subArn string) (map[string]string, error)
 	SetSubscriptionAttributes(ctx context.Context, subArn string, attributes map[string]string) error
+	PublishBatch(ctx context.Context, req *models.PublishBatchRequest) (*models.PublishBatchResponse, error)
 }
 
 type Server struct {
@@ -320,4 +321,26 @@ func (s *Server) SetSubscriptionAttributesHandler(w http.ResponseWriter, r *http
 		return
 	}
 	w.WriteHeader(http.StatusOK)
+}
+
+func (s *Server) PublishBatchHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req models.PublishBatchRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request", http.StatusBadRequest)
+		return
+	}
+
+	resp, err := s.store.PublishBatch(r.Context(), &req)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
 }
