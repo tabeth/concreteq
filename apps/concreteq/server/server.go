@@ -114,6 +114,7 @@ func (app *App) RootSQSHandler(w http.ResponseWriter, r *http.Request) {
 var queueNameRegex = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,80}(\.fifo)?$`)
 var arnRegex = regexp.MustCompile(`^arn:aws:sqs:[a-z0-9-]+:[0-9]+:[a-zA-Z0-9_-]{1,80}(\.fifo)?$`)
 var validIdRegex = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,80}$`)
+var validAccountIdRegex = regexp.MustCompile(`^[0-9]{12}$`)
 
 func validateIntAttribute(valStr string, min, max int) error {
 	val, err := strconv.Atoi(valStr)
@@ -710,15 +711,23 @@ func (app *App) AddPermissionHandler(w http.ResponseWriter, r *http.Request) {
 		app.sendErrorResponse(w, "InvalidParameterValue", "The label must be alphanumeric, hyphen, or underscore and at most 80 characters.", http.StatusBadRequest)
 		return
 	}
-	if len(req.AWSAccountIds) == 0 {
-		app.sendErrorResponse(w, "MissingParameter", "The request must contain AWSAccountIds.", http.StatusBadRequest)
+	for _, id := range req.AWSAccountIds {
+		if !validAccountIdRegex.MatchString(id) {
+			app.sendErrorResponse(w, "InvalidParameterValue", "AWS account ID must be 12 digits.", http.StatusBadRequest)
+			return
+		}
+	}
+
+	queueName := path.Base(req.QueueUrl)
+	if err := app.Store.AddPermission(r.Context(), queueName, req.Label, req.AWSAccountIds, req.Actions); err != nil {
+		if errors.Is(err, store.ErrQueueDoesNotExist) {
+			app.sendErrorResponse(w, "QueueDoesNotExist", "The specified queue does not exist.", http.StatusBadRequest)
+			return
+		}
+		app.sendErrorResponse(w, "InternalFailure", err.Error(), http.StatusInternalServerError)
 		return
 	}
-	if len(req.Actions) == 0 {
-		app.sendErrorResponse(w, "MissingParameter", "The request must contain Actions.", http.StatusBadRequest)
-		return
-	}
-	w.WriteHeader(http.StatusNotImplemented)
+	w.WriteHeader(http.StatusOK)
 }
 
 func (app *App) RemovePermissionHandler(w http.ResponseWriter, r *http.Request) {
@@ -731,15 +740,20 @@ func (app *App) RemovePermissionHandler(w http.ResponseWriter, r *http.Request) 
 		app.sendErrorResponse(w, "MissingParameter", "The request must contain a QueueUrl.", http.StatusBadRequest)
 		return
 	}
-	if req.Label == "" {
-		app.sendErrorResponse(w, "MissingParameter", "The request must contain a Label.", http.StatusBadRequest)
+	queueName := path.Base(req.QueueUrl)
+	if err := app.Store.RemovePermission(r.Context(), queueName, req.Label); err != nil {
+		if errors.Is(err, store.ErrQueueDoesNotExist) {
+			app.sendErrorResponse(w, "QueueDoesNotExist", "The specified queue does not exist.", http.StatusBadRequest)
+			return
+		}
+		if errors.Is(err, store.ErrLabelDoesNotExist) {
+			app.sendErrorResponse(w, "InvalidParameterValue", "The specified label does not exist.", http.StatusBadRequest)
+			return
+		}
+		app.sendErrorResponse(w, "InternalFailure", err.Error(), http.StatusInternalServerError)
 		return
 	}
-	if len(req.Label) > 80 || !validIdRegex.MatchString(req.Label) {
-		app.sendErrorResponse(w, "InvalidParameterValue", "The label must be alphanumeric, hyphen, or underscore and at most 80 characters.", http.StatusBadRequest)
-		return
-	}
-	w.WriteHeader(http.StatusNotImplemented)
+	w.WriteHeader(http.StatusOK)
 }
 
 func (app *App) ListQueueTagsHandler(w http.ResponseWriter, r *http.Request) {
@@ -872,7 +886,15 @@ func (app *App) StartMessageMoveTaskHandler(w http.ResponseWriter, r *http.Reque
 		app.sendErrorResponse(w, "InvalidParameterValue", "Invalid SourceArn.", http.StatusBadRequest)
 		return
 	}
-	w.WriteHeader(http.StatusNotImplemented)
+
+	taskHandle, err := app.Store.StartMessageMoveTask(r.Context(), req.SourceArn, req.DestinationArn)
+	if err != nil {
+		app.sendErrorResponse(w, "InternalFailure", err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(models.StartMessageMoveTaskResponse{TaskHandle: taskHandle})
 }
 
 func (app *App) CancelMessageMoveTaskHandler(w http.ResponseWriter, r *http.Request) {
@@ -885,7 +907,21 @@ func (app *App) CancelMessageMoveTaskHandler(w http.ResponseWriter, r *http.Requ
 		app.sendErrorResponse(w, "MissingParameter", "The request must contain a TaskHandle.", http.StatusBadRequest)
 		return
 	}
-	w.WriteHeader(http.StatusNotImplemented)
+
+	if err := app.Store.CancelMessageMoveTask(r.Context(), req.TaskHandle); err != nil {
+		if err.Error() == "ResourceNotFoundException" {
+			app.sendErrorResponse(w, "ResourceNotFoundException", "The specified task handle does not exist.", http.StatusBadRequest)
+			return
+		}
+		app.sendErrorResponse(w, "InternalFailure", err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(models.CancelMessageMoveTaskResponse{
+		TaskHandle: req.TaskHandle,
+		Status:     "CANCELLED",
+	})
 }
 
 func (app *App) ListMessageMoveTasksHandler(w http.ResponseWriter, r *http.Request) {
@@ -898,7 +934,15 @@ func (app *App) ListMessageMoveTasksHandler(w http.ResponseWriter, r *http.Reque
 		app.sendErrorResponse(w, "MissingParameter", "The request must contain a SourceArn.", http.StatusBadRequest)
 		return
 	}
-	w.WriteHeader(http.StatusNotImplemented)
+
+	tasks, err := app.Store.ListMessageMoveTasks(r.Context(), req.SourceArn)
+	if err != nil {
+		app.sendErrorResponse(w, "InternalFailure", err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(models.ListMessageMoveTasksResponse{Results: tasks})
 }
 func (app *App) ChangeMessageVisibilityHandler(w http.ResponseWriter, r *http.Request) {
 	var req models.ChangeMessageVisibilityRequest
@@ -1141,7 +1185,10 @@ func (app *App) DeleteQueueHandler(w http.ResponseWriter, r *http.Request) {
 
 func (app *App) ListQueuesHandler(w http.ResponseWriter, r *http.Request) {
 	var req models.ListQueuesRequest
-	decodeErr := json.NewDecoder(r.Body).Decode(&req)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		app.sendErrorResponse(w, "InvalidRequest", "Invalid request body", http.StatusBadRequest)
+		return
+	}
 
 	maxResults := 1000
 	if req.MaxResults != nil {
@@ -1158,8 +1205,8 @@ func (app *App) ListQueuesHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// According to tests, if MaxResults is nil (or JSON was malformed), we don't return NextToken
-	if req.MaxResults == nil || decodeErr != nil {
+	// According to tests, if MaxResults is nil, we don't return NextToken
+	if req.MaxResults == nil {
 		nextToken = ""
 	}
 

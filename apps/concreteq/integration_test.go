@@ -1822,7 +1822,6 @@ func TestIntegration_Messaging(t *testing.T) {
 	})
 }
 func TestIntegration_MessageMoveTasks(t *testing.T) {
-	t.Skip("MessageMoveTasks not implemented")
 	app, teardown := setupIntegrationTest(t)
 	defer teardown()
 
@@ -1938,8 +1937,7 @@ func TestIntegration_MessageMoveTasks(t *testing.T) {
 	})
 }
 
-func TestAddPermission(t *testing.T) {
-	t.Skip("AddPermission not implemented")
+func TestIntegration_PermissionLifecycle(t *testing.T) {
 	app, teardown := setupIntegrationTest(t)
 	defer teardown()
 
@@ -2129,8 +2127,7 @@ func TestAddPermission(t *testing.T) {
 	})
 }
 
-func TestRemovePermission(t *testing.T) {
-	t.Skip("RemovePermission not implemented")
+func TestIntegration_RemovePermission(t *testing.T) {
 	app, teardown := setupIntegrationTest(t)
 	defer teardown()
 
@@ -2223,7 +2220,6 @@ func TestRemovePermission(t *testing.T) {
 }
 
 func TestIntegration_StartMessageMoveTask_BackgroundProcessing(t *testing.T) {
-	t.Skip("StartMessageMoveTask not implemented")
 	app, teardown := setupIntegrationTest(t)
 	defer teardown()
 

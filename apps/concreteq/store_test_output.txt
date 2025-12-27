@@ -1,0 +1,300 @@
+=== RUN   TestLargeMessage_ChunkingAndReassembly
+Checking FoundationDB cluster availability...
+FoundationDB cluster is available. Proceeding with tests.
+--- PASS: TestLargeMessage_ChunkingAndReassembly (0.04s)
+=== RUN   TestRedriveAllowPolicy_Enforcement
+=== RUN   TestRedriveAllowPolicy_Enforcement/AllowAll
+=== RUN   TestRedriveAllowPolicy_Enforcement/DenyAll
+=== RUN   TestRedriveAllowPolicy_Enforcement/ByQueue_Allowed
+=== RUN   TestRedriveAllowPolicy_Enforcement/ByQueue_Denied
+--- PASS: TestRedriveAllowPolicy_Enforcement (6.12s)
+    --- PASS: TestRedriveAllowPolicy_Enforcement/AllowAll (1.53s)
+    --- PASS: TestRedriveAllowPolicy_Enforcement/DenyAll (1.52s)
+    --- PASS: TestRedriveAllowPolicy_Enforcement/ByQueue_Allowed (1.53s)
+    --- PASS: TestRedriveAllowPolicy_Enforcement/ByQueue_Denied (1.52s)
+=== RUN   TestStore_Tagging
+--- PASS: TestStore_Tagging (0.02s)
+=== RUN   TestStore_MessageMoveTasks
+--- PASS: TestStore_MessageMoveTasks (0.02s)
+=== RUN   TestLargeMessage_PurgeQueue
+--- PASS: TestLargeMessage_PurgeQueue (0.03s)
+=== RUN   TestFDBStore_Coverage
+=== RUN   TestFDBStore_Coverage/Permissions
+=== RUN   TestFDBStore_Coverage/Tags
+=== RUN   TestFDBStore_Coverage/QueueUrl_CaseSensitivity
+=== RUN   TestFDBStore_Coverage/DeleteMessage_Empty
+=== RUN   TestFDBStore_Coverage/MessageMoveTask_Real
+--- PASS: TestFDBStore_Coverage (0.26s)
+    --- PASS: TestFDBStore_Coverage/Permissions (0.01s)
+    --- PASS: TestFDBStore_Coverage/Tags (0.01s)
+    --- PASS: TestFDBStore_Coverage/QueueUrl_CaseSensitivity (0.00s)
+    --- PASS: TestFDBStore_Coverage/DeleteMessage_Empty (0.00s)
+    --- PASS: TestFDBStore_Coverage/MessageMoveTask_Real (0.22s)
+=== RUN   TestRedrivePolicy_MoveToDLQ
+--- PASS: TestRedrivePolicy_MoveToDLQ (1.54s)
+=== RUN   TestListDeadLetterSourceQueues
+--- PASS: TestListDeadLetterSourceQueues (0.03s)
+=== RUN   TestFDBStore_ChangeMessageVisibility_Errors
+=== RUN   TestFDBStore_ChangeMessageVisibility_Errors/QueueDoesNotExist
+=== RUN   TestFDBStore_ChangeMessageVisibility_Errors/InvalidReceiptHandle
+=== RUN   TestFDBStore_ChangeMessageVisibility_Errors/MalformedReceiptHandle
+--- PASS: TestFDBStore_ChangeMessageVisibility_Errors (0.02s)
+    --- PASS: TestFDBStore_ChangeMessageVisibility_Errors/QueueDoesNotExist (0.00s)
+    --- PASS: TestFDBStore_ChangeMessageVisibility_Errors/InvalidReceiptHandle (0.00s)
+    --- PASS: TestFDBStore_ChangeMessageVisibility_Errors/MalformedReceiptHandle (0.00s)
+=== RUN   TestFDBStore_ChangeMessageVisibilityBatch_Extra
+=== RUN   TestFDBStore_ChangeMessageVisibilityBatch_Extra/Success
+=== RUN   TestFDBStore_ChangeMessageVisibilityBatch_Extra/Partial_Failure
+--- PASS: TestFDBStore_ChangeMessageVisibilityBatch_Extra (0.03s)
+    --- PASS: TestFDBStore_ChangeMessageVisibilityBatch_Extra/Success (0.00s)
+    --- PASS: TestFDBStore_ChangeMessageVisibilityBatch_Extra/Partial_Failure (0.00s)
+=== RUN   TestFDBStore_BatchOperations_ErrorPaths_Extra
+=== RUN   TestFDBStore_BatchOperations_ErrorPaths_Extra/SendMessageBatch_InvalidDelay
+=== RUN   TestFDBStore_BatchOperations_ErrorPaths_Extra/SendMessageBatch_FifoDelay
+--- PASS: TestFDBStore_BatchOperations_ErrorPaths_Extra (0.02s)
+    --- PASS: TestFDBStore_BatchOperations_ErrorPaths_Extra/SendMessageBatch_InvalidDelay (0.00s)
+    --- PASS: TestFDBStore_BatchOperations_ErrorPaths_Extra/SendMessageBatch_FifoDelay (0.01s)
+=== RUN   TestFDBStore_runMessageMoveTask_Polling
+--- PASS: TestFDBStore_runMessageMoveTask_Polling (1.24s)
+=== RUN   TestFDBStore_SendMessageBatch_Fifo_NoContentDedup
+=== RUN   TestFDBStore_SendMessageBatch_Fifo_NoContentDedup/MissingDeduplicationId
+--- PASS: TestFDBStore_SendMessageBatch_Fifo_NoContentDedup (0.01s)
+    --- PASS: TestFDBStore_SendMessageBatch_Fifo_NoContentDedup/MissingDeduplicationId (0.00s)
+=== RUN   TestFDBStore_RemovePermission_LastOne
+--- PASS: TestFDBStore_RemovePermission_LastOne (0.02s)
+=== RUN   TestFDBStore_Tagging_Errors
+=== RUN   TestFDBStore_Tagging_Errors/TagNonExistentQueue
+=== RUN   TestFDBStore_Tagging_Errors/UntagNonExistentQueue
+=== RUN   TestFDBStore_Tagging_Errors/ListTagsNonExistentQueue
+--- PASS: TestFDBStore_Tagging_Errors (0.01s)
+    --- PASS: TestFDBStore_Tagging_Errors/TagNonExistentQueue (0.00s)
+    --- PASS: TestFDBStore_Tagging_Errors/UntagNonExistentQueue (0.00s)
+    --- PASS: TestFDBStore_Tagging_Errors/ListTagsNonExistentQueue (0.00s)
+=== RUN   TestFDBStore_SendMessageBatch_Extras
+=== RUN   TestFDBStore_SendMessageBatch_Extras/ContentBasedDedup_InBatch
+=== RUN   TestFDBStore_SendMessageBatch_Extras/MissingGroupId
+=== RUN   TestFDBStore_SendMessageBatch_Extras/WithAttributes
+--- PASS: TestFDBStore_SendMessageBatch_Extras (0.02s)
+    --- PASS: TestFDBStore_SendMessageBatch_Extras/ContentBasedDedup_InBatch (0.00s)
+    --- PASS: TestFDBStore_SendMessageBatch_Extras/MissingGroupId (0.00s)
+    --- PASS: TestFDBStore_SendMessageBatch_Extras/WithAttributes (0.01s)
+=== RUN   TestFDBStore_runMessageMoveTask_Cancellation
+--- PASS: TestFDBStore_runMessageMoveTask_Cancellation (0.03s)
+=== RUN   TestFDBStore_Tagging_ExtraBranch
+=== RUN   TestFDBStore_Tagging_ExtraBranch/Overwrite
+=== RUN   TestFDBStore_Tagging_ExtraBranch/Untag_NonExistent
+--- PASS: TestFDBStore_Tagging_ExtraBranch (0.02s)
+    --- PASS: TestFDBStore_Tagging_ExtraBranch/Overwrite (0.01s)
+    --- PASS: TestFDBStore_Tagging_ExtraBranch/Untag_NonExistent (0.00s)
+=== RUN   TestFDBStore_ListDeadLetterSourceQueues_Pagination
+--- PASS: TestFDBStore_ListDeadLetterSourceQueues_Pagination (0.04s)
+=== RUN   TestFDBStore_SendMessageBatch_Fifo_DedupHit
+--- PASS: TestFDBStore_SendMessageBatch_Fifo_DedupHit (0.02s)
+=== RUN   TestFDBStore_SendMessageBatch_Encryption
+--- PASS: TestFDBStore_SendMessageBatch_Encryption (0.01s)
+=== RUN   TestFDBStore_SendMessageBatch_Standard_Delay
+--- PASS: TestFDBStore_SendMessageBatch_Standard_Delay (0.01s)
+=== RUN   TestFDBStore_ReceiveMessage_AttributeWildcards
+=== RUN   TestFDBStore_ReceiveMessage_AttributeWildcards/Wildcard_All
+=== RUN   TestFDBStore_ReceiveMessage_AttributeWildcards/Wildcard_DotStar
+=== RUN   TestFDBStore_ReceiveMessage_AttributeWildcards/Prefix_Wildcard
+--- PASS: TestFDBStore_ReceiveMessage_AttributeWildcards (0.03s)
+    --- PASS: TestFDBStore_ReceiveMessage_AttributeWildcards/Wildcard_All (0.01s)
+    --- PASS: TestFDBStore_ReceiveMessage_AttributeWildcards/Wildcard_DotStar (0.01s)
+    --- PASS: TestFDBStore_ReceiveMessage_AttributeWildcards/Prefix_Wildcard (0.01s)
+=== RUN   TestFDBStore_BatchOperations_PartialFailures
+=== RUN   TestFDBStore_BatchOperations_PartialFailures/DeleteMessageBatch_Mixed
+    fdb_extra_test.go:466: 
+        	Error Trace:	/config/kiroku-core/apps/concreteq/store/fdb_extra_test.go:466
+        	Error:      	"[{e1} {e2}]" should have 1 item(s), but has 2
+        	Test:       	TestFDBStore_BatchOperations_PartialFailures/DeleteMessageBatch_Mixed
+    fdb_extra_test.go:467: 
+        	Error Trace:	/config/kiroku-core/apps/concreteq/store/fdb_extra_test.go:467
+        	Error:      	"[]" should have 1 item(s), but has 0
+        	Test:       	TestFDBStore_BatchOperations_PartialFailures/DeleteMessageBatch_Mixed
+=== RUN   TestFDBStore_BatchOperations_PartialFailures/ChangeMessageVisibilityBatch_Mixed
+--- FAIL: TestFDBStore_BatchOperations_PartialFailures (0.03s)
+    --- FAIL: TestFDBStore_BatchOperations_PartialFailures/DeleteMessageBatch_Mixed (0.01s)
+    --- PASS: TestFDBStore_BatchOperations_PartialFailures/ChangeMessageVisibilityBatch_Mixed (0.01s)
+=== RUN   TestBuildResponseAttributes
+--- PASS: TestBuildResponseAttributes (0.00s)
+=== RUN   TestBuildResponseMessageAttributes
+--- PASS: TestBuildResponseMessageAttributes (0.00s)
+=== RUN   TestHashAttributes
+--- PASS: TestHashAttributes (0.00s)
+=== RUN   TestFDBStore_NewFDBStore
+--- PASS: TestFDBStore_NewFDBStore (0.00s)
+=== RUN   TestFDBStore_GetQueueURL
+=== RUN   TestFDBStore_GetQueueURL/returns_error_for_non-existent_queue
+=== RUN   TestFDBStore_GetQueueURL/returns_success_for_existing_queue
+--- PASS: TestFDBStore_GetQueueURL (0.01s)
+    --- PASS: TestFDBStore_GetQueueURL/returns_error_for_non-existent_queue (0.00s)
+    --- PASS: TestFDBStore_GetQueueURL/returns_success_for_existing_queue (0.00s)
+=== RUN   TestFDBStore_ListDeadLetterSourceQueues
+--- PASS: TestFDBStore_ListDeadLetterSourceQueues (0.05s)
+=== RUN   TestHashSystemAttributes
+--- PASS: TestHashSystemAttributes (0.00s)
+=== RUN   TestFDBStore_ChangeMessageVisibility
+--- PASS: TestFDBStore_ChangeMessageVisibility (1.23s)
+=== RUN   TestFDBStore_ChangeMessageVisibilityBatch
+--- PASS: TestFDBStore_ChangeMessageVisibilityBatch (1.24s)
+=== RUN   TestFDBStore_DeleteMessageBatch_InvalidReceipt
+--- PASS: TestFDBStore_DeleteMessageBatch_InvalidReceipt (0.01s)
+=== RUN   TestFDBStore_ChangeMessageVisibility_NotInflight
+--- PASS: TestFDBStore_ChangeMessageVisibility_NotInflight (0.01s)
+=== RUN   TestFDBStore_DeleteMessageBatch_MessageNotFound
+--- PASS: TestFDBStore_DeleteMessageBatch_MessageNotFound (0.02s)
+=== RUN   TestFDBStore_CreateQueue
+=== RUN   TestFDBStore_CreateQueue/creates_a_new_queue_successfully
+=== RUN   TestFDBStore_CreateQueue/returns_attributes_if_queue_already_exists
+=== RUN   TestFDBStore_CreateQueue/stores_attributes_and_tags_correctly
+--- PASS: TestFDBStore_CreateQueue (0.02s)
+    --- PASS: TestFDBStore_CreateQueue/creates_a_new_queue_successfully (0.00s)
+    --- PASS: TestFDBStore_CreateQueue/returns_attributes_if_queue_already_exists (0.01s)
+    --- PASS: TestFDBStore_CreateQueue/stores_attributes_and_tags_correctly (0.00s)
+=== RUN   TestFDBStore_ListQueues
+=== RUN   TestFDBStore_ListQueues/List_all_queues
+=== RUN   TestFDBStore_ListQueues/List_with_MaxResults
+=== RUN   TestFDBStore_ListQueues/List_with_QueueNamePrefix
+=== RUN   TestFDBStore_ListQueues/Pagination
+--- PASS: TestFDBStore_ListQueues (0.04s)
+    --- PASS: TestFDBStore_ListQueues/List_all_queues (0.00s)
+    --- PASS: TestFDBStore_ListQueues/List_with_MaxResults (0.00s)
+    --- PASS: TestFDBStore_ListQueues/List_with_QueueNamePrefix (0.00s)
+    --- PASS: TestFDBStore_ListQueues/Pagination (0.00s)
+=== RUN   TestFDBStore_DeleteQueue
+=== RUN   TestFDBStore_DeleteQueue/deletes_an_existing_queue
+=== RUN   TestFDBStore_DeleteQueue/returns_error_for_non-existent_queue
+=== RUN   TestFDBStore_DeleteQueue/deletes_a_queue_and_all_its_contents
+--- PASS: TestFDBStore_DeleteQueue (0.03s)
+    --- PASS: TestFDBStore_DeleteQueue/deletes_an_existing_queue (0.01s)
+    --- PASS: TestFDBStore_DeleteQueue/returns_error_for_non-existent_queue (0.00s)
+    --- PASS: TestFDBStore_DeleteQueue/deletes_a_queue_and_all_its_contents (0.02s)
+=== RUN   TestFDBStore_SendMessageBatch
+=== RUN   TestFDBStore_SendMessageBatch/sends_a_batch_successfully_to_a_standard_queue
+=== RUN   TestFDBStore_SendMessageBatch/sends_a_batch_to_a_fifo_queue_with_deduplication
+=== RUN   TestFDBStore_SendMessageBatch/returns_error_if_queue_does_not_exist
+=== RUN   TestFDBStore_SendMessageBatch/handles_partial_failures_within_a_batch
+--- PASS: TestFDBStore_SendMessageBatch (0.04s)
+    --- PASS: TestFDBStore_SendMessageBatch/sends_a_batch_successfully_to_a_standard_queue (0.01s)
+    --- PASS: TestFDBStore_SendMessageBatch/sends_a_batch_to_a_fifo_queue_with_deduplication (0.01s)
+    --- PASS: TestFDBStore_SendMessageBatch/returns_error_if_queue_does_not_exist (0.00s)
+    --- PASS: TestFDBStore_SendMessageBatch/handles_partial_failures_within_a_batch (0.01s)
+=== RUN   TestFDBStore_FifoQueue_Fairness
+    fdb_test.go:710: Received group IDs: [group-a group-b group-c]
+--- PASS: TestFDBStore_FifoQueue_Fairness (0.07s)
+=== RUN   TestFDBStore_DeleteMessageBatch
+=== RUN   TestFDBStore_DeleteMessageBatch/successfully_deletes_a_batch_from_a_standard_queue
+=== RUN   TestFDBStore_DeleteMessageBatch/handles_partial_success_in_a_batch
+--- PASS: TestFDBStore_DeleteMessageBatch (0.04s)
+    --- PASS: TestFDBStore_DeleteMessageBatch/successfully_deletes_a_batch_from_a_standard_queue (0.02s)
+    --- PASS: TestFDBStore_DeleteMessageBatch/handles_partial_success_in_a_batch (0.02s)
+=== RUN   TestFDBStore_DeleteMessage
+=== RUN   TestFDBStore_DeleteMessage/Successful_Deletion
+=== RUN   TestFDBStore_DeleteMessage/Non-Existent_Receipt_Handle
+=== RUN   TestFDBStore_DeleteMessage/Non-Existent_Queue
+=== RUN   TestFDBStore_DeleteMessage/Malformed_Receipt_Handle
+=== RUN   TestFDBStore_DeleteMessage/Deleting_from_FIFO_queue_unlocks_message_group
+--- PASS: TestFDBStore_DeleteMessage (0.16s)
+    --- PASS: TestFDBStore_DeleteMessage/Successful_Deletion (0.12s)
+    --- PASS: TestFDBStore_DeleteMessage/Non-Existent_Receipt_Handle (0.00s)
+    --- PASS: TestFDBStore_DeleteMessage/Non-Existent_Queue (0.00s)
+    --- PASS: TestFDBStore_DeleteMessage/Malformed_Receipt_Handle (0.00s)
+    --- PASS: TestFDBStore_DeleteMessage/Deleting_from_FIFO_queue_unlocks_message_group (0.02s)
+=== RUN   TestFDBStore_ReceiveMessage
+=== RUN   TestFDBStore_ReceiveMessage/Standard_Queue
+=== RUN   TestFDBStore_ReceiveMessage/Standard_Queue/Receive_from_empty_queue
+=== RUN   TestFDBStore_ReceiveMessage/Standard_Queue/Receive_respects_visibility_timeout
+=== RUN   TestFDBStore_ReceiveMessage/Standard_Queue/Long_polling_waits_for_message
+=== RUN   TestFDBStore_ReceiveMessage/FIFO_Queue
+=== RUN   TestFDBStore_ReceiveMessage/FIFO_Queue/Receive_respects_message_group_lock
+=== RUN   TestFDBStore_ReceiveMessage/FIFO_Queue/Receive_with_deduplication_attempt_ID
+--- PASS: TestFDBStore_ReceiveMessage (1.52s)
+    --- PASS: TestFDBStore_ReceiveMessage/Standard_Queue (1.47s)
+        --- PASS: TestFDBStore_ReceiveMessage/Standard_Queue/Receive_from_empty_queue (0.02s)
+        --- PASS: TestFDBStore_ReceiveMessage/Standard_Queue/Receive_respects_visibility_timeout (1.23s)
+        --- PASS: TestFDBStore_ReceiveMessage/Standard_Queue/Long_polling_waits_for_message (0.23s)
+    --- PASS: TestFDBStore_ReceiveMessage/FIFO_Queue (0.05s)
+        --- PASS: TestFDBStore_ReceiveMessage/FIFO_Queue/Receive_respects_message_group_lock (0.03s)
+        --- PASS: TestFDBStore_ReceiveMessage/FIFO_Queue/Receive_with_deduplication_attempt_ID (0.02s)
+=== RUN   TestFDBStore_PurgeQueue
+=== RUN   TestFDBStore_PurgeQueue/purges_a_queue_successfully
+=== RUN   TestFDBStore_PurgeQueue/returns_error_for_non-existent_queue
+=== RUN   TestFDBStore_PurgeQueue/returns_error_if_purged_recently
+=== RUN   TestFDBStore_PurgeQueue/purges_a_FIFO_queue_successfully
+--- PASS: TestFDBStore_PurgeQueue (0.04s)
+    --- PASS: TestFDBStore_PurgeQueue/purges_a_queue_successfully (0.01s)
+    --- PASS: TestFDBStore_PurgeQueue/returns_error_for_non-existent_queue (0.00s)
+    --- PASS: TestFDBStore_PurgeQueue/returns_error_if_purged_recently (0.01s)
+    --- PASS: TestFDBStore_PurgeQueue/purges_a_FIFO_queue_successfully (0.01s)
+=== RUN   TestFDBStore_DeleteRecreateIsolation
+--- PASS: TestFDBStore_DeleteRecreateIsolation (0.03s)
+=== RUN   TestFDBStore_SendMessage
+=== RUN   TestFDBStore_SendMessage/sends_a_simple_message_successfully
+=== RUN   TestFDBStore_SendMessage/sends_a_message_with_attributes_and_verifies_hash
+=== RUN   TestFDBStore_SendMessage/sends_a_message_with_delay
+=== RUN   TestFDBStore_SendMessage/sends_a_message_to_a_fifo_queue_and_checks_deduplication
+=== RUN   TestFDBStore_SendMessage/returns_error_if_queue_does_not_exist
+--- PASS: TestFDBStore_SendMessage (0.04s)
+    --- PASS: TestFDBStore_SendMessage/sends_a_simple_message_successfully (0.01s)
+    --- PASS: TestFDBStore_SendMessage/sends_a_message_with_attributes_and_verifies_hash (0.01s)
+    --- PASS: TestFDBStore_SendMessage/sends_a_message_with_delay (0.01s)
+    --- PASS: TestFDBStore_SendMessage/sends_a_message_to_a_fifo_queue_and_checks_deduplication (0.01s)
+    --- PASS: TestFDBStore_SendMessage/returns_error_if_queue_does_not_exist (0.00s)
+=== RUN   TestFDBStore_ContentBasedDeduplication
+--- PASS: TestFDBStore_ContentBasedDeduplication (0.02s)
+=== RUN   TestFDBStore_RedrivePolicy
+=== RUN   TestFDBStore_RedrivePolicy/Standard_Queue_DLQ
+=== RUN   TestFDBStore_RedrivePolicy/FIFO_Queue_DLQ
+--- PASS: TestFDBStore_RedrivePolicy (4.07s)
+    --- PASS: TestFDBStore_RedrivePolicy/Standard_Queue_DLQ (2.03s)
+    --- PASS: TestFDBStore_RedrivePolicy/FIFO_Queue_DLQ (2.03s)
+=== RUN   TestFDBStore_QueueTags
+--- PASS: TestFDBStore_QueueTags (0.02s)
+=== RUN   TestFDBStore_SetQueueAttributes
+=== RUN   TestFDBStore_SetQueueAttributes/sets_attributes_on_an_existing_queue
+=== RUN   TestFDBStore_SetQueueAttributes/returns_error_for_non-existent_queue
+--- PASS: TestFDBStore_SetQueueAttributes (0.02s)
+    --- PASS: TestFDBStore_SetQueueAttributes/sets_attributes_on_an_existing_queue (0.00s)
+    --- PASS: TestFDBStore_SetQueueAttributes/returns_error_for_non-existent_queue (0.00s)
+=== RUN   TestFDBStore_GetQueueAttributes
+=== RUN   TestFDBStore_GetQueueAttributes/gets_attributes_for_an_existing_queue
+=== RUN   TestFDBStore_GetQueueAttributes/returns_empty_map_for_queue_with_no_attributes
+=== RUN   TestFDBStore_GetQueueAttributes/returns_error_for_non-existent_queue
+--- PASS: TestFDBStore_GetQueueAttributes (0.02s)
+    --- PASS: TestFDBStore_GetQueueAttributes/gets_attributes_for_an_existing_queue (0.01s)
+    --- PASS: TestFDBStore_GetQueueAttributes/returns_empty_map_for_queue_with_no_attributes (0.01s)
+    --- PASS: TestFDBStore_GetQueueAttributes/returns_error_for_non-existent_queue (0.00s)
+=== RUN   TestFDBStore_Permissions
+=== RUN   TestFDBStore_Permissions/Permissions_on_Non-Existent_Queue
+=== RUN   TestFDBStore_Permissions/AddPermission_-_Success
+=== RUN   TestFDBStore_Permissions/RemovePermission_-_Success
+=== RUN   TestFDBStore_Permissions/RemovePermission_-_Label_Not_Found
+--- PASS: TestFDBStore_Permissions (0.02s)
+    --- PASS: TestFDBStore_Permissions/Permissions_on_Non-Existent_Queue (0.00s)
+    --- PASS: TestFDBStore_Permissions/AddPermission_-_Success (0.00s)
+    --- PASS: TestFDBStore_Permissions/RemovePermission_-_Success (0.00s)
+    --- PASS: TestFDBStore_Permissions/RemovePermission_-_Label_Not_Found (0.00s)
+=== RUN   TestMessageRetention
+=== RUN   TestMessageRetention/StandardQueue_MessageExpires
+=== RUN   TestMessageRetention/StandardQueue_MessageDoesNotExpire
+=== RUN   TestMessageRetention/FifoQueue_MessageExpires
+=== RUN   TestMessageRetention/FifoQueue_MessageDoesNotExpire
+--- PASS: TestMessageRetention (4.46s)
+    --- PASS: TestMessageRetention/StandardQueue_MessageExpires (2.21s)
+    --- PASS: TestMessageRetention/StandardQueue_MessageDoesNotExpire (0.01s)
+    --- PASS: TestMessageRetention/FifoQueue_MessageExpires (2.21s)
+    --- PASS: TestMessageRetention/FifoQueue_MessageDoesNotExpire (0.01s)
+=== RUN   TestConcurrency_ShardSelection
+--- PASS: TestConcurrency_ShardSelection (0.29s)
+=== RUN   TestProperty_SendMessage_Invariants
+--- PASS: TestProperty_SendMessage_Invariants (0.13s)
+=== RUN   TestBoundary_BatchOperations
+--- PASS: TestBoundary_BatchOperations (0.01s)
+=== RUN   TestNegative_InvalidReceiptHandle
+--- PASS: TestNegative_InvalidReceiptHandle (0.01s)
+=== RUN   TestFuzz_RedrivePolicy
+--- PASS: TestFuzz_RedrivePolicy (0.00s)
+FAIL
+FAIL	github.com/tabeth/concreteq/store	23.381s
+FAIL

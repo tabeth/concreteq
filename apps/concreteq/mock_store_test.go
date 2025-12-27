@@ -127,11 +127,15 @@ func (m *MockStore) ChangeMessageVisibilityBatch(ctx context.Context, queueName 
 
 // AddPermission mocks the AddPermission method.
 func (m *MockStore) AddPermission(ctx context.Context, queueName, label string, accountIds []string, actions []string) error {
-	return nil
+	args := m.Called(ctx, queueName, label, accountIds, actions)
+	return args.Error(0)
 }
 
 // RemovePermission mocks the RemovePermission method.
-func (m *MockStore) RemovePermission(ctx context.Context, queueName, label string) error { return nil }
+func (m *MockStore) RemovePermission(ctx context.Context, queueName, label string) error {
+	args := m.Called(ctx, queueName, label)
+	return args.Error(0)
+}
 
 // ListQueueTags mocks the ListQueueTags method.
 func (m *MockStore) ListQueueTags(ctx context.Context, queueName string) (map[string]string, error) {

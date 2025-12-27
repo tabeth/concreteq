@@ -11,6 +11,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sort"
 	"strconv"
 	"strings"
@@ -20,6 +21,7 @@ import (
 
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
 	"github.com/apple/foundationdb/bindings/go/src/fdb/directory"
+	"github.com/apple/foundationdb/bindings/go/src/fdb/subspace"
 	"github.com/apple/foundationdb/bindings/go/src/fdb/tuple"
 	"github.com/google/uuid"
 	"github.com/tabeth/concreteq/models"
@@ -625,7 +627,7 @@ func (s *FDBStore) SendMessage(ctx context.Context, queueName string, message *m
 		if err != nil {
 			return nil, err
 		}
-		tr.Set(messagesDir.Pack(tuple.Tuple{messageID}), msgBytes)
+		s.writeMessage(tr, messagesDir, messageID, msgBytes)
 
 		// 7. Construct the API response.
 		response := &models.SendMessageResponse{
@@ -802,6 +804,57 @@ func (s *FDBStore) updateDLQIndex(tr fdb.Transaction, sourceQueueName string, ol
 	return nil
 }
 
+// checkRedriveAllowPolicy verifies if a source queue is allowed to use the DLQ.
+func (s *FDBStore) checkRedriveAllowPolicy(ctx context.Context, tr fdb.Transaction, dlqName, sourceQueueName string) (bool, error) {
+	dlqDir, err := s.dir.Open(tr, []string{dlqName}, nil)
+	if err != nil {
+		return false, err
+	}
+
+	attrsBytes, err := tr.Get(dlqDir.Pack(tuple.Tuple{"attributes"})).Get()
+	if err != nil {
+		return false, err
+	}
+	if len(attrsBytes) == 0 {
+		return true, nil // No policy means allow all by default
+	}
+
+	var attrs map[string]string
+	if err := json.Unmarshal(attrsBytes, &attrs); err != nil {
+		return false, err
+	}
+
+	allowPolicyStr, ok := attrs["RedriveAllowPolicy"]
+	if !ok || allowPolicyStr == "" {
+		return true, nil // Default is to allow
+	}
+
+	var allowPolicy struct {
+		RedrivePermission string   `json:"redrivePermission"`
+		SourceQueueArns   []string `json:"sourceQueueArns"`
+	}
+	if err := json.Unmarshal([]byte(allowPolicyStr), &allowPolicy); err != nil {
+		return true, nil // Malformed policy, treat as allow
+	}
+
+	switch allowPolicy.RedrivePermission {
+	case "allowAll":
+		return true, nil
+	case "denyAll":
+		return false, nil
+	case "byQueue":
+		sourceQueueArn := fmt.Sprintf("arn:aws:sqs:us-east-1:123456789012:%s", sourceQueueName)
+		for _, arn := range allowPolicy.SourceQueueArns {
+			if arn == sourceQueueArn {
+				return true, nil
+			}
+		}
+		return false, nil
+	default:
+		return true, nil
+	}
+}
+
 // hashAttributes creates a deterministic byte representation of message attributes for hashing.
 // This is required by the SQS specification for calculating the MD5OfMessageAttributes.
 // The attributes must be sorted by name and encoded in a specific binary format.
@@ -863,13 +916,83 @@ func hashSystemAttributes(attributes map[string]models.MessageSystemAttributeVal
 			buf.WriteByte(1)
 			binary.Write(&buf, binary.BigEndian, int32(len(*v.StringValue)))
 			buf.WriteString(*v.StringValue)
-		} else if strings.HasPrefix(v.DataType, "Binary") {
-			buf.WriteByte(2)
-			binary.Write(&buf, binary.BigEndian, int32(len(v.BinaryValue)))
 			buf.Write(v.BinaryValue)
 		}
 	}
 	return buf.Bytes()
+}
+
+// assembleMessage reads a potentially chunked message from FoundationDB and reassembles it.
+func (s *FDBStore) assembleMessage(tr fdb.Transaction, messagesDir subspace.Subspace, messageID string) ([]byte, error) {
+	msgBytes, err := tr.Get(messagesDir.Pack(tuple.Tuple{messageID})).Get()
+	if err != nil || msgBytes == nil {
+		return nil, err
+	}
+
+	// Check if this is a chunked message metadata record.
+	var metadata struct {
+		IsChunked bool `json:"is_chunked"`
+		NumChunks int  `json:"num_chunks"`
+	}
+	if err := json.Unmarshal(msgBytes, &metadata); err == nil && metadata.IsChunked {
+		// Reassemble from chunks
+		var fullMsg bytes.Buffer
+		for i := 0; i < metadata.NumChunks; i++ {
+			chunkKey := messagesDir.Pack(tuple.Tuple{messageID, i})
+			chunkBytes, err := tr.Get(chunkKey).Get()
+			if err != nil {
+				return nil, err
+			}
+			if chunkBytes == nil {
+				return nil, errors.New("missing message chunk")
+			}
+			fullMsg.Write(chunkBytes)
+		}
+		return fullMsg.Bytes(), nil
+	}
+
+	// Not chunked, return as is.
+	return msgBytes, nil
+}
+
+// writeMessage writes a potentially large message to FoundationDB using chunking if necessary.
+func (s *FDBStore) writeMessage(tr fdb.Transaction, messagesDir subspace.Subspace, messageID string, msgBytes []byte) {
+	// FoundationDB has a 100KB limit on values. If the message is large,
+	// we split it into chunks. 90KB is a safe threshold to allow for
+	// some overhead in the metadata or key.
+	const maxFDBValueSize = 90 * 1024
+	if len(msgBytes) > maxFDBValueSize {
+		const chunkSize = 80 * 1024
+		numChunks := (len(msgBytes) + chunkSize - 1) / chunkSize
+
+		// Store metadata about chunks
+		metadata := map[string]interface{}{
+			"is_chunked": true,
+			"num_chunks": numChunks,
+			"total_size": len(msgBytes),
+		}
+		metaBytes, _ := json.Marshal(metadata)
+		tr.Set(messagesDir.Pack(tuple.Tuple{messageID}), metaBytes)
+
+		// Store chunks
+		for i := 0; i < numChunks; i++ {
+			start := i * chunkSize
+			end := start + chunkSize
+			if end > len(msgBytes) {
+				end = len(msgBytes)
+			}
+			chunkKey := messagesDir.Pack(tuple.Tuple{messageID, i})
+			tr.Set(chunkKey, msgBytes[start:end])
+		}
+	} else {
+		tr.Set(messagesDir.Pack(tuple.Tuple{messageID}), msgBytes)
+	}
+}
+
+// deleteMessageData removes a message and all its associated chunks from FoundationDB.
+func (s *FDBStore) deleteMessageData(tr fdb.Transaction, messagesDir subspace.Subspace, messageID string) {
+	pr, _ := fdb.PrefixRange(messagesDir.Pack(tuple.Tuple{messageID}))
+	tr.ClearRange(pr)
 }
 
 // SendMessageBatch handles sending multiple messages in a single transaction.
@@ -914,6 +1037,14 @@ func (s *FDBStore) SendMessageBatch(ctx context.Context, queueName string, req *
 		successful := []models.SendMessageBatchResultEntry{}
 		failed := []models.BatchResultErrorEntry{}
 
+		ids := make(map[string]bool)
+		for _, entry := range req.Entries {
+			if ids[entry.Id] {
+				return nil, fmt.Errorf("BatchEntryIdsNotDistinct")
+			}
+			ids[entry.Id] = true
+		}
+
 		for i := range req.Entries {
 			entry := &req.Entries[i]
 
@@ -953,6 +1084,7 @@ func (s *FDBStore) SendMessageBatch(ctx context.Context, queueName string, req *
 				if val != nil {
 					var storedResp models.SendMessageBatchResultEntry
 					if err := json.Unmarshal(val, &storedResp); err == nil {
+						storedResp.Id = entry.Id // Ensure we return the current entry ID
 						successful = append(successful, storedResp)
 						continue
 					}
@@ -1041,7 +1173,7 @@ func (s *FDBStore) SendMessageBatch(ctx context.Context, queueName string, req *
 				failed = append(failed, models.BatchResultErrorEntry{Id: entry.Id, Code: "InternalError", Message: "Failed to marshal message.", SenderFault: false})
 				continue
 			}
-			tr.Set(messagesDir.Pack(tuple.Tuple{messageID}), msgBytes)
+			s.writeMessage(tr, messagesDir, messageID, msgBytes)
 
 			// Construct the successful result entry.
 			resultEntry := models.SendMessageBatchResultEntry{
@@ -1085,7 +1217,7 @@ func (s *FDBStore) SendMessageBatch(ctx context.Context, queueName string, req *
 // It iterates through randomized shards of the visibility index to find available messages.
 // This approach distributes the read load and significantly reduces transaction conflicts
 // under high contention compared to scanning the head of the queue every time.
-func (s *FDBStore) receiveStandardMessages(ctx context.Context, tr fdb.Transaction, queueDir directory.DirectorySubspace, req *models.ReceiveMessageRequest, maxMessages int, visibilityTimeout int, queueAttributes map[string]string) ([]models.ResponseMessage, error) {
+func (s *FDBStore) receiveStandardMessages(ctx context.Context, tr fdb.Transaction, queueName string, queueDir directory.DirectorySubspace, req *models.ReceiveMessageRequest, maxMessages int, visibilityTimeout int, queueAttributes map[string]string) ([]models.ResponseMessage, error) {
 	messagesDir := queueDir.Sub("messages")
 	visibleIdxDir := queueDir.Sub("visible_idx")
 	inflightDir := queueDir.Sub("inflight")
@@ -1148,7 +1280,8 @@ func (s *FDBStore) receiveStandardMessages(ctx context.Context, tr fdb.Transacti
 			// t[0] is shardID, t[1] is visibleAfter, t[2] is messageID
 			messageID := t[2].(string)
 
-			msgBytes, err := tr.Get(messagesDir.Pack(tuple.Tuple{messageID})).Get()
+			// Use assembleMessage to handle chunked messages.
+			msgBytes, err := s.assembleMessage(tr, messagesDir, messageID)
 			if err != nil || msgBytes == nil {
 				// Message might have been deleted or claimed by another consumer
 				// that committed first. This is an expected outcome of the race.
@@ -1162,7 +1295,7 @@ func (s *FDBStore) receiveStandardMessages(ctx context.Context, tr fdb.Transacti
 			// Check for Message Retention
 			if (now - msg.SentTimestamp) > retentionPeriod {
 				// Expired: Delete message and index entry
-				tr.Clear(messagesDir.Pack(tuple.Tuple{messageID}))
+				s.deleteMessageData(tr, messagesDir, messageID)
 				tr.Clear(kv.Key)
 				continue
 			}
@@ -1218,26 +1351,30 @@ func (s *FDBStore) receiveStandardMessages(ctx context.Context, tr fdb.Transacti
 				// Move to DLQ
 				dlqExists, err := s.dir.Exists(tr, []string{dlqName})
 				if err == nil && dlqExists {
-					dlqDir, err := s.dir.Open(tr, []string{dlqName}, nil)
-					if err == nil {
-						// Delete from source queue
-						tr.Clear(messagesDir.Pack(tuple.Tuple{messageID}))
+					// Check RedriveAllowPolicy
+					allowed, err := s.checkRedriveAllowPolicy(ctx, tr, dlqName, queueName)
+					if err == nil && allowed {
+						dlqDir, err := s.dir.Open(tr, []string{dlqName}, nil)
+						if err == nil {
+							// Delete from source queue
+							s.deleteMessageData(tr, messagesDir, messageID)
 
-						// Add to DLQ
-						dlqMessagesDir := dlqDir.Sub("messages")
-						dlqVisibleIdxDir := dlqDir.Sub("visible_idx")
+							// Add to DLQ
+							dlqMessagesDir := dlqDir.Sub("messages")
+							dlqVisibleIdxDir := dlqDir.Sub("visible_idx")
 
-						// Reset visibility for DLQ (visible immediately)
-						msg.VisibleAfter = now
+							// Reset visibility for DLQ (visible immediately)
+							msg.VisibleAfter = now
 
-						dlqMsgBytes, _ := json.Marshal(msg)
-						tr.Set(dlqMessagesDir.Pack(tuple.Tuple{messageID}), dlqMsgBytes)
+							dlqMsgBytes, _ := json.Marshal(msg)
+							s.writeMessage(tr, dlqMessagesDir, messageID, dlqMsgBytes)
 
-						shardID := rand.Intn(numShards)
-						visKey := dlqVisibleIdxDir.Pack(tuple.Tuple{shardID, now, messageID})
-						tr.Set(visKey, []byte{})
+							shardID := rand.Intn(numShards)
+							visKey := dlqVisibleIdxDir.Pack(tuple.Tuple{shardID, now, messageID})
+							tr.Set(visKey, []byte{})
 
-						continue
+							continue
+						}
 					}
 				}
 			}
@@ -1250,7 +1387,7 @@ func (s *FDBStore) receiveStandardMessages(ctx context.Context, tr fdb.Transacti
 			if err != nil {
 				continue
 			}
-			tr.Set(messagesDir.Pack(tuple.Tuple{messageID}), newMsgBytes)
+			s.writeMessage(tr, messagesDir, messageID, newMsgBytes)
 
 			// 4. Create a *new* index entry for when the message should become visible
 			//    again if it's not deleted. This entry is placed in a *new random shard*
@@ -1317,7 +1454,7 @@ func (s *FDBStore) receiveStandardMessages(ctx context.Context, tr fdb.Transacti
 }
 
 // receiveFifoMessages contains the more complex logic for retrieving messages from a FIFO queue.
-func (s *FDBStore) receiveFifoMessages(ctx context.Context, tr fdb.Transaction, queueDir directory.DirectorySubspace, req *models.ReceiveMessageRequest, maxMessages int, visibilityTimeout int, queueAttributes map[string]string) ([]models.ResponseMessage, error) {
+func (s *FDBStore) receiveFifoMessages(ctx context.Context, tr fdb.Transaction, queueName string, queueDir directory.DirectorySubspace, req *models.ReceiveMessageRequest, maxMessages int, visibilityTimeout int, queueAttributes map[string]string) ([]models.ResponseMessage, error) {
 	messagesDir := queueDir.Sub("messages")
 	fifoIdxDir := queueDir.Sub("fifo_idx")
 	inflightGroupsDir := queueDir.Sub("inflight_groups")
@@ -1462,7 +1599,8 @@ func (s *FDBStore) receiveFifoMessages(ctx context.Context, tr fdb.Transaction, 
 		kv := iter.MustGet()
 		messageID := string(kv.Value)
 
-		msgBytes, err := tr.Get(messagesDir.Pack(tuple.Tuple{messageID})).Get()
+		// Use assembleMessage to handle chunked messages.
+		msgBytes, err := s.assembleMessage(tr, messagesDir, messageID)
 		if err != nil || msgBytes == nil {
 			continue
 		}
@@ -1474,7 +1612,7 @@ func (s *FDBStore) receiveFifoMessages(ctx context.Context, tr fdb.Transaction, 
 		// Check for Message Retention
 		if (now - msg.SentTimestamp) > retentionPeriod {
 			// Expired: Delete message and index entry
-			tr.Clear(messagesDir.Pack(tuple.Tuple{messageID}))
+			s.deleteMessageData(tr, messagesDir, messageID)
 			tr.Clear(kv.Key)
 			continue
 		}
@@ -1522,29 +1660,33 @@ func (s *FDBStore) receiveFifoMessages(ctx context.Context, tr fdb.Transaction, 
 			// Move to DLQ
 			dlqExists, err := s.dir.Exists(tr, []string{dlqName})
 			if err == nil && dlqExists {
-				dlqDir, err := s.dir.Open(tr, []string{dlqName}, nil)
-				if err == nil {
-					// Delete from source queue
-					tr.Clear(messagesDir.Pack(tuple.Tuple{messageID}))
-					tr.Clear(kv.Key) // Delete from fifo_idx
-
-					// Add to DLQ
-					dlqMessagesDir := dlqDir.Sub("messages")
-					dlqFifoIdxDir := dlqDir.Sub("fifo_idx")
-
-					// Get new sequence number for DLQ
-					seq, err := s.getNextSequenceNumber(tr, dlqDir)
+				// Check RedriveAllowPolicy
+				allowed, err := s.checkRedriveAllowPolicy(ctx, tr, dlqName, queueName)
+				if err == nil && allowed {
+					dlqDir, err := s.dir.Open(tr, []string{dlqName}, nil)
 					if err == nil {
-						msg.SequenceNumber = seq
-						// Keep MessageGroupId.
+						// Delete from source queue
+						s.deleteMessageData(tr, messagesDir, messageID)
+						tr.Clear(kv.Key) // Delete from fifo_idx
 
-						dlqMsgBytes, _ := json.Marshal(msg)
-						tr.Set(dlqMessagesDir.Pack(tuple.Tuple{messageID}), dlqMsgBytes)
+						// Add to DLQ
+						dlqMessagesDir := dlqDir.Sub("messages")
+						dlqFifoIdxDir := dlqDir.Sub("fifo_idx")
 
-						fifoKey := dlqFifoIdxDir.Pack(tuple.Tuple{msg.MessageGroupId, seq})
-						tr.Set(fifoKey, []byte(messageID))
+						// Get new sequence number for DLQ
+						seq, err := s.getNextSequenceNumber(tr, dlqDir)
+						if err == nil {
+							msg.SequenceNumber = seq
+							// Keep MessageGroupId.
 
-						continue
+							dlqMsgBytes, _ := json.Marshal(msg)
+							tr.Set(dlqMessagesDir.Pack(tuple.Tuple{messageID}), dlqMsgBytes)
+
+							fifoKey := dlqFifoIdxDir.Pack(tuple.Tuple{msg.MessageGroupId, seq})
+							tr.Set(fifoKey, []byte(messageID))
+
+							continue
+						}
 					}
 				}
 			}
@@ -1552,7 +1694,7 @@ func (s *FDBStore) receiveFifoMessages(ctx context.Context, tr fdb.Transaction, 
 
 		// Save updated message (persist receive count)
 		newMsgBytes, _ := json.Marshal(msg)
-		tr.Set(messagesDir.Pack(tuple.Tuple{messageID}), newMsgBytes)
+		s.writeMessage(tr, messagesDir, messageID, newMsgBytes)
 
 		// Create a receipt handle. For FIFO, we must store the index key so we can
 		// delete it later, which is different from Standard queues.
@@ -1668,9 +1810,9 @@ func (s *FDBStore) ReceiveMessage(ctx context.Context, queueName string, req *mo
 
 			// Call the appropriate receive logic based on queue type.
 			if isFifo {
-				return s.receiveFifoMessages(ctx, tr, queueDir, req, maxMessages, visibilityTimeout, queueAttributes)
+				return s.receiveFifoMessages(ctx, tr, queueName, queueDir, req, maxMessages, visibilityTimeout, queueAttributes)
 			} else {
-				return s.receiveStandardMessages(ctx, tr, queueDir, req, maxMessages, visibilityTimeout, queueAttributes)
+				return s.receiveStandardMessages(ctx, tr, queueName, queueDir, req, maxMessages, visibilityTimeout, queueAttributes)
 			}
 		})
 
@@ -1754,7 +1896,7 @@ func (s *FDBStore) DeleteMessage(ctx context.Context, queueName string, receiptH
 		}
 
 		// 3. Delete the main message data.
-		tr.Clear(messagesDir.Pack(tuple.Tuple{messageID}))
+		s.deleteMessageData(tr, messagesDir, messageID)
 
 		// 4. Delete the message from its index. The receipt data contains the
 		//    original index key so we know which index to clean up.
@@ -1831,7 +1973,8 @@ func (s *FDBStore) DeleteMessageBatch(ctx context.Context, queueName string, ent
 			}
 
 			// The deletion logic is identical to the single DeleteMessage handler.
-			msgBytes, err := tr.Get(messagesDir.Pack(tuple.Tuple{messageID})).Get()
+			// Use assembleMessage to handle chunked messages.
+			msgBytes, err := s.assembleMessage(tr, messagesDir, messageID)
 			if err != nil {
 				return nil, err
 			}
@@ -1842,7 +1985,7 @@ func (s *FDBStore) DeleteMessageBatch(ctx context.Context, queueName string, ent
 					tr.Clear(inflightGroupsDir.Pack(tuple.Tuple{msg.MessageGroupId}))
 				}
 			}
-			tr.Clear(messagesDir.Pack(tuple.Tuple{messageID}))
+			s.deleteMessageData(tr, messagesDir, messageID)
 			tr.Clear(inflightKey)
 			if fifoKeyStr, ok := receiptData["fifo_key"].(string); ok {
 				fifoKey, err := base64.StdEncoding.DecodeString(fifoKeyStr)
@@ -2470,10 +2613,8 @@ func (s *FDBStore) StartMessageMoveTask(ctx context.Context, sourceArn, destinat
 
 func getQueueNameFromArn(arn string) string {
 	parts := strings.Split(arn, ":")
-	if len(parts) > 0 {
-		return parts[len(parts)-1]
-	}
-	return ""
+	// strings.Split always returns at least one element
+	return parts[len(parts)-1]
 }
 
 func (s *FDBStore) updateTaskStatus(taskHandle, status, failureReason string, moved int64) {

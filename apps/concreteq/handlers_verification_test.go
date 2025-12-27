@@ -756,7 +756,7 @@ func TestBVA_StartMessageMoveTask_ARN(t *testing.T) {
 		arn      string
 		wantCode int
 	}{
-		{"Valid ARN", "arn:aws:sqs:us-east-1:123456789012:source-queue", http.StatusNotImplemented}, // Not yet implemented
+		{"Valid ARN", "arn:aws:sqs:us-east-1:123456789012:source-queue", http.StatusOK},
 		{"Invalid Prefix", "arn:aws:sns:us-east-1:123456789012:source-queue", http.StatusBadRequest},
 		{"Missing Region", "arn:aws:sqs::123456789012:source-queue", http.StatusBadRequest}, // Our regex might require region?
 		// Regex: ^arn:aws:sqs:[a-z0-9-]+:[0-9]+:[a-zA-Z0-9_-]{1,80}(\.fifo)?$
