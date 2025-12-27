@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -562,5 +563,135 @@ func TestSetSubscriptionAttributesHandler(t *testing.T) {
 	s.SetSubscriptionAttributesHandler(w, req)
 	if w.Result().StatusCode != http.StatusOK {
 		t.Errorf("Expected OK, got %v", w.Result().Status)
+	}
+}
+
+func TestTagResourceHandler(t *testing.T) {
+	mockStore := &MockStore{
+		TagResourceFunc: func(ctx context.Context, arn string, tags []models.Tag) error {
+			if arn != "arn:test" {
+				return fmt.Errorf("invalid arn")
+			}
+			if len(tags) != 1 {
+				return fmt.Errorf("invalid tags")
+			}
+			return nil
+		},
+	}
+	s := NewServer(mockStore)
+
+	// Valid Request
+	payload := `{"ResourceArn": "arn:test", "Tags": [{"Key": "k", "Value": "v"}]}`
+	req := httptest.NewRequest("POST", "/tagResource", bytes.NewBufferString(payload))
+	w := httptest.NewRecorder()
+	s.TagResourceHandler(w, req)
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected 200, got %d", w.Code)
+	}
+
+	// Invalid Method
+	req = httptest.NewRequest("GET", "/tagResource", nil)
+	w = httptest.NewRecorder()
+	s.TagResourceHandler(w, req)
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Errorf("Expected 405, got %d", w.Code)
+	}
+
+	// Invalid Body
+	req = httptest.NewRequest("POST", "/tagResource", bytes.NewBufferString("invalid json"))
+	w = httptest.NewRecorder()
+	s.TagResourceHandler(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("Expected 400 for invalid json, got %d", w.Code)
+	}
+
+	// Store Error
+	payload = `{"ResourceArn": "arn:bad", "Tags": []}`
+	req = httptest.NewRequest("POST", "/tagResource", bytes.NewBufferString(payload))
+	w = httptest.NewRecorder()
+	s.TagResourceHandler(w, req)
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("Expected 500 for store error, got %d", w.Code)
+	}
+}
+
+func TestUntagResourceHandler(t *testing.T) {
+	mockStore := &MockStore{
+		UntagResourceFunc: func(ctx context.Context, arn string, keys []string) error {
+			if arn != "arn:test" {
+				return fmt.Errorf("invalid arn")
+			}
+			return nil
+		},
+	}
+	s := NewServer(mockStore)
+
+	// Valid Request
+	payload := `{"ResourceArn": "arn:test", "TagKeys": ["k1"]}`
+	req := httptest.NewRequest("POST", "/untagResource", bytes.NewBufferString(payload))
+	w := httptest.NewRecorder()
+	s.UntagResourceHandler(w, req)
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected 200, got %d", w.Code)
+	}
+
+	// Invalid Method
+	req = httptest.NewRequest("GET", "/untagResource", nil)
+	w = httptest.NewRecorder()
+	s.UntagResourceHandler(w, req)
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Errorf("Expected 405, got %d", w.Code)
+	}
+
+	// Store Error
+	payload = `{"ResourceArn": "arn:bad", "TagKeys": []}`
+	req = httptest.NewRequest("POST", "/untagResource", bytes.NewBufferString(payload))
+	w = httptest.NewRecorder()
+	s.UntagResourceHandler(w, req)
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("Expected 500, got %d", w.Code)
+	}
+}
+
+func TestListTagsForResourceHandler(t *testing.T) {
+	mockStore := &MockStore{
+		ListTagsForResourceFunc: func(ctx context.Context, arn string) ([]models.Tag, error) {
+			if arn != "arn:test" {
+				return nil, fmt.Errorf("invalid arn")
+			}
+			return []models.Tag{{Key: "k", Value: "v"}}, nil
+		},
+	}
+	s := NewServer(mockStore)
+
+	// Valid Request
+	payload := `{"ResourceArn": "arn:test"}`
+	req := httptest.NewRequest("POST", "/listTagsForResource", bytes.NewBufferString(payload))
+	w := httptest.NewRecorder()
+	s.ListTagsForResourceHandler(w, req)
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected 200, got %d", w.Code)
+	}
+	var resp models.ListTagsForResourceResponse
+	json.NewDecoder(w.Body).Decode(&resp)
+	if len(resp.Tags) != 1 {
+		t.Error("Expected 1 tag")
+	}
+
+	// Invalid Method
+	req = httptest.NewRequest("GET", "/listTagsForResource", nil)
+	w = httptest.NewRecorder()
+	s.ListTagsForResourceHandler(w, req)
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Errorf("Expected 405, got %d", w.Code)
+	}
+
+	// Store Error
+	payload = `{"ResourceArn": "arn:bad"}`
+	req = httptest.NewRequest("POST", "/listTagsForResource", bytes.NewBufferString(payload))
+	w = httptest.NewRecorder()
+	s.ListTagsForResourceHandler(w, req)
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("Expected 500, got %d", w.Code)
 	}
 }
